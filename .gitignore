@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Rust
+ember-backend/target/
+
+# Node
+ember-frontend/node_modules/
+ember-frontend/.next/
+ember-frontend/.env.local
+
+# SDK (read-only, not our code)
+phoenix-rise-sdk/
+phoenix-sdk-docs/
+
+# Debug artifacts
+phoenix-api-debug.md
