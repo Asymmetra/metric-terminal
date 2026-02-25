@@ -9,8 +9,10 @@ ember-frontend/node_modules/
 ember-frontend/.next/
 ember-frontend/.env.local
 
-# SDK (read-only, not our code)
-phoenix-rise-sdk/
+# SDK build artifacts
+phoenix-rise-sdk/rust/target/
+
+# SDK docs (not needed for builds)
 phoenix-sdk-docs/
 
 # Debug artifacts

@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ember-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: CORS_ORIGIN
+        sync: false
+      - key: RUST_LOG
+        value: ember_backend=info
+      - key: PHOENIX_API_URL
+        value: https://public-api.phoenix.trade
+      - key: PHOENIX_WS_URL
+        value: wss://public-api.phoenix.trade/ws
+      - key: PHOENIX_API_KEY
+        sync: false
