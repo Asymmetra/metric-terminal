@@ -59,6 +59,8 @@ export function OrderEntry() {
     return { baseSize, notional, requiredMargin };
   }, [size, markPrice, leverage]);
 
+  const updateToast = useToastStore((s) => s.updateToast);
+
   const handleSubmit = async () => {
     if (!connected || !size) return;
     // Guard against empty price on limit orders
@@ -68,6 +70,13 @@ export function OrderEntry() {
     const sizeLots = Math.round(baseSize / lotSize);
     if (sizeLots <= 0) return;
     setTxPhase("building");
+
+    // Show a persistent loading toast that we'll update with the result
+    const toastId = addToast(
+      "loading",
+      `Placing ${side.toUpperCase()} ${orderType} order...`
+    );
+
     try {
       const params: any = {
         symbol: selectedSymbol,
@@ -77,12 +86,29 @@ export function OrderEntry() {
       if (orderType === "limit") {
         params.price = parseFloat(price);
       }
-      await submitOrder(orderType, params, (status) => setTxPhase(status));
-      addToast("success", `${side.toUpperCase()} ${orderType} order submitted`);
+      await submitOrder(orderType, params, (status) => {
+        setTxPhase(status);
+        // Update the toast with the current phase
+        const statusLabel =
+          status === "simulating"
+            ? "Simulating transaction..."
+            : status === "signing"
+              ? "Approve in wallet..."
+              : "Submitting — awaiting confirmation...";
+        updateToast(toastId, "loading", statusLabel);
+      });
+      updateToast(
+        toastId,
+        "success",
+        `${side.toUpperCase()} ${orderType} order confirmed on-chain`
+      );
       setSize("");
     } catch (e: any) {
       console.error("Order failed:", e);
-      addToast("error", e?.message || "Order failed");
+      const msg = e?.message || "Order failed";
+      // Truncate very long error messages for the toast
+      const shortMsg = msg.length > 120 ? msg.slice(0, 120) + "..." : msg;
+      updateToast(toastId, "error", shortMsg);
     } finally {
       setTxPhase("idle");
     }

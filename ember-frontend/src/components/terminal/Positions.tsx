@@ -32,6 +32,7 @@ export function Positions() {
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const { submitOrder, cancelOrders, connected } = useTransactionBuilder();
   const addToast = useToastStore((s) => s.addToast);
+  const updateToast = useToastStore((s) => s.updateToast);
   const { publicKey } = useWallet();
 
   // Flatten limitOrders map into a displayable list with symbol attached
@@ -85,6 +86,7 @@ export function Positions() {
   // Close a single position via market order on opposite side
   const handleClose = async (pos: typeof positions[0]) => {
     setClosingSymbol(pos.symbol);
+    const toastId = addToast("loading", `Closing ${pos.symbol} ${pos.side} position...`);
     try {
       const market = await api.getMarket(pos.symbol);
       const lotSize = 10 ** -(market.baseLotsDecimals || 2);
@@ -95,9 +97,10 @@ export function Positions() {
         side: closeSide,
         size_lots: sizeLots,
       });
-      addToast("success", `Closed ${pos.symbol} ${pos.side} position`);
+      updateToast(toastId, "success", `Closed ${pos.symbol} ${pos.side} position`);
     } catch (e: any) {
-      addToast("error", e?.message || "Close position failed");
+      const msg = e?.message || "Close position failed";
+      updateToast(toastId, "error", msg.length > 120 ? msg.slice(0, 120) + "..." : msg);
     } finally {
       setClosingSymbol(null);
     }

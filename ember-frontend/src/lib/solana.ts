@@ -4,6 +4,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
   Connection,
+  SendTransactionError,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
@@ -30,6 +31,21 @@ export function deserializeInstructions(
 }
 
 export type TxStatus = "simulating" | "signing" | "submitting";
+
+// Lighthouse assertion program (injected by Phantom for security checks)
+const LIGHTHOUSE_PROGRAM = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95";
+
+/**
+ * Check if a SendTransactionError is caused by Phantom's Lighthouse assertions
+ * rather than by our actual program instructions.
+ */
+function isLighthouseError(err: SendTransactionError): boolean {
+  const msg = err.message || "";
+  const logs = (err as any).logs as string[] | undefined;
+  if (msg.includes(LIGHTHOUSE_PROGRAM)) return true;
+  if (logs?.some((l: string) => l.includes(LIGHTHOUSE_PROGRAM))) return true;
+  return false;
+}
 
 export async function buildAndSignTransaction(
   instructions: TransactionInstruction[],
@@ -69,25 +85,89 @@ export async function buildAndSignTransaction(
   if (simulation.value.err) {
     const logs = simulation.value.logs?.join("\n") || "No logs";
     throw new Error(
-      `Transaction simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
+      `Simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
     );
   }
 
   onStatus?.("signing");
   const signed = await signTransaction(transaction);
 
-  onStatus?.("submitting");
-  const txid = await connection.sendTransaction(signed);
+  // Detect if the wallet injected extra instructions (e.g. Phantom adds
+  // Lighthouse assertions + ComputeBudget).  Compare instruction counts
+  // between what we built and what was signed.
+  const originalIxCount = transaction.message.compiledInstructions.length;
+  const signedIxCount = signed.message.compiledInstructions.length;
+  const walletModified = signedIxCount !== originalIxCount;
+  if (walletModified) {
+    console.warn(
+      `[solana] Wallet modified transaction: ${originalIxCount} → ${signedIxCount} instructions`
+    );
+  }
 
-  // Wait for on-chain confirmation before returning
+  onStatus?.("submitting");
+  let txid: string;
   try {
-    await connection.confirmTransaction(
+    txid = await connection.sendTransaction(signed, {
+      // Skip preflight when the wallet injected extra instructions, because
+      // those instructions (Lighthouse assertions) may fail in preflight even
+      // though the core transaction is valid.
+      skipPreflight: walletModified,
+      maxRetries: 3,
+    });
+  } catch (err: any) {
+    // If preflight failed due to Lighthouse assertions, retry with skipPreflight
+    if (err instanceof SendTransactionError && isLighthouseError(err)) {
+      console.warn("[solana] Lighthouse preflight error, retrying with skipPreflight");
+      txid = await connection.sendTransaction(signed, {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+    } else {
+      throw err;
+    }
+  }
+
+  // Wait for on-chain confirmation and CHECK the result
+  try {
+    const confirmation = await connection.confirmTransaction(
       { signature: txid, blockhash, lastValidBlockHeight },
       "confirmed"
     );
-  } catch {
-    // Don't throw — tx was sent and may still land on-chain
-    console.warn("[solana] confirmTransaction timed out for", txid);
+    if (confirmation.value.err) {
+      // Transaction was included in a block but FAILED on-chain
+      throw new Error(
+        `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`
+      );
+    }
+  } catch (err: any) {
+    // If confirmation itself throws (timeout / RPC error), check tx status
+    if (err?.message?.includes("failed on-chain")) {
+      throw err; // Re-throw our own error from above
+    }
+    // Timeout — check signature status one more time
+    try {
+      const status = await connection.getSignatureStatus(txid);
+      if (status?.value?.err) {
+        throw new Error(
+          `Transaction failed: ${JSON.stringify(status.value.err)}`
+        );
+      }
+      if (!status?.value?.confirmationStatus) {
+        throw new Error(
+          "Transaction was not confirmed. It may have been dropped by the network. Please try again."
+        );
+      }
+      // Has some confirmation status — treat as potentially successful
+      console.warn("[solana] confirmTransaction timed out but tx has status:", status.value.confirmationStatus);
+    } catch (statusErr: any) {
+      if (statusErr?.message?.includes("Transaction failed") || statusErr?.message?.includes("not confirmed")) {
+        throw statusErr;
+      }
+      // getSignatureStatus also failed — report the original timeout
+      throw new Error(
+        "Transaction confirmation timed out. It may have been dropped by the network. Please try again."
+      );
+    }
   }
 
   return txid;
