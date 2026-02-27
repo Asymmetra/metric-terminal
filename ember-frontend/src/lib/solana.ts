@@ -4,7 +4,6 @@ import {
   TransactionMessage,
   VersionedTransaction,
   Connection,
-  SendTransactionError,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
@@ -17,7 +16,13 @@ interface SerializedInstruction {
 export function deserializeInstructions(
   serialized: SerializedInstruction[]
 ): TransactionInstruction[] {
-  return serialized.map((ix) => {
+  if (!Array.isArray(serialized) || serialized.length === 0) {
+    throw new Error("Backend returned no instructions");
+  }
+  return serialized.map((ix, i) => {
+    if (!ix.programId || !ix.accounts || !ix.data) {
+      throw new Error(`Instruction ${i} missing required fields`);
+    }
     return new TransactionInstruction({
       programId: new PublicKey(ix.programId),
       keys: ix.accounts.map((a) => ({
@@ -32,19 +37,9 @@ export function deserializeInstructions(
 
 export type TxStatus = "simulating" | "signing" | "submitting";
 
-// Lighthouse assertion program (injected by Phantom for security checks)
-const LIGHTHOUSE_PROGRAM = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95";
-
-/**
- * Check if a SendTransactionError is caused by Phantom's Lighthouse assertions
- * rather than by our actual program instructions.
- */
-function isLighthouseError(err: SendTransactionError): boolean {
-  const msg = err.message || "";
-  const logs = (err as any).logs as string[] | undefined;
-  if (msg.includes(LIGHTHOUSE_PROGRAM)) return true;
-  if (logs?.some((l: string) => l.includes(LIGHTHOUSE_PROGRAM))) return true;
-  return false;
+export interface TxResult {
+  txid: string;
+  confirmed: boolean;
 }
 
 export async function buildAndSignTransaction(
@@ -53,7 +48,7 @@ export async function buildAndSignTransaction(
   signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>,
   connection: Connection,
   onStatus?: (status: TxStatus) => void
-): Promise<string> {
+): Promise<TxResult> {
   let blockhash: string;
   let lastValidBlockHeight: number;
   try {
@@ -85,90 +80,30 @@ export async function buildAndSignTransaction(
   if (simulation.value.err) {
     const logs = simulation.value.logs?.join("\n") || "No logs";
     throw new Error(
-      `Simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
+      `Transaction simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
     );
   }
 
   onStatus?.("signing");
   const signed = await signTransaction(transaction);
 
-  // Detect if the wallet injected extra instructions (e.g. Phantom adds
-  // Lighthouse assertions + ComputeBudget).  Compare instruction counts
-  // between what we built and what was signed.
-  const originalIxCount = transaction.message.compiledInstructions.length;
-  const signedIxCount = signed.message.compiledInstructions.length;
-  const walletModified = signedIxCount !== originalIxCount;
-  if (walletModified) {
-    console.warn(
-      `[solana] Wallet modified transaction: ${originalIxCount} → ${signedIxCount} instructions`
-    );
-  }
-
   onStatus?.("submitting");
-  let txid: string;
-  try {
-    txid = await connection.sendTransaction(signed, {
-      // Skip preflight when the wallet injected extra instructions, because
-      // those instructions (Lighthouse assertions) may fail in preflight even
-      // though the core transaction is valid.
-      skipPreflight: walletModified,
-      maxRetries: 3,
-    });
-  } catch (err: any) {
-    // If preflight failed due to Lighthouse assertions, retry with skipPreflight
-    if (err instanceof SendTransactionError && isLighthouseError(err)) {
-      console.warn("[solana] Lighthouse preflight error, retrying with skipPreflight");
-      txid = await connection.sendTransaction(signed, {
-        skipPreflight: true,
-        maxRetries: 3,
-      });
-    } else {
-      throw err;
-    }
-  }
+  // skipPreflight: true — Phantom injects Lighthouse assertions during signing
+  // that cause preflight simulation to fail on the RPC node
+  const txid = await connection.sendTransaction(signed, { skipPreflight: true });
 
-  // Wait for on-chain confirmation and CHECK the result
+  // Wait for on-chain confirmation
+  let confirmed = false;
   try {
-    const confirmation = await connection.confirmTransaction(
+    await connection.confirmTransaction(
       { signature: txid, blockhash, lastValidBlockHeight },
       "confirmed"
     );
-    if (confirmation.value.err) {
-      // Transaction was included in a block but FAILED on-chain
-      throw new Error(
-        `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`
-      );
-    }
-  } catch (err: any) {
-    // If confirmation itself throws (timeout / RPC error), check tx status
-    if (err?.message?.includes("failed on-chain")) {
-      throw err; // Re-throw our own error from above
-    }
-    // Timeout — check signature status one more time
-    try {
-      const status = await connection.getSignatureStatus(txid);
-      if (status?.value?.err) {
-        throw new Error(
-          `Transaction failed: ${JSON.stringify(status.value.err)}`
-        );
-      }
-      if (!status?.value?.confirmationStatus) {
-        throw new Error(
-          "Transaction was not confirmed. It may have been dropped by the network. Please try again."
-        );
-      }
-      // Has some confirmation status — treat as potentially successful
-      console.warn("[solana] confirmTransaction timed out but tx has status:", status.value.confirmationStatus);
-    } catch (statusErr: any) {
-      if (statusErr?.message?.includes("Transaction failed") || statusErr?.message?.includes("not confirmed")) {
-        throw statusErr;
-      }
-      // getSignatureStatus also failed — report the original timeout
-      throw new Error(
-        "Transaction confirmation timed out. It may have been dropped by the network. Please try again."
-      );
-    }
+    confirmed = true;
+  } catch {
+    // TX was already sent — it may still land on-chain
+    console.warn("[solana] confirmTransaction timed out for", txid);
   }
 
-  return txid;
+  return { txid, confirmed };
 }

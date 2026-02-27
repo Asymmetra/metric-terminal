@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useTraderStore } from "@/stores/traderStore";
 import { useMarketStore } from "@/stores/marketStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
-import { useToastStore } from "@/stores/toastStore";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
 import { LimitOrder, TradeHistoryItem } from "@/types/trader";
@@ -31,8 +30,6 @@ export function Positions() {
   const limitOrders = useTraderStore((s) => s.limitOrders);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const { submitOrder, cancelOrders, connected } = useTransactionBuilder();
-  const addToast = useToastStore((s) => s.addToast);
-  const updateToast = useToastStore((s) => s.updateToast);
   const { publicKey } = useWallet();
 
   // Flatten limitOrders map into a displayable list with symbol attached
@@ -74,10 +71,8 @@ export function Positions() {
       await cancelOrders(order.symbol, [
         { price_in_ticks: order.price_in_ticks, order_sequence_number: order.order_sequence_number },
       ]);
-      addToast("success", `Order cancelled on ${order.symbol}`);
     } catch (e: any) {
       console.error("Cancel failed:", e);
-      addToast("error", e?.message || "Cancel failed");
     } finally {
       setCancellingKey(null);
     }
@@ -85,8 +80,8 @@ export function Positions() {
 
   // Close a single position via market order on opposite side
   const handleClose = async (pos: typeof positions[0]) => {
+    if (closingSymbol) return; // prevent concurrent close operations
     setClosingSymbol(pos.symbol);
-    const toastId = addToast("loading", `Closing ${pos.symbol} ${pos.side} position...`);
     try {
       const market = await api.getMarket(pos.symbol);
       const lotSize = 10 ** -(market.baseLotsDecimals || 2);
@@ -97,10 +92,8 @@ export function Positions() {
         side: closeSide,
         size_lots: sizeLots,
       });
-      updateToast(toastId, "success", `Closed ${pos.symbol} ${pos.side} position`);
     } catch (e: any) {
-      const msg = e?.message || "Close position failed";
-      updateToast(toastId, "error", msg.length > 120 ? msg.slice(0, 120) + "..." : msg);
+      console.error("Close position failed:", e);
     } finally {
       setClosingSymbol(null);
     }
@@ -108,6 +101,7 @@ export function Positions() {
 
   // Close all positions sequentially
   const handleCloseAll = async () => {
+    if (closingAll) return;
     setClosingAll(true);
     for (const pos of positions) {
       try {
@@ -120,9 +114,8 @@ export function Positions() {
           side: closeSide,
           size_lots: sizeLots,
         });
-        addToast("success", `Closed ${pos.symbol} ${pos.side}`);
       } catch (e: any) {
-        addToast("error", `Failed to close ${pos.symbol}: ${e?.message || "Unknown error"}`);
+        console.error(`Failed to close ${pos.symbol}:`, e);
       }
     }
     setClosingAll(false);
