@@ -15,6 +15,7 @@ export function useWebSocket() {
   const addTrades = useTradeStore((s) => s.addTrades);
   const setTrades = useTradeStore((s) => s.setTrades);
   const setStats = useStatsStore((s) => s.setStats);
+  const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
 
   useEffect(() => {
     // Clear stale data from previous market
@@ -68,6 +69,9 @@ export function useWebSocket() {
       selectedSymbol,
       (data) => {
         setStats(data);
+        if (data?.mark_price != null) {
+          setMarkPrice(selectedSymbol, data.mark_price);
+        }
       }
     );
 
@@ -76,5 +80,5 @@ export function useWebSocket() {
       unsubTrades();
       unsubStats();
     };
-  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, setTrades, setStats]);
+  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, setTrades, setStats, setMarkPrice]);
 }
