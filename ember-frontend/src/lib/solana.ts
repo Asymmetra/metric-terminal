@@ -92,16 +92,24 @@ export async function buildAndSignTransaction(
   // that cause preflight simulation to fail on the RPC node
   const txid = await connection.sendTransaction(signed, { skipPreflight: true });
 
-  // Wait for on-chain confirmation
+  // Wait for on-chain confirmation and verify success
   let confirmed = false;
   try {
-    await connection.confirmTransaction(
+    const confirmation = await connection.confirmTransaction(
       { signature: txid, blockhash, lastValidBlockHeight },
       "confirmed"
     );
+    if (confirmation.value.err) {
+      throw new Error(
+        `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`
+      );
+    }
     confirmed = true;
-  } catch {
-    // TX was already sent — it may still land on-chain
+  } catch (err: any) {
+    if (err?.message?.includes("failed on-chain")) {
+      throw err; // Re-throw on-chain failures — these are real errors
+    }
+    // Only swallow timeout errors — TX was sent, may still land
     console.warn("[solana] confirmTransaction timed out for", txid);
   }
 
