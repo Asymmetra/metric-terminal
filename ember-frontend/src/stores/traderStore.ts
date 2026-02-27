@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { TraderAccount, TraderPosition, LimitOrder } from "@/types/trader";
+import { TraderAccount, TraderPosition, LimitOrder, MarginMode } from "@/types/trader";
 
 // Helper to extract number from SDK's { decimals, ui, value } format
 function sdkNum(val: any): number {
@@ -22,6 +22,8 @@ function transformPosition(sdkPos: any): TraderPosition {
     markPrice = useStatsStore.getState().stats?.mark_price ?? 0;
   } catch { /* statsStore not available */ }
 
+  const marginMode: MarginMode = (sdkPos.marginMode || sdkPos.margin_mode || "cross") as MarginMode;
+
   return {
     symbol: sdkPos.marketSymbol || sdkPos.symbol || "",
     side,
@@ -30,6 +32,10 @@ function transformPosition(sdkPos: any): TraderPosition {
     mark_price: markPrice,
     unrealized_pnl: sdkNum(sdkPos.unrealizedPnl),
     discounted_unrealized_pnl: sdkNum(sdkPos.discountedUnrealizedPnl),
+    margin_mode: marginMode,
+    allocated_collateral: sdkNum(sdkPos.allocatedCollateral || sdkPos.allocated_collateral),
+    tp_price: sdkPos.tpPrice != null ? sdkNum(sdkPos.tpPrice) : (sdkPos.tp_price != null ? sdkNum(sdkPos.tp_price) : null),
+    sl_price: sdkPos.slPrice != null ? sdkNum(sdkPos.slPrice) : (sdkPos.sl_price != null ? sdkNum(sdkPos.sl_price) : null),
   };
 }
 

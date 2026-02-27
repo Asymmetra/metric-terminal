@@ -32,4 +32,13 @@ export const api = {
     fetchApi<any>("/api/tx/deposit", { method: "POST", body: JSON.stringify(params) }),
   buildWithdraw: (params: any) =>
     fetchApi<any>("/api/tx/withdraw", { method: "POST", body: JSON.stringify(params) }),
+  buildIsolatedMarketOrder: (params: any) =>
+    fetchApi<any>("/api/tx/isolated-market-order", { method: "POST", body: JSON.stringify(params) }),
+  buildIsolatedLimitOrder: (params: any) =>
+    fetchApi<any>("/api/tx/isolated-limit-order", { method: "POST", body: JSON.stringify(params) }),
+  buildTransferCollateral: (params: any) =>
+    fetchApi<any>("/api/tx/transfer-collateral", { method: "POST", body: JSON.stringify(params) }),
+  buildRegisterSubaccount: (params: any) =>
+    fetchApi<any>("/api/tx/register-subaccount", { method: "POST", body: JSON.stringify(params) }),
+  getTraderSubaccounts: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/subaccounts`),
 };

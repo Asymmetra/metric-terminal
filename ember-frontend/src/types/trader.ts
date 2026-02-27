@@ -5,6 +5,9 @@ export interface SdkDecimalValue {
   value: number;
 }
 
+// Margin mode for positions — cross uses shared collateral, isolated uses dedicated collateral
+export type MarginMode = "cross" | "isolated";
+
 // Display-ready position (post-transform from SDK's camelCase + Decimal format).
 // SDK sends: positionSize (Decimal, signed), entryPrice (Decimal), etc.
 // traderStore.transformPosition() converts to this flat format.
@@ -16,6 +19,10 @@ export interface TraderPosition {
   mark_price: number;
   unrealized_pnl: number;
   discounted_unrealized_pnl: number;
+  margin_mode: MarginMode;
+  allocated_collateral: number;
+  tp_price: number | null;
+  sl_price: number | null;
 }
 
 // Display-ready limit order (post-transform from SDK's camelCase + Decimal/string format).
