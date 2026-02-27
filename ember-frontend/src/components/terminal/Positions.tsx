@@ -6,6 +6,7 @@ import { useTraderStore } from "@/stores/traderStore";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
+import { wsClient } from "@/lib/ws";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
@@ -31,17 +32,39 @@ export function Positions() {
   const rawPositions = useTraderStore((s) => s.positions);
   const limitOrders = useTraderStore((s) => s.limitOrders);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
-  const markPrice = useStatsStore((s) => s.stats?.mark_price ?? 0);
+  const markPrices = useStatsStore((s) => s.markPrices);
+  const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
   const { submitOrder, cancelOrders, transferCollateral, connected } = useTransactionBuilder();
   const { publicKey } = useWallet();
 
-  // Inject live mark_price from statsStore into positions (fixes stale mark_price bug)
+  // Subscribe to stats WS for all markets with open positions (not just selected)
+  const positionSymbols = useMemo(
+    () => [...new Set(rawPositions.map((p) => p.symbol))],
+    [rawPositions]
+  );
+
+  useEffect(() => {
+    // Subscribe to stats for non-selected markets that have positions
+    const unsubs = positionSymbols
+      .filter((sym) => sym !== selectedSymbol)
+      .map((sym) =>
+        wsClient.subscribe("stats", sym, (data) => {
+          if (data?.mark_price != null) {
+            setMarkPrice(sym, data.mark_price);
+          }
+        })
+      );
+
+    return () => { unsubs.forEach((unsub) => unsub()); };
+  }, [positionSymbols, selectedSymbol, setMarkPrice]);
+
+  // Inject live mark_price from statsStore per-market
   const positions = useMemo(() =>
     rawPositions.map((pos) => ({
       ...pos,
-      mark_price: pos.symbol === selectedSymbol ? markPrice : pos.mark_price,
+      mark_price: markPrices[pos.symbol] ?? pos.mark_price,
     })),
-    [rawPositions, selectedSymbol, markPrice]
+    [rawPositions, markPrices]
   );
 
   // Flatten limitOrders map into a displayable list with symbol attached
