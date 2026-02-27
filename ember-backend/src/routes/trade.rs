@@ -105,7 +105,7 @@ pub struct TransferCollateralRequest {
 #[derive(Deserialize)]
 pub struct RegisterSubaccountRequest {
     pub authority: String,
-    /// Isolated subaccount index (1–100).
+    /// Subaccount index: 0 = cross-margin, 1–100 = isolated.
     pub subaccount_index: u8,
 }
 
@@ -156,9 +156,9 @@ fn validate_amount(amount: f64) -> Result<(), AppError> {
 }
 
 fn validate_subaccount_index(index: u8) -> Result<(), AppError> {
-    if index == 0 || index > 100 {
+    if index > 100 {
         return Err(AppError::BadRequest(
-            "subaccount_index must be between 1 and 100".to_string(),
+            "subaccount_index must be between 0 and 100".to_string(),
         ));
     }
     Ok(())
@@ -553,20 +553,22 @@ async fn register_subaccount(
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
 
-    // Register the isolated subaccount
+    // Register the subaccount (index 0 = cross-margin, 1-100 = isolated)
     let mut instructions = builder
         .build_register_trader(authority, 0, req.subaccount_index)
         .map_err(|e| AppError::Phoenix(format!("Failed to build register trader: {}", e)))?;
 
-    // Sync parent capabilities to the new child subaccount
-    let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
-    let child_pda = TraderKey::derive_pda(&authority, 0, req.subaccount_index);
-    let sync_ixs = builder
-        .build_sync_parent_to_child(authority, parent_pda, child_pda)
-        .map_err(|e| {
-            AppError::Phoenix(format!("Failed to build sync parent to child: {}", e))
-        })?;
-    instructions.extend(sync_ixs);
+    // For isolated subaccounts, sync parent capabilities to the new child
+    if req.subaccount_index > 0 {
+        let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
+        let child_pda = TraderKey::derive_pda(&authority, 0, req.subaccount_index);
+        let sync_ixs = builder
+            .build_sync_parent_to_child(authority, parent_pda, child_pda)
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build sync parent to child: {}", e))
+            })?;
+        instructions.extend(sync_ixs);
+    }
 
     Ok(Json(serialize_instructions(
         instructions,

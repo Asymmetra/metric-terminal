@@ -17,3 +17,4 @@ phoenix-sdk-docs/
 
 # Debug artifacts
 phoenix-api-debug.md
+.keys/
