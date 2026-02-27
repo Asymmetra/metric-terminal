@@ -200,6 +200,12 @@ fn build_collateral(collateral_usdc: Option<f64>) -> Result<Option<IsolatedColla
                     "collateral_usdc must be a positive finite number".to_string(),
                 ));
             }
+            // Cap at u64::MAX / 1_000_000 to prevent overflow on f64→u64 cast
+            if usdc > 1e13 {
+                return Err(AppError::BadRequest(
+                    "collateral_usdc exceeds maximum allowed value".to_string(),
+                ));
+            }
             Ok(Some(IsolatedCollateralFlow::TransferFromCrossMargin {
                 collateral: (usdc * 1_000_000.0) as u64,
             }))
