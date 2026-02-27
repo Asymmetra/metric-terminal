@@ -157,13 +157,13 @@ export function MarketHeader() {
       {traderConnected && (
         <>
           <StatSeparator />
-          <Stat label="Portfolio" value={`$${formatUsd(portfolioValue)}`} colorClass="text-text-primary" />
+          <Stat label="Portfolio" value={formatUsd(portfolioValue)} colorClass="text-text-primary" />
           <Stat
             label="Unreal. PnL"
-            value={`${unrealizedPnl >= 0 ? "+" : ""}$${formatUsd(unrealizedPnl)}`}
+            value={`${unrealizedPnl >= 0 ? "+" : ""}${formatUsd(unrealizedPnl)}`}
             colorClass={unrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
           />
-          <Stat label="Collateral" value={`$${formatUsd(collateral)}`} />
+          <Stat label="Collateral" value={formatUsd(collateral)} />
         </>
       )}
 

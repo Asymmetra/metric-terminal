@@ -110,17 +110,15 @@ export function Orderbook() {
     const bidSlice = bids.slice(0, maxRows);
 
     // Cumulative: asks top→bottom (closest to spread first), bids top→bottom
-    let askCum = 0;
-    const askCumulatives = askSlice.map((l) => {
-      askCum += l.size;
-      return askCum;
-    });
+    const askCumulatives = askSlice.reduce<number[]>((acc, l) => {
+      acc.push((acc[acc.length - 1] ?? 0) + l.size);
+      return acc;
+    }, []);
 
-    let bidCum = 0;
-    const bidCumulatives = bidSlice.map((l) => {
-      bidCum += l.size;
-      return bidCum;
-    });
+    const bidCumulatives = bidSlice.reduce<number[]>((acc, l) => {
+      acc.push((acc[acc.length - 1] ?? 0) + l.size);
+      return acc;
+    }, []);
 
     const maxCum = Math.max(
       askCumulatives[askCumulatives.length - 1] || 0,

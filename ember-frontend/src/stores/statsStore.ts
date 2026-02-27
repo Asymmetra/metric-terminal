@@ -3,7 +3,7 @@ import { MarketStats } from "@/types/market";
 
 interface StatsStore {
   stats: MarketStats | null;
-  setStats: (stats: MarketStats) => void;
+  setStats: (stats: MarketStats | null) => void;
 }
 
 export const useStatsStore = create<StatsStore>((set) => ({
