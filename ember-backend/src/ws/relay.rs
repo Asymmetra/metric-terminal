@@ -166,11 +166,20 @@ async fn start_market_relay(
 }
 
 /// Start a per-trader relay using SDK's subscribe_to_trader_state.
+/// Uses `active_relays` to prevent duplicate relays for the same pubkey (BE-BUG-1).
+/// Cleans up broadcast channel on exit if no subscribers remain (BE-BUG-3).
 pub async fn start_trader_relay(
     ws_client: Arc<PhoenixWSClient>,
     broadcast: Arc<BroadcastHub>,
+    active_relays: Arc<dashmap::DashSet<String>>,
     pubkey_str: String,
 ) {
+    // BE-BUG-1 FIX: Atomically claim this relay — skip if already running.
+    if !active_relays.insert(pubkey_str.clone()) {
+        tracing::debug!("Trader relay already active for {}, skipping", pubkey_str);
+        return;
+    }
+
     let channel_key = format!("trader_margin:{}", pubkey_str);
     tracing::info!("Starting SDK trader relay for {}", pubkey_str);
 
@@ -178,6 +187,7 @@ pub async fn start_trader_relay(
         Ok(pk) => pk,
         Err(e) => {
             tracing::error!("Invalid pubkey {}: {}", pubkey_str, e);
+            active_relays.remove(&pubkey_str);
             return;
         }
     };
@@ -186,6 +196,7 @@ pub async fn start_trader_relay(
         Ok(sub) => sub,
         Err(e) => {
             tracing::error!("Failed to subscribe to trader state for {}: {:?}", pubkey_str, e);
+            active_relays.remove(&pubkey_str);
             return;
         }
     };
@@ -212,6 +223,15 @@ pub async fn start_trader_relay(
             data,
         };
         broadcast.send(&channel_key, msg);
+    }
+
+    // Cleanup: release relay slot
+    active_relays.remove(&pubkey_str);
+
+    // BE-BUG-3 FIX: Remove broadcast channel if no subscribers remain.
+    if !broadcast.has_subscribers(&channel_key) {
+        broadcast.remove_channel(&channel_key);
+        tracing::info!("Removed broadcast channel {} (no subscribers)", channel_key);
     }
 
     tracing::info!("Trader relay ended for {}", pubkey_str);

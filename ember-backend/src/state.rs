@@ -1,4 +1,5 @@
 use anyhow::Result;
+use dashmap::DashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -14,6 +15,8 @@ pub struct AppState {
     pub market_cache: Arc<MarketCache>,
     pub broadcast: Arc<BroadcastHub>,
     pub markets: Arc<RwLock<Vec<ExchangeMarketConfig>>>,
+    /// Tracks pubkeys with an active trader relay to prevent duplicates (BE-BUG-1).
+    pub active_trader_relays: Arc<DashSet<String>>,
 }
 
 impl AppState {
@@ -45,6 +48,7 @@ impl AppState {
             market_cache,
             broadcast,
             markets: Arc::new(RwLock::new(markets)),
+            active_trader_relays: Arc::new(DashSet::new()),
         })
     }
 
