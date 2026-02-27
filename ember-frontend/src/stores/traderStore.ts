@@ -13,11 +13,13 @@ function sdkNum(val: any): number {
 // Transform SDK position (camelCase + Decimal objects) → display-ready TraderPosition
 // NOTE: mark_price is NOT set here — it's computed reactively in Positions component
 // from statsStore to avoid stale data between account refreshes
-function transformPosition(sdkPos: any): TraderPosition {
+function transformPosition(sdkPos: any, subaccountIndex: number): TraderPosition {
   const rawSize = sdkNum(sdkPos.positionSize);
   const side = rawSize >= 0 ? "Long" : "Short";
 
-  const marginMode: MarginMode = (sdkPos.marginMode || sdkPos.margin_mode || "cross") as MarginMode;
+  const marginMode: MarginMode = subaccountIndex > 0
+    ? "isolated"
+    : (sdkPos.marginMode || sdkPos.margin_mode || "cross") as MarginMode;
 
   return {
     symbol: sdkPos.marketSymbol || sdkPos.symbol || "",
@@ -31,6 +33,7 @@ function transformPosition(sdkPos: any): TraderPosition {
     allocated_collateral: sdkNum(sdkPos.allocatedCollateral || sdkPos.allocated_collateral),
     tp_price: sdkPos.tpPrice != null ? sdkNum(sdkPos.tpPrice) : (sdkPos.tp_price != null ? sdkNum(sdkPos.tp_price) : null),
     sl_price: sdkPos.slPrice != null ? sdkNum(sdkPos.slPrice) : (sdkPos.sl_price != null ? sdkNum(sdkPos.sl_price) : null),
+    subaccount_index: subaccountIndex,
   };
 }
 
@@ -62,7 +65,7 @@ interface TraderStore {
   riskState: string;
   positions: TraderPosition[];
   limitOrders: Record<string, LimitOrder[]>;
-  setAccount: (account: TraderAccount) => void;
+  setAccounts: (accounts: TraderAccount[]) => void;
   setConnected: (connected: boolean, authority?: string) => void;
   reset: () => void;
 }
@@ -79,25 +82,33 @@ export const useTraderStore = create<TraderStore>((set) => ({
   riskState: "",
   positions: [],
   limitOrders: {},
-  setAccount: (account) => {
-    // Transform SDK positions (camelCase + Decimals) → display-ready format
-    const positions = (account.positions || []).map(transformPosition);
+  setAccounts: (accounts) => {
+    // Use cross-margin account (index 0) for portfolio summary
+    const primary = accounts.find((a) => a.traderSubaccountIndex === 0) || accounts[0];
 
-    // Transform SDK limit orders per market
-    const rawOrders = account.limitOrders || {};
+    // Aggregate positions from ALL accounts, threading subaccount_index
+    const positions: TraderPosition[] = [];
     const limitOrders: Record<string, LimitOrder[]> = {};
-    for (const [symbol, orders] of Object.entries(rawOrders)) {
-      limitOrders[symbol] = (orders as any[]).map(transformLimitOrder);
+
+    for (const account of accounts) {
+      const subIdx = account.traderSubaccountIndex ?? 0;
+      for (const pos of account.positions || []) {
+        positions.push(transformPosition(pos, subIdx));
+      }
+      for (const [symbol, orders] of Object.entries(account.limitOrders || {})) {
+        const transformed = (orders as any[]).map(transformLimitOrder);
+        limitOrders[symbol] = [...(limitOrders[symbol] || []), ...transformed];
+      }
     }
 
     set({
-      account,
-      collateral: sdkNum(account.effectiveCollateral),
-      portfolioValue: sdkNum(account.portfolioValue),
-      unrealizedPnl: sdkNum(account.unrealizedPnl),
-      initialMargin: sdkNum(account.initialMargin),
-      maintenanceMargin: sdkNum(account.maintenanceMargin),
-      riskState: account.riskState || "",
+      account: primary,
+      collateral: sdkNum(primary.effectiveCollateral),
+      portfolioValue: sdkNum(primary.portfolioValue),
+      unrealizedPnl: sdkNum(primary.unrealizedPnl),
+      initialMargin: sdkNum(primary.initialMargin),
+      maintenanceMargin: sdkNum(primary.maintenanceMargin),
+      riskState: primary.riskState || "",
       positions,
       limitOrders,
     });

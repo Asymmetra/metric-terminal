@@ -449,13 +449,14 @@ function CollateralModal({
     setError(null);
     setLoading(true);
     try {
-      // Bridge uses subaccount indices: 0 = cross, isolated positions have their own index
+      // Bridge uses subaccount indices: 0 = cross, isolated positions use their actual index
+      const isoIdx = position.subaccount_index;
       if (mode === "add") {
         // Transfer from cross (0) to isolated subaccount
-        await transferCollateral(0, 1, parsed);
+        await transferCollateral(0, isoIdx, parsed);
       } else {
         // Transfer from isolated subaccount to cross (0)
-        await transferCollateral(1, 0, parsed);
+        await transferCollateral(isoIdx, 0, parsed);
       }
       setAmount("");
       onClose();

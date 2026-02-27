@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
  */
 export function useTraderSync() {
   const { publicKey, connected } = useWallet();
-  const setAccount = useTraderStore((s) => s.setAccount);
+  const setAccounts = useTraderStore((s) => s.setAccounts);
   const setConnected = useTraderStore((s) => s.setConnected);
   const reset = useTraderStore((s) => s.reset);
   const prevPubkey = useRef<string | null>(null);
@@ -44,10 +44,7 @@ export function useTraderSync() {
       try {
         const data = await api.getTrader(pubkeyStr!);
         if (data?.accounts?.length > 0) {
-          const primary = data.accounts.find(
-            (a: any) => a.traderSubaccountIndex === 0
-          ) || data.accounts[0];
-          setAccount(primary);
+          setAccounts(data.accounts);
         }
       } catch (e) {
         // If trader has no account, that's fine — just log it
@@ -73,5 +70,5 @@ export function useTraderSync() {
       unsubRef.current?.();
       unsubRef.current = null;
     };
-  }, [connected, publicKey, setAccount, setConnected, reset]);
+  }, [connected, publicKey, setAccounts, setConnected, reset]);
 }

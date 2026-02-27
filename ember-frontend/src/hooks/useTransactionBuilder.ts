@@ -25,10 +25,7 @@ export function useTransactionBuilder() {
     try {
       const data = await api.getTrader(publicKey.toBase58());
       if (data?.accounts?.length > 0) {
-        const primary = data.accounts.find(
-          (a: any) => a.traderSubaccountIndex === 0
-        ) || data.accounts[0];
-        useTraderStore.getState().setAccount(primary);
+        useTraderStore.getState().setAccounts(data.accounts);
       }
     } catch (e) {
       console.debug("Post-tx trader refresh failed:", e);

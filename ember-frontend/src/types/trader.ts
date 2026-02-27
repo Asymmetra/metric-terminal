@@ -23,6 +23,7 @@ export interface TraderPosition {
   allocated_collateral: number;
   tp_price: number | null;
   sl_price: number | null;
+  subaccount_index: number; // 0 = cross-margin, 1-100 = isolated
 }
 
 // Display-ready limit order (post-transform from SDK's camelCase + Decimal/string format).
