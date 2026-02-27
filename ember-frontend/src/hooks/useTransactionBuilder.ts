@@ -173,5 +173,76 @@ export function useTransactionBuilder() {
     [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
-  return { submitOrder, cancelOrders, deposit, withdraw, connected: !!publicKey };
+  const submitIsolatedOrder = useCallback(
+    async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
+      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+
+      const toastId = addToast("loading", "Building isolated order...");
+
+      try {
+        const builder = type === "market" ? api.buildIsolatedMarketOrder : api.buildIsolatedLimitOrder;
+        const response = await builder({ ...params, authority: publicKey.toBase58() });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => {
+            onStatus?.(status);
+            updateToast(toastId, { message: STATUS_LABELS[status] });
+          }
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Isolated order confirmed" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Isolated order sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Isolated order failed" });
+        throw e;
+      }
+    },
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+  );
+
+  const transferCollateral = useCallback(
+    async (fromSubaccountIndex: number, toSubaccountIndex: number, amountUsdc: number): Promise<TxResult> => {
+      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+
+      const toastId = addToast("loading", "Building collateral transfer...");
+
+      try {
+        const response = await api.buildTransferCollateral({
+          authority: publicKey.toBase58(),
+          from_subaccount_index: fromSubaccountIndex,
+          to_subaccount_index: toSubaccountIndex,
+          amount_usdc: amountUsdc,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Collateral transfer confirmed" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Transfer sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Transfer failed" });
+        throw e;
+      }
+    },
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+  );
+
+  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, connected: !!publicKey };
 }
