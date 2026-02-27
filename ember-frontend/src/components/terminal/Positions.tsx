@@ -34,7 +34,7 @@ export function Positions() {
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
-  const { submitOrder, cancelOrders, transferCollateral, connected } = useTransactionBuilder();
+  const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, connected } = useTransactionBuilder();
   const { publicKey } = useWallet();
 
   // Subscribe to stats WS for all markets with open positions (not just selected)
@@ -122,11 +122,12 @@ export function Positions() {
       const lotSize = 10 ** -(market.baseLotsDecimals || 2);
       const sizeLots = Math.round(pos.size / lotSize);
       const closeSide = pos.side.toLowerCase() === "long" ? "ask" : "bid";
-      await submitOrder("market", {
-        symbol: pos.symbol,
-        side: closeSide,
-        size_lots: sizeLots,
-      });
+      const closeParams = { symbol: pos.symbol, side: closeSide, size_lots: sizeLots };
+      if (pos.margin_mode === "isolated") {
+        await submitIsolatedOrder("market", closeParams);
+      } else {
+        await submitOrder("market", closeParams);
+      }
     } catch (e: any) {
       console.error("Close position failed:", e);
     } finally {
@@ -144,11 +145,12 @@ export function Positions() {
         const lotSize = 10 ** -(market.baseLotsDecimals || 2);
         const sizeLots = Math.round(pos.size / lotSize);
         const closeSide = pos.side.toLowerCase() === "long" ? "ask" : "bid";
-        await submitOrder("market", {
-          symbol: pos.symbol,
-          side: closeSide,
-          size_lots: sizeLots,
-        });
+        const closeParams = { symbol: pos.symbol, side: closeSide, size_lots: sizeLots };
+        if (pos.margin_mode === "isolated") {
+          await submitIsolatedOrder("market", closeParams);
+        } else {
+          await submitOrder("market", closeParams);
+        }
       } catch (e: any) {
         console.error(`Failed to close ${pos.symbol}:`, e);
       }
