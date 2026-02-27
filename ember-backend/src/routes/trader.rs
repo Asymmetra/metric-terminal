@@ -75,6 +75,26 @@ async fn get_trades(
     })))
 }
 
+/// GET /api/trader/:pubkey/subaccounts — List all subaccounts (cross + isolated)
+async fn get_subaccounts(
+    State(state): State<Arc<AppState>>,
+    Path(pubkey): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let authority = Pubkey::from_str(&pubkey)
+        .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
+
+    let traders = state
+        .http_client
+        .get_traders(&authority)
+        .await
+        .map_err(|e| AppError::Phoenix(format!("Failed to fetch subaccounts: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "authority": pubkey,
+        "subaccounts": traders,
+    })))
+}
+
 /// GET /api/trader/:pubkey/funding — Funding history
 async fn get_funding(
     State(state): State<Arc<AppState>>,
@@ -101,5 +121,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{pubkey}", get(get_trader))
         .route("/{pubkey}/orders", get(get_orders))
         .route("/{pubkey}/trades", get(get_trades))
+        .route("/{pubkey}/subaccounts", get(get_subaccounts))
         .route("/{pubkey}/funding", get(get_funding))
 }
