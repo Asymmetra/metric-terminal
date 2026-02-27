@@ -59,19 +59,6 @@ impl From<&phoenix_sdk::ExchangeMarketConfig> for MarketInfo {
 // --- WebSocket messages (our internal broadcast format) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WsClientMessage {
-    #[serde(rename = "type")]
-    pub msg_type: String,
-    pub channel: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeframe: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsServerMessage {
     pub channel: String,
     #[serde(skip_serializing_if = "Option::is_none")]
