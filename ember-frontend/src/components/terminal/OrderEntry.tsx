@@ -106,8 +106,8 @@ export function OrderEntry() {
       if (orderType === "limit") {
         params.price = parseFloat(price);
       }
-      // Attach TP/SL if enabled and valid (Bridge uses stop_loss_price/take_profit_price)
-      if (showTpSl) {
+      // Attach TP/SL if enabled and valid — only for market orders (backend doesn't support bracket legs on limit orders)
+      if (showTpSl && orderType === "market") {
         const tp = parseFloat(tpPrice);
         const sl = parseFloat(slPrice);
         if (!isNaN(tp) && tp > 0) params.take_profit_price = tp;
@@ -305,8 +305,8 @@ export function OrderEntry() {
             </div>
           </div>
 
-          {/* TP/SL toggle + inputs */}
-          <div>
+          {/* TP/SL toggle + inputs — only for market orders (limit orders don't support bracket legs yet) */}
+          {orderType === "market" && <div>
             <button
               onClick={() => setShowTpSl(!showTpSl)}
               className="flex w-full items-center justify-between py-1"
@@ -434,7 +434,7 @@ export function OrderEntry() {
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Order summary */}
           {orderSummary && (
