@@ -11,7 +11,7 @@ use crate::direction::{Direction, Side, StopLossOrderKind};
 use crate::errors::PhoenixStateError;
 use crate::margin::{LimitOrder, Margin, MarketMargin, MarketPosition};
 use crate::perp_metadata::PerpAssetMetadata;
-use crate::quantities::{QuoteLots, SignedQuoteLots, Ticks};
+use crate::quantities::{QuoteLots, SignedQuoteLots, Ticks, WrapperNum};
 use crate::risk::{MarginError, MarginState, RiskState, RiskTier};
 use crate::trader_position::TraderPosition;
 
@@ -244,5 +244,30 @@ impl TraderPortfolioMargin {
     pub fn risk_tier(&self) -> Result<RiskTier, MarginError> {
         let effective_collateral = self.effective_collateral();
         self.margin.risk_tier(effective_collateral)
+    }
+
+    pub fn calculate_transferable_collateral(&self) -> Result<u64, MarginError> {
+        let total_collateral = self.quote_lot_collateral;
+
+        // If trader has no positions or limit orders, all collateral is transferable
+        if self.positions.is_empty() {
+            return Ok(total_collateral.max(SignedQuoteLots::ZERO).as_inner() as u64);
+        }
+
+        // Use the pre-calculated initial_margin_for_withdrawals which includes
+        // margin requirements for both positions AND open limit orders
+        let total_margin_required = self
+            .margin
+            .initial_margin_for_withdrawals
+            .checked_as_signed()?;
+
+        // Transferable amount = total collateral - required margin
+        if total_collateral >= total_margin_required {
+            Ok((total_collateral - total_margin_required)
+                .max(SignedQuoteLots::ZERO)
+                .as_inner() as u64)
+        } else {
+            Ok(0)
+        }
     }
 }

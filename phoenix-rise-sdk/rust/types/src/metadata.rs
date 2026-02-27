@@ -1,6 +1,6 @@
 //! Exchange metadata caching for Phoenix SDK.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use phoenix_math_utils::{
     BaseLots, BasisPoints, Constant, LeverageTier, LeverageTiers, MarketCalculator,
@@ -17,11 +17,13 @@ pub struct PhoenixMetadata {
     exchange: ExchangeView,
     market_calculators: HashMap<String, MarketCalculator>,
     perp_asset_metadata: HashMap<String, PerpAssetMetadata>,
+    isolated_only_markets: HashSet<String>,
 }
 
 impl PhoenixMetadata {
     pub fn new(exchange: ExchangeView) -> Self {
         let mut market_calculators = HashMap::new();
+        let mut isolated_only_markets = HashSet::new();
 
         for (symbol, config) in &exchange.markets {
             let calc = MarketCalculator::new(
@@ -29,12 +31,16 @@ impl PhoenixMetadata {
                 QuoteLotsPerBaseLotPerTick::new(config.tick_size),
             );
             market_calculators.insert(symbol.clone(), calc);
+            if config.isolated_only {
+                isolated_only_markets.insert(symbol.clone());
+            }
         }
 
         Self {
             exchange,
             market_calculators,
             perp_asset_metadata: HashMap::new(),
+            isolated_only_markets,
         }
     }
 
@@ -48,6 +54,11 @@ impl PhoenixMetadata {
 
     pub fn get_market(&self, symbol: &str) -> Option<&ExchangeMarketConfig> {
         self.exchange.get_market(symbol)
+    }
+
+    pub fn is_isolated_only(&self, symbol: &str) -> bool {
+        self.isolated_only_markets
+            .contains(&symbol.to_ascii_uppercase())
     }
 
     pub fn get_market_calculator(&self, symbol: &str) -> Option<&MarketCalculator> {

@@ -6,6 +6,9 @@ use solana_pubkey::Pubkey;
 pub const ETERNAL_PROGRAM_ID: Pubkey =
     solana_pubkey::pubkey!("EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih");
 
+/// Subaccount index for the cross-margin (primary) account.
+pub const CROSS_MARGIN_SUBACCOUNT_IDX: u8 = 0;
+
 /// Identifies a trader on Phoenix by authority pubkey and PDA indices.
 #[derive(Debug, Clone)]
 pub struct TraderKey {

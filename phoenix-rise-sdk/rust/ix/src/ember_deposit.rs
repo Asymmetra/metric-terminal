@@ -160,8 +160,8 @@ impl EmberDepositParamsBuilder {
 
 /// Create an Ember deposit instruction.
 ///
-/// This instruction deposits USDC into the Ember program and mints Phoenix tokens
-/// to the trader's account.
+/// This instruction deposits USDC into the Ember program and mints Phoenix
+/// tokens to the trader's account.
 ///
 /// # Arguments
 ///
@@ -259,7 +259,10 @@ mod tests {
             .trader_phoenix_account(Pubkey::new_unique())
             .build();
 
-        assert!(matches!(result, Err(PhoenixIxError::MissingField("amount"))));
+        assert!(matches!(
+            result,
+            Err(PhoenixIxError::MissingField("amount"))
+        ));
     }
 
     #[test]

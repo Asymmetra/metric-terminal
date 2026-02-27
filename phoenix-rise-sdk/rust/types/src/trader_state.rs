@@ -8,7 +8,6 @@ use phoenix_math_utils::{
     WrapperNum,
 };
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
 use tracing::{debug, warn};
 
 use crate::core::Side;
@@ -124,7 +123,7 @@ impl Spline {
 pub struct SubaccountState {
     pub subaccount_index: u8,
     pub sequence: u64,
-    pub collateral: Decimal,
+    pub collateral: SignedQuoteLots,
     pub capabilities: Option<TraderStateCapabilities>,
     pub cooldown_status: Option<CooldownStatus>,
     /// Positions keyed by market symbol.
@@ -145,12 +144,7 @@ impl SubaccountState {
 
     /// Build a TraderPortfolio from this subaccount's positions and orders.
     pub fn to_trader_portfolio(&self) -> TraderPortfolio {
-        let collateral_lots = (self.collateral * Decimal::from(1_000_000))
-            .to_i64()
-            .unwrap_or(0);
-
-        let mut builder =
-            TraderPortfolio::builder().quote_lot_collateral(SignedQuoteLots::new(collateral_lots));
+        let mut builder = TraderPortfolio::builder().quote_lot_collateral(self.collateral);
 
         for (symbol, position) in &self.positions {
             builder = builder.position(symbol, position.to_trader_position());
@@ -185,7 +179,11 @@ impl SubaccountState {
 
     fn apply_snapshot(&mut self, snapshot: &TraderStateSubaccountSnapshot) {
         self.sequence = snapshot.sequence;
-        self.collateral = snapshot.collateral.parse().unwrap_or(Decimal::ZERO);
+        self.collateral = snapshot
+            .collateral
+            .parse::<i64>()
+            .map(SignedQuoteLots::new)
+            .unwrap_or(SignedQuoteLots::ZERO);
         self.capabilities = snapshot.capabilities.clone();
         self.cooldown_status = snapshot.cooldown_status.clone();
 
@@ -226,7 +224,11 @@ impl SubaccountState {
         }
 
         self.sequence = delta.sequence;
-        self.collateral = delta.collateral.parse().unwrap_or(self.collateral);
+        self.collateral = delta
+            .collateral
+            .parse::<i64>()
+            .map(SignedQuoteLots::new)
+            .unwrap_or(self.collateral);
         if delta.capabilities.is_some() {
             self.capabilities = delta.capabilities.clone();
         }
@@ -337,8 +339,10 @@ impl Trader {
         }
     }
 
-    pub fn total_collateral(&self) -> Decimal {
-        self.subaccounts.values().map(|s| s.collateral).sum()
+    pub fn total_collateral(&self) -> SignedQuoteLots {
+        self.subaccounts
+            .values()
+            .fold(SignedQuoteLots::ZERO, |acc, s| acc + s.collateral)
     }
 
     pub fn all_positions(&self) -> Vec<&Position> {
@@ -361,5 +365,69 @@ impl Trader {
 
     pub fn primary_subaccount(&self) -> Option<&SubaccountState> {
         self.subaccount(0)
+    }
+
+    /// Return a `TraderKey` for the given subaccount index, inheriting this
+    /// trader's authority and PDA index.
+    pub fn subaccount_key(&self, subaccount_index: u8) -> TraderKey {
+        TraderKey::new_with_idx(self.key.authority, self.key.pda_index, subaccount_index)
+    }
+
+    /// Find an isolated subaccount for the given asset.
+    ///
+    /// Prefers a subaccount with an existing position in this asset. Falls back
+    /// to the empty isolated subaccount with the greatest collateral.
+    pub fn isolated_subaccount_for_asset(&self, symbol: &str) -> Option<&SubaccountState> {
+        if let Some(s) = self
+            .subaccounts
+            .values()
+            .find(|s| s.subaccount_index > 0 && s.positions.contains_key(symbol))
+        {
+            return Some(s);
+        }
+        self.subaccounts
+            .values()
+            .filter(|s| s.subaccount_index > 0 && s.positions.is_empty() && s.orders.is_empty())
+            .max_by_key(|s| s.collateral)
+    }
+
+    /// Try to find an existing isolated subaccount for `symbol`, falling back
+    /// to the next available slot. Returns `None` if no suitable subaccount
+    /// exists and all slots are occupied.
+    pub fn get_or_create_isolated_subaccount_key(&self, symbol: &str) -> Option<TraderKey> {
+        if let Some(sub) = self.isolated_subaccount_for_asset(symbol) {
+            return Some(self.subaccount_key(sub.subaccount_index));
+        }
+        self.get_next_isolated_subaccount_key()
+    }
+
+    /// Returns whether the given subaccount index is registered.
+    pub fn subaccount_exists(&self, subaccount_index: u8) -> bool {
+        self.subaccounts.contains_key(&subaccount_index)
+    }
+
+    pub fn get_collateral_for_subaccount(&self, subaccount_index: u8) -> SignedQuoteLots {
+        self.subaccounts
+            .get(&subaccount_index)
+            .map(|s| s.collateral)
+            .unwrap_or(SignedQuoteLots::ZERO)
+    }
+
+    /// Find the next available isolated subaccount slot and return its
+    /// `TraderKey`.
+    ///
+    /// Scans subaccount indexes 1..=255 and returns the first one not already
+    /// registered. Returns `None` if all 255 isolated slots are occupied.
+    pub fn get_next_isolated_subaccount_key(&self) -> Option<TraderKey> {
+        for idx in 1..=255u8 {
+            if !self.subaccounts.contains_key(&idx) {
+                return Some(TraderKey::new_with_idx(
+                    self.key.authority(),
+                    self.key.pda_index,
+                    idx,
+                ));
+            }
+        }
+        None
     }
 }

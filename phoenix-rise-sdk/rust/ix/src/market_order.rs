@@ -9,7 +9,9 @@ use crate::constants::{
 };
 use crate::error::PhoenixIxError;
 use crate::order_packet::{OrderPacket, client_order_id_to_bytes};
-use crate::types::{AccountMeta, Instruction, OrderFlags, SelfTradeBehavior, Side};
+use crate::types::{
+    AccountMeta, Instruction, IsolatedCollateralFlow, OrderFlags, SelfTradeBehavior, Side,
+};
 
 /// Parameters for placing a market order.
 #[derive(Debug, Clone)]
@@ -33,6 +35,10 @@ pub struct MarketOrderParams {
     last_valid_slot: Option<u64>,
     order_flags: OrderFlags,
     cancel_existing: bool,
+    /// Market symbol (e.g. "SOL"). Not serialized into the instruction.
+    symbol: String,
+    /// Subaccount index (0 = cross-margin, 1+ = isolated). Not serialized.
+    subaccount_index: u8,
 }
 
 impl MarketOrderParams {
@@ -116,6 +122,14 @@ impl MarketOrderParams {
     pub fn cancel_existing(&self) -> bool {
         self.cancel_existing
     }
+
+    pub fn symbol(&self) -> &str {
+        &self.symbol
+    }
+
+    pub fn subaccount_index(&self) -> u8 {
+        self.subaccount_index
+    }
 }
 
 /// Builder for `MarketOrderParams`.
@@ -140,6 +154,8 @@ pub struct MarketOrderParamsBuilder {
     last_valid_slot: Option<u64>,
     order_flags: Option<OrderFlags>,
     cancel_existing: Option<bool>,
+    symbol: Option<String>,
+    subaccount_index: Option<u8>,
 }
 
 impl MarketOrderParamsBuilder {
@@ -242,6 +258,16 @@ impl MarketOrderParamsBuilder {
         self
     }
 
+    pub fn symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = Some(symbol.into());
+        self
+    }
+
+    pub fn subaccount_index(mut self, subaccount_index: u8) -> Self {
+        self.subaccount_index = Some(subaccount_index);
+        self
+    }
+
     pub fn build(self) -> Result<MarketOrderParams, PhoenixIxError> {
         Ok(MarketOrderParams {
             trader: self.trader.ok_or(PhoenixIxError::MissingField("trader"))?,
@@ -277,6 +303,8 @@ impl MarketOrderParamsBuilder {
             last_valid_slot: self.last_valid_slot,
             order_flags: self.order_flags.unwrap_or(OrderFlags::None),
             cancel_existing: self.cancel_existing.unwrap_or(false),
+            symbol: self.symbol.unwrap_or_default(),
+            subaccount_index: self.subaccount_index.unwrap_or(0),
         })
     }
 }
@@ -375,6 +403,24 @@ fn build_accounts(params: &MarketOrderParams) -> Vec<AccountMeta> {
     accounts.push(AccountMeta::writable(params.spline_collection()));
 
     accounts
+}
+
+/// Parameters for an isolated margin market order.
+pub struct IsolatedMarketOrderParams {
+    pub side: Side,
+    pub price_in_ticks: Option<u64>,
+    pub num_base_lots: u64,
+    pub num_quote_lots: Option<u64>,
+    pub min_base_lots_to_fill: u64,
+    pub min_quote_lots_to_fill: u64,
+    pub self_trade_behavior: SelfTradeBehavior,
+    pub match_limit: Option<u64>,
+    pub client_order_id: u128,
+    pub last_valid_slot: Option<u64>,
+    pub order_flags: OrderFlags,
+    pub cancel_existing: bool,
+    pub allow_cross_and_isolated: bool,
+    pub collateral: Option<IsolatedCollateralFlow>,
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ url                = { workspace = true }
 [dev-dependencies]
 serde                    = { workspace = true }
 solana-commitment-config = { workspace = true }
+solana-instruction       = { workspace = true }
 solana-keypair           = { workspace = true }
 solana-rpc-client        = { workspace = true }
 solana-signer            = { workspace = true }

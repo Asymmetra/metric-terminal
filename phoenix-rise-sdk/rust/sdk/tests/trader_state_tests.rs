@@ -71,7 +71,7 @@ fn test_apply_snapshot() {
         subaccounts: vec![TraderStateSubaccountSnapshot {
             subaccount_index: 0,
             sequence: 100,
-            collateral: "1000.50".to_string(),
+            collateral: "1000".to_string(),
             capabilities: Some(make_capabilities()),
             cooldown_status: None,
             positions: vec![TraderStatePositionSnapshot {
@@ -99,7 +99,7 @@ fn test_apply_snapshot() {
     assert_eq!(trader.taker_fee_override_multiplier, 1.1);
 
     let collateral = trader.total_collateral();
-    assert_eq!(collateral, Decimal::new(100050, 2)); // 1000.50
+    assert_eq!(collateral, 1000);
 
     let positions = trader.all_positions();
     assert_eq!(positions.len(), 1);
@@ -173,7 +173,7 @@ fn test_apply_delta_updates_position() {
     // Verify updates
     let subaccount = trader.primary_subaccount().unwrap();
     assert_eq!(subaccount.sequence, 101);
-    assert_eq!(subaccount.collateral, Decimal::new(1050, 0));
+    assert_eq!(subaccount.collateral, 1050);
 
     let positions = trader.all_positions();
     assert_eq!(positions.len(), 1);
@@ -245,7 +245,7 @@ fn test_apply_delta_closes_position() {
 
     // Position should be removed
     assert_eq!(trader.all_positions().len(), 0);
-    assert_eq!(trader.total_collateral(), Decimal::new(1100, 0));
+    assert_eq!(trader.total_collateral(), 1100);
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn test_stale_delta_ignored() {
     // Collateral should NOT be updated since delta was stale
     let subaccount = trader.primary_subaccount().unwrap();
     assert_eq!(subaccount.sequence, 100);
-    assert_eq!(subaccount.collateral, Decimal::new(1000, 0));
+    assert_eq!(subaccount.collateral, 1000);
 }
 
 #[test]
@@ -351,13 +351,13 @@ fn test_multiple_subaccounts() {
 
     // Verify both subaccounts
     assert_eq!(trader.subaccounts.len(), 2);
-    assert_eq!(trader.total_collateral(), Decimal::new(1500, 0));
+    assert_eq!(trader.total_collateral(), 1500);
 
     let sub0 = trader.subaccount(0).unwrap();
-    assert_eq!(sub0.collateral, Decimal::new(1000, 0));
+    assert_eq!(sub0.collateral, 1000);
 
     let sub1 = trader.subaccount(1).unwrap();
-    assert_eq!(sub1.collateral, Decimal::new(500, 0));
+    assert_eq!(sub1.collateral, 500);
 }
 
 #[test]

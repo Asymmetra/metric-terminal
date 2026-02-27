@@ -40,4 +40,10 @@ pub enum PhoenixIxError {
 
     #[error("Invalid withdraw amount (must be greater than 0)")]
     InvalidWithdrawAmount,
+
+    #[error("Invalid subaccount index for isolated margin (must be 0-100)")]
+    InvalidSubaccountIndex,
+
+    #[error("Invalid transfer amount (must be greater than 0)")]
+    InvalidTransferAmount,
 }

@@ -32,8 +32,7 @@ pub const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
     solana_pubkey::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 /// System program ID.
-pub const SYSTEM_PROGRAM_ID: Pubkey =
-    solana_pubkey::pubkey!("11111111111111111111111111111111");
+pub const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("11111111111111111111111111111111");
 
 /// Compute the instruction discriminant using SHA-256.
 /// Takes the first 8 bytes of SHA-256 hash of the input string.
@@ -81,6 +80,46 @@ pub fn ember_withdraw_discriminant() -> [u8; 8] {
     compute_discriminant("global:withdraw")
 }
 
+/// Instruction discriminant for register_trader.
+pub fn register_trader_discriminant() -> [u8; 8] {
+    compute_discriminant("global:register_trader")
+}
+
+/// Instruction discriminant for transfer_collateral.
+pub fn transfer_collateral_discriminant() -> [u8; 8] {
+    compute_discriminant("global:transfer_collateral")
+}
+
+/// Instruction discriminant for transfer_collateral_child_to_parent.
+pub fn transfer_collateral_child_to_parent_discriminant() -> [u8; 8] {
+    compute_discriminant("global:transfer_collateral_child_to_parent")
+}
+
+/// Instruction discriminant for sync_parent_to_child.
+pub fn sync_parent_to_child_discriminant() -> [u8; 8] {
+    compute_discriminant("global:sync_parent_to_child")
+}
+
+/// Instruction discriminant for place_stop_loss.
+pub fn place_stop_loss_discriminant() -> [u8; 8] {
+    compute_discriminant("global:place_stop_loss")
+}
+
+/// Derives the stop loss PDA for a given trader account and asset ID.
+///
+/// Seeds: ["stoploss", trader_account, &asset_id.to_le_bytes()]
+pub fn get_stop_loss_address(trader_account: &Pubkey, asset_id: u64) -> Pubkey {
+    let (pda, _bump) = Pubkey::find_program_address(
+        &[
+            b"stoploss",
+            trader_account.as_ref(),
+            &asset_id.to_le_bytes(),
+        ],
+        &PHOENIX_PROGRAM_ID,
+    );
+    pda
+}
+
 /// Derives the spline collection PDA for a given market (orderbook) address.
 ///
 /// Seeds: ["spline", market_address]
@@ -94,10 +133,8 @@ pub fn get_spline_collection_address(market: &Pubkey) -> Pubkey {
 ///
 /// Seeds: [phoenix_program_id, "state"] against Ember program
 pub fn get_ember_state_address() -> Pubkey {
-    let (pda, _bump) = Pubkey::find_program_address(
-        &[PHOENIX_PROGRAM_ID.as_ref(), b"state"],
-        &EMBER_PROGRAM_ID,
-    );
+    let (pda, _bump) =
+        Pubkey::find_program_address(&[PHOENIX_PROGRAM_ID.as_ref(), b"state"], &EMBER_PROGRAM_ID);
     pda
 }
 
@@ -105,10 +142,8 @@ pub fn get_ember_state_address() -> Pubkey {
 ///
 /// Seeds: [phoenix_program_id, "vault"] against Ember program
 pub fn get_ember_vault_address() -> Pubkey {
-    let (pda, _bump) = Pubkey::find_program_address(
-        &[PHOENIX_PROGRAM_ID.as_ref(), b"vault"],
-        &EMBER_PROGRAM_ID,
-    );
+    let (pda, _bump) =
+        Pubkey::find_program_address(&[PHOENIX_PROGRAM_ID.as_ref(), b"vault"], &EMBER_PROGRAM_ID);
     pda
 }
 
@@ -126,11 +161,7 @@ pub fn get_global_vault_address(mint: &Pubkey) -> Pubkey {
 /// This follows the standard SPL ATA derivation.
 pub fn get_associated_token_address(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
     let (pda, _bump) = Pubkey::find_program_address(
-        &[
-            owner.as_ref(),
-            SPL_TOKEN_PROGRAM_ID.as_ref(),
-            mint.as_ref(),
-        ],
+        &[owner.as_ref(), SPL_TOKEN_PROGRAM_ID.as_ref(), mint.as_ref()],
         &ASSOCIATED_TOKEN_PROGRAM_ID,
     );
     pda
@@ -184,6 +215,17 @@ mod tests {
     }
 
     #[test]
+    fn test_register_trader_discriminant() {
+        let disc = register_trader_discriminant();
+        assert_ne!(disc, [0u8; 8]);
+        assert_ne!(disc, place_limit_order_discriminant());
+        assert_ne!(disc, place_market_order_discriminant());
+        assert_ne!(disc, cancel_orders_by_id_discriminant());
+        assert_ne!(disc, deposit_funds_discriminant());
+        assert_ne!(disc, withdraw_funds_discriminant());
+    }
+
+    #[test]
     fn test_withdraw_discriminants() {
         let withdraw_disc = withdraw_funds_discriminant();
         let ember_withdraw_disc = ember_withdraw_discriminant();
@@ -226,6 +268,33 @@ mod tests {
         let mint2 = Pubkey::new_unique();
         let vault3 = get_global_vault_address(&mint2);
         assert_ne!(vault1, vault3);
+    }
+
+    #[test]
+    fn test_stop_loss_discriminant() {
+        let disc = place_stop_loss_discriminant();
+        assert_ne!(disc, [0u8; 8]);
+        assert_ne!(disc, place_limit_order_discriminant());
+        assert_ne!(disc, place_market_order_discriminant());
+        assert_ne!(disc, cancel_orders_by_id_discriminant());
+    }
+
+    #[test]
+    fn test_stop_loss_pda_derivation() {
+        let trader_account = Pubkey::new_unique();
+        let asset_id: u64 = 42;
+        let pda1 = get_stop_loss_address(&trader_account, asset_id);
+        let pda2 = get_stop_loss_address(&trader_account, asset_id);
+        assert_eq!(pda1, pda2);
+
+        // Different asset_id should produce different PDA
+        let pda3 = get_stop_loss_address(&trader_account, 99);
+        assert_ne!(pda1, pda3);
+
+        // Different trader should produce different PDA
+        let trader2 = Pubkey::new_unique();
+        let pda4 = get_stop_loss_address(&trader2, asset_id);
+        assert_ne!(pda1, pda4);
     }
 
     #[test]

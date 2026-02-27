@@ -7,10 +7,12 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use solana_pubkey::Pubkey;
 
 use crate::core::{Decimal, Side};
 use crate::market::{RiskState, RiskTier};
 use crate::trader::TraderCapabilitiesView;
+use crate::trader_key::TraderKey;
 
 // ============================================================================
 // Order History Types
@@ -624,4 +626,38 @@ pub struct TraderStateResponse {
     pub authority: String,
     pub pda_index: u8,
     pub traders: Vec<TraderView>,
+}
+
+impl TraderStateResponse {
+    /// Find an isolated subaccount for the given asset.
+    ///
+    /// Prefers a subaccount with an existing position in this asset. Falls back
+    /// to the first empty isolated subaccount if none match.
+    pub fn isolated_subaccount_for_asset(&self, symbol: &str) -> Option<&TraderView> {
+        if let Some(t) = self.traders.iter().find(|t| {
+            t.trader_subaccount_index > 0 && t.positions.iter().any(|p| p.symbol == symbol)
+        }) {
+            return Some(t);
+        }
+        self.traders
+            .iter()
+            .find(|t| t.trader_subaccount_index > 0 && t.positions.is_empty())
+    }
+
+    /// Find the next available isolated subaccount slot and return its
+    /// `TraderKey`.
+    ///
+    /// Collects all registered subaccount indexes and returns a `TraderKey` for
+    /// the first in 1..=255 that is unused. Returns `None` if all 255 slots are
+    /// occupied or the authority string fails to parse.
+    pub fn get_next_isolated_subaccount_key(&self) -> Option<TraderKey> {
+        let authority: Pubkey = self.authority.parse().ok()?;
+        let registered: std::collections::HashSet<u8> = self
+            .traders
+            .iter()
+            .map(|t| t.trader_subaccount_index)
+            .collect();
+        let idx = (1..=255u8).find(|idx| !registered.contains(idx))?;
+        Some(TraderKey::new_with_idx(authority, self.pda_index, idx))
+    }
 }

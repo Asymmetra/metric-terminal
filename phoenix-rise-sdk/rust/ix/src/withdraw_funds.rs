@@ -288,7 +288,8 @@ mod tests {
         let ix = create_withdraw_funds_ix(params).unwrap();
 
         assert_eq!(ix.program_id, PHOENIX_PROGRAM_ID);
-        // 9 base accounts + 1 global_trader_index + 1 active_trader_buffer + 1 withdraw_queue = 12
+        // 9 base accounts + 1 global_trader_index + 1 active_trader_buffer + 1
+        // withdraw_queue = 12
         assert_eq!(ix.accounts.len(), 12);
 
         // Verify data encoding

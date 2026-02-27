@@ -12,13 +12,23 @@ pub enum Side {
     Ask = 1,
 }
 
+impl Side {
+    /// Returns the API wire string for this side (`"buy"` or `"sell"`).
+    pub fn to_api_string(self) -> &'static str {
+        match self {
+            Side::Bid => "buy",
+            Side::Ask => "sell",
+        }
+    }
+}
+
 /// Order flags for specifying order behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum OrderFlags {
     /// No special flags.
-    None = 0,
+    None       = 0,
     /// Reduce only flag - order can only reduce existing position.
     ReduceOnly = 128, // 1 << 7
 }
@@ -29,7 +39,7 @@ pub enum OrderFlags {
 #[repr(u8)]
 pub enum SelfTradeBehavior {
     /// Abort the new order if it would self-trade.
-    Abort = 0,
+    Abort         = 0,
     /// Cancel the existing order and provide the new order.
     CancelProvide = 1,
     /// Decrement the existing order and provide the new order.
@@ -65,6 +75,41 @@ impl CancelId {
             },
         }
     }
+}
+
+/// Direction for price comparison triggers (used in stop-loss/take-profit
+/// orders).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum Direction {
+    /// Trigger when price moves above threshold.
+    GreaterThan = 0,
+    /// Trigger when price moves below threshold.
+    LessThan    = 1,
+}
+
+/// Execution kind for stop-loss/take-profit orders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum StopLossOrderKind {
+    /// Immediate-or-cancel execution.
+    IOC   = 0,
+    /// Limit order execution.
+    Limit = 1,
+}
+
+/// How to fund an isolated subaccount before placing an order.
+///
+/// Collateral amounts are in **quote lots** (native USDC base units,
+/// i.e. 1 USDC = 1 000 000 quote lots).
+pub enum IsolatedCollateralFlow {
+    /// Desired total collateral level — only the delta above existing
+    /// collateral is transferred from cross-margin.
+    TransferFromCrossMargin { collateral: u64 },
+    /// Deposit fresh USDC directly into the isolated subaccount.
+    Deposit { usdc_amount: u64 },
 }
 
 /// Account metadata for Solana instructions.

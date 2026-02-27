@@ -5,19 +5,23 @@
 
 use std::time::Duration;
 
+use phoenix_ix::{IsolatedCollateralFlow, Side};
 use phoenix_types::{
-    ApiCandle, CandlesQueryParams, CollateralHistoryQueryParams, CollateralHistoryResponse,
-    ExchangeKeysView, ExchangeMarketConfig, ExchangeResponse, FundingHistoryQueryParams,
-    FundingHistoryResponse, OrderHistoryQueryParams, OrderHistoryResponse, PhoenixHttpError,
-    PnlPoint, PnlQueryParams, TradeHistoryQueryParams, TradeHistoryResponse, TraderKey,
-    TraderStateResponse, TraderView,
+    ApiCandle, ApiInstructionResponse, CandlesQueryParams, CollateralHistoryQueryParams,
+    CollateralHistoryResponse, ExchangeKeysView, ExchangeMarketConfig, ExchangeResponse,
+    FundingHistoryQueryParams, FundingHistoryResponse, OrderHistoryQueryParams,
+    OrderHistoryResponse, PhoenixHttpError, PlaceIsolatedLimitOrderRequest,
+    PlaceIsolatedMarketOrderRequest, PnlPoint, PnlQueryParams, TradeHistoryQueryParams,
+    TradeHistoryResponse, TraderKey, TraderStateResponse, TraderView,
 };
 use reqwest::header::RETRY_AFTER;
 use reqwest::{Client, RequestBuilder, Response};
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use tracing::debug;
 
 use crate::env::PhoenixEnv;
+use crate::tx_builder::BracketLegOrders;
 
 const API_KEY_HEADER: &str = "x-api-key";
 const RATE_LIMIT_STATUS: u16 = 429;
@@ -911,6 +915,133 @@ impl PhoenixHttpClient {
         self.get_pnl_internal(authority, params).await
     }
 
+    /// Builds isolated limit order instructions via the server-side endpoint.
+    ///
+    /// Mirrors the signature of
+    /// [`PhoenixTxBuilder::build_isolated_limit_order`] but delegates
+    /// instruction construction to the server, so no WebSocket connection
+    /// or local trader state is needed.
+    ///
+    /// Only [`IsolatedCollateralFlow::TransferFromCrossMargin`] is supported;
+    /// [`IsolatedCollateralFlow::Deposit`] returns an error.
+    pub async fn build_isolated_limit_order_tx(
+        &self,
+        authority: &Pubkey,
+        symbol: &str,
+        side: Side,
+        price: f64,
+        num_base_lots: u64,
+        collateral: Option<IsolatedCollateralFlow>,
+        allow_cross_and_isolated: bool,
+    ) -> Result<Vec<Instruction>, PhoenixHttpError> {
+        let transfer_amount = collateral_transfer_amount(&collateral)?;
+
+        let request = PlaceIsolatedLimitOrderRequest {
+            authority: authority.to_string(),
+            symbol: symbol.to_string(),
+            side: side.to_api_string().to_string(),
+            price: Some(price),
+            num_base_lots: Some(num_base_lots),
+            transfer_amount,
+            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
+            ..Default::default()
+        };
+
+        self.build_isolated_limit_order_tx_with_request(request)
+            .await
+    }
+
+    /// Builds isolated limit order instructions from a raw request payload.
+    pub async fn build_isolated_limit_order_tx_with_request(
+        &self,
+        request: PlaceIsolatedLimitOrderRequest,
+    ) -> Result<Vec<Instruction>, PhoenixHttpError> {
+        let url = format!("{}/ix/place-isolated-limit-order", self.api_url);
+
+        let response = self
+            .send_with_rate_limit_retry(
+                self.maybe_add_api_key(self.client.post(&url))
+                    .json(&request),
+            )
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(PhoenixHttpError::ApiError { status, message });
+        }
+
+        let api_ixs: Vec<ApiInstructionResponse> = response.json().await.map_err(|e| {
+            PhoenixHttpError::ParseFailed(format!("Failed to parse instruction response: {}", e))
+        })?;
+
+        api_ixs.into_iter().map(try_into_instruction).collect()
+    }
+
+    /// Builds isolated market order instructions via the server-side endpoint.
+    ///
+    /// Mirrors the signature of
+    /// [`PhoenixTxBuilder::build_isolated_market_order`] but delegates
+    /// instruction construction to the server, so no WebSocket connection
+    /// or local trader state is needed.
+    ///
+    /// Only [`IsolatedCollateralFlow::TransferFromCrossMargin`] is supported;
+    /// [`IsolatedCollateralFlow::Deposit`] returns an error.
+    pub async fn build_isolated_market_order_tx(
+        &self,
+        authority: &Pubkey,
+        symbol: &str,
+        side: Side,
+        num_base_lots: u64,
+        collateral: Option<IsolatedCollateralFlow>,
+        allow_cross_and_isolated: bool,
+        bracket: Option<&BracketLegOrders>,
+    ) -> Result<Vec<Instruction>, PhoenixHttpError> {
+        let transfer_amount = collateral_transfer_amount(&collateral)?;
+        let tp_sl = bracket.map(BracketLegOrders::to_tp_sl_config);
+
+        let request = PlaceIsolatedMarketOrderRequest {
+            authority: authority.to_string(),
+            symbol: symbol.to_string(),
+            side: side.to_api_string().to_string(),
+            num_base_lots: Some(num_base_lots),
+            transfer_amount,
+            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
+            tp_sl,
+            ..Default::default()
+        };
+
+        self.build_isolated_market_order_tx_with_request(request)
+            .await
+    }
+
+    /// Builds isolated market order instructions from a raw request payload.
+    pub async fn build_isolated_market_order_tx_with_request(
+        &self,
+        request: PlaceIsolatedMarketOrderRequest,
+    ) -> Result<Vec<Instruction>, PhoenixHttpError> {
+        let url = format!("{}/ix/place-isolated-market-order", self.api_url);
+
+        let response = self
+            .send_with_rate_limit_retry(
+                self.maybe_add_api_key(self.client.post(&url))
+                    .json(&request),
+            )
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let message = response.text().await.unwrap_or_default();
+            return Err(PhoenixHttpError::ApiError { status, message });
+        }
+
+        let api_ixs: Vec<ApiInstructionResponse> = response.json().await.map_err(|e| {
+            PhoenixHttpError::ParseFailed(format!("Failed to parse instruction response: {}", e))
+        })?;
+
+        api_ixs.into_iter().map(try_into_instruction).collect()
+    }
+
     async fn get_pnl_internal(
         &self,
         authority: &Pubkey,
@@ -944,6 +1075,49 @@ impl PhoenixHttpClient {
             PhoenixHttpError::ParseFailed(format!("Failed to parse PnL response: {}", e))
         })
     }
+}
+
+fn collateral_transfer_amount(
+    collateral: &Option<IsolatedCollateralFlow>,
+) -> Result<u64, PhoenixHttpError> {
+    match collateral {
+        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => Ok(*collateral),
+        Some(IsolatedCollateralFlow::Deposit { .. }) => Err(PhoenixHttpError::ApiError {
+            status: 0,
+            message: "IsolatedCollateralFlow::Deposit is not supported by the server-side \
+                      endpoint; use TransferFromCrossMargin instead"
+                .to_string(),
+        }),
+        None => Ok(0),
+    }
+}
+
+fn try_into_instruction(api_ix: ApiInstructionResponse) -> Result<Instruction, PhoenixHttpError> {
+    let program_id: Pubkey = api_ix
+        .program_id
+        .parse()
+        .map_err(|e| PhoenixHttpError::ParseFailed(format!("Invalid program_id pubkey: {}", e)))?;
+
+    let accounts = api_ix
+        .keys
+        .into_iter()
+        .map(|meta| {
+            let pubkey: Pubkey = meta.pubkey.parse().map_err(|e| {
+                PhoenixHttpError::ParseFailed(format!("Invalid account pubkey: {}", e))
+            })?;
+            Ok(if meta.is_writable {
+                AccountMeta::new(pubkey, meta.is_signer)
+            } else {
+                AccountMeta::new_readonly(pubkey, meta.is_signer)
+            })
+        })
+        .collect::<Result<Vec<_>, PhoenixHttpError>>()?;
+
+    Ok(Instruction::new_with_bytes(
+        program_id,
+        &api_ix.data,
+        accounts,
+    ))
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {

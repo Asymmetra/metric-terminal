@@ -48,26 +48,34 @@ pub use client::PhoenixClient;
 pub use env::PhoenixEnv;
 pub use http_client::{PhoenixHttpClient, RateLimitRetryConfig};
 // Re-export phoenix-ix types users will need for orders
-pub use phoenix_ix::{CancelId, FifoOrderId, OrderFlags, SelfTradeBehavior, Side};
+pub use phoenix_ix::{
+    CancelId, FifoOrderId, OrderFlags, RegisterTraderParams, SelfTradeBehavior, Side,
+    TransferCollateralParams,
+};
+pub use phoenix_ix::{
+    Direction, IsolatedCollateralFlow, IsolatedLimitOrderParams, IsolatedMarketOrderParams,
+    StopLossOrderKind, StopLossParams,
+};
 /// Re-export the types crate for direct access if needed.
 pub use phoenix_types as types;
 pub use phoenix_types::conversions::*;
 // Re-export useful types from the types crate
 pub use phoenix_types::{
-    AllMidsData, ApiCandle, CandleData, CandlesQueryParams, CandlesSubscriptionRequest,
-    ClientCommand, ClientSubscriptionId, CollateralEvent, CollateralHistoryQueryParams,
-    CollateralHistoryResponse, ETERNAL_PROGRAM_ID, ExchangeMarketConfig, ExchangeView,
-    FundingHistoryEvent, FundingHistoryQueryParams, FundingHistoryResponse, FundingRateMessage,
-    L2Book, L2BookUpdate, LogicalSubscription, MarginTrigger, Market, MarketStats,
-    MarketStatsUpdate, OrderHistoryItem, OrderHistoryQueryParams, OrderHistoryResponse,
-    OrderStatus, PaginatedResponse, PhoenixClientError, PhoenixClientEvent,
-    PhoenixClientSubscriptionHandle, PhoenixHttpError, PhoenixMetadata, PhoenixSubscription,
-    PhoenixWsError, PnlPoint, PnlQueryParams, PnlResolution, Position, PriceLevel, RuntimeState,
-    ServerMessage, Spline, SubaccountState, SubscriptionKey, Timeframe, TradeEvent,
-    TradeHistoryItem, TradeHistoryQueryParams, TradeHistoryResponse, Trader, TraderKey,
-    TraderStateDelta, TraderStatePayload, TraderStateServerMessage, TraderStateSnapshot,
-    TradesMessage, TradesSubscriptionRequest,
+    AllMidsData, ApiCandle, CROSS_MARGIN_SUBACCOUNT_IDX, CandleData, CandlesQueryParams,
+    CandlesSubscriptionRequest, ClientCommand, ClientSubscriptionId, CollateralEvent,
+    CollateralHistoryQueryParams, CollateralHistoryResponse, ETERNAL_PROGRAM_ID,
+    ExchangeMarketConfig, ExchangeView, FundingHistoryEvent, FundingHistoryQueryParams,
+    FundingHistoryResponse, FundingRateMessage, L2Book, L2BookUpdate, LogicalSubscription,
+    MarginTrigger, Market, MarketStats, MarketStatsUpdate, OrderHistoryItem,
+    OrderHistoryQueryParams, OrderHistoryResponse, OrderStatus, PaginatedResponse,
+    PhoenixClientError, PhoenixClientEvent, PhoenixClientSubscriptionHandle, PhoenixHttpError,
+    PhoenixMetadata, PhoenixSubscription, PhoenixWsError, PlaceIsolatedLimitOrderRequest,
+    PlaceIsolatedMarketOrderRequest, PnlPoint, PnlQueryParams, PnlResolution, Position, PriceLevel,
+    RuntimeState, ServerMessage, Spline, SubaccountState, SubscriptionKey, Timeframe,
+    TpSlOrderConfig, TradeEvent, TradeHistoryItem, TradeHistoryQueryParams, TradeHistoryResponse,
+    Trader, TraderKey, TraderStateDelta, TraderStatePayload, TraderStateServerMessage,
+    TraderStateSnapshot, TradesMessage, TradesSubscriptionRequest,
 };
 pub use rust_decimal::Decimal;
-pub use tx_builder::{PhoenixTxBuilder, PhoenixTxBuilderError};
+pub use tx_builder::{BracketLegOrders, PhoenixTxBuilder, PhoenixTxBuilderError};
 pub use ws_client::{PhoenixWSClient, SubscriptionHandle, WsConnectionStatus};

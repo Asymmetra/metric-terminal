@@ -299,7 +299,10 @@ mod tests {
             .trader_phoenix_account(Pubkey::new_unique())
             .build();
 
-        assert!(matches!(result, Err(PhoenixIxError::MissingField("amount"))));
+        assert!(matches!(
+            result,
+            Err(PhoenixIxError::MissingField("amount"))
+        ));
     }
 
     #[test]
@@ -315,10 +318,7 @@ mod tests {
             .amount(Some(0))
             .build();
 
-        assert!(matches!(
-            result,
-            Err(PhoenixIxError::InvalidWithdrawAmount)
-        ));
+        assert!(matches!(result, Err(PhoenixIxError::InvalidWithdrawAmount)));
     }
 
     #[test]

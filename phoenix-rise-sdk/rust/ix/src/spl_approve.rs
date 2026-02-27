@@ -173,7 +173,10 @@ mod tests {
             .amount(100)
             .build();
 
-        assert!(matches!(result, Err(PhoenixIxError::MissingField("source"))));
+        assert!(matches!(
+            result,
+            Err(PhoenixIxError::MissingField("source"))
+        ));
     }
 
     #[test]

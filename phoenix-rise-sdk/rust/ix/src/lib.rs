@@ -36,7 +36,11 @@ mod error;
 mod limit_order;
 mod market_order;
 mod order_packet;
+mod register_trader;
 mod spl_approve;
+mod stop_loss;
+mod sync_parent_to_child;
+mod transfer_collateral;
 mod types;
 mod withdraw_funds;
 
@@ -47,9 +51,21 @@ pub use deposit_funds::{DepositFundsParams, create_deposit_funds_ix};
 pub use ember_deposit::{EmberDepositParams, create_ember_deposit_ix};
 pub use ember_withdraw::{EmberWithdrawParams, create_ember_withdraw_ix};
 pub use error::PhoenixIxError;
-pub use limit_order::{LimitOrderParams, LimitOrderParamsBuilder, create_place_limit_order_ix};
-pub use market_order::{MarketOrderParams, create_place_market_order_ix};
+pub use limit_order::{
+    IsolatedLimitOrderParams, LimitOrderParams, LimitOrderParamsBuilder,
+    create_place_limit_order_ix,
+};
+pub use market_order::{
+    IsolatedMarketOrderParams, MarketOrderParams, create_place_market_order_ix,
+};
 pub use order_packet::{OrderPacket, client_order_id_to_bytes};
+pub use register_trader::{RegisterTraderParams, create_register_trader_ix};
 pub use spl_approve::{SplApproveParams, create_spl_approve_ix};
+pub use stop_loss::{StopLossParams, StopLossParamsBuilder, create_place_stop_loss_ix};
+pub use sync_parent_to_child::{SyncParentToChildParams, create_sync_parent_to_child_ix};
+pub use transfer_collateral::{
+    TransferCollateralChildToParentParams, TransferCollateralParams,
+    create_transfer_collateral_child_to_parent_ix, create_transfer_collateral_ix,
+};
 pub use types::*;
 pub use withdraw_funds::{WithdrawFundsParams, create_withdraw_funds_ix};
