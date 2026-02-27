@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useMarketStore } from "@/stores/marketStore";
 import { useOrderbookStore } from "@/stores/orderbookStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
-import { useToastStore } from "@/stores/toastStore";
 import { formatUsd, formatPrice } from "@/lib/format";
 import { DepositWithdraw } from "./DepositWithdraw";
 import clsx from "clsx";
@@ -19,11 +18,11 @@ export function OrderEntry() {
   const [leverage, setLeverage] = useState(1);
   const [txPhase, setTxPhase] = useState<"idle" | "building" | "simulating" | "signing" | "submitting">("idle");
   const [showDeposit, setShowDeposit] = useState(false);
+  const submittingRef = useRef(false);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const marketConfig = useMarketStore((s) => s.marketConfig);
   const markPrice = useStatsStore((s) => s.stats?.mark_price);
   const { submitOrder, connected } = useTransactionBuilder();
-  const addToast = useToastStore((s) => s.addToast);
 
   // Listen for orderbook click-to-fill
   const fillPrice = useOrderbookStore((s) => s.fillPrice);
@@ -60,6 +59,7 @@ export function OrderEntry() {
   }, [size, markPrice, leverage]);
 
   const handleSubmit = async () => {
+    if (submittingRef.current) return;
     if (!connected || !size) return;
     // Guard against empty price on limit orders
     if (orderType === "limit" && (!price || parseFloat(price) <= 0)) return;
@@ -67,6 +67,7 @@ export function OrderEntry() {
     if (isNaN(baseSize) || baseSize <= 0) return;
     const sizeLots = Math.round(baseSize / lotSize);
     if (sizeLots <= 0) return;
+    submittingRef.current = true;
     setTxPhase("building");
     try {
       const params: any = {
@@ -78,13 +79,12 @@ export function OrderEntry() {
         params.price = parseFloat(price);
       }
       await submitOrder(orderType, params, (status) => setTxPhase(status));
-      addToast("success", `${side.toUpperCase()} ${orderType} order submitted`);
       setSize("");
     } catch (e: any) {
       console.error("Order failed:", e);
-      addToast("error", e?.message || "Order failed");
     } finally {
       setTxPhase("idle");
+      submittingRef.current = false;
     }
   };
 

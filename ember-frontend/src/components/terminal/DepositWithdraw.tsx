@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { useTraderStore } from "@/stores/traderStore";
-import { useToastStore } from "@/stores/toastStore";
 import { formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -21,7 +20,6 @@ export function DepositWithdraw({ onClose }: Props) {
   const [success, setSuccess] = useState<string | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const { deposit, withdraw, connected } = useTransactionBuilder();
-  const addToast = useToastStore((s) => s.addToast);
   const collateral = useTraderStore((s) => s.collateral);
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
 
@@ -52,16 +50,13 @@ export function DepositWithdraw({ onClose }: Props) {
       if (mode === "deposit") {
         await deposit(parsed);
         setSuccess(`Deposited ${formatUsd(parsed)} USDC`);
-        addToast("success", `Deposited ${formatUsd(parsed)} USDC`);
       } else {
         await withdraw(parsed);
         setSuccess(`Withdrew ${formatUsd(parsed)} USDC`);
-        addToast("success", `Withdrew ${formatUsd(parsed)} USDC`);
       }
       setAmount("");
     } catch (e: any) {
       setError(e?.message || "Transaction failed");
-      addToast("error", e?.message || "Transaction failed");
     } finally {
       setLoading(false);
     }

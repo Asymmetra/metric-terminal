@@ -3,12 +3,21 @@
 import { useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { api } from "@/lib/api";
-import { deserializeInstructions, buildAndSignTransaction, TxStatus } from "@/lib/solana";
+import { deserializeInstructions, buildAndSignTransaction, TxStatus, TxResult } from "@/lib/solana";
 import { useTraderStore } from "@/stores/traderStore";
+import { useToastStore } from "@/stores/toastStore";
+
+const STATUS_LABELS: Record<TxStatus, string> = {
+  simulating: "Simulating transaction...",
+  signing: "Waiting for wallet signature...",
+  submitting: "Submitting to Solana...",
+};
 
 export function useTransactionBuilder() {
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
+  const addToast = useToastStore((s) => s.addToast);
+  const updateToast = useToastStore((s) => s.updateToast);
 
   // Refresh trader data from REST after a confirmed transaction
   const refreshTraderData = useCallback(async () => {
@@ -27,66 +36,141 @@ export function useTransactionBuilder() {
   }, [publicKey]);
 
   const submitOrder = useCallback(
-    async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void) => {
+    async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const builder = type === "market" ? api.buildMarketOrder : api.buildLimitOrder;
-      const response = await builder({ ...params, authority: publicKey.toBase58() });
-      const instructions = deserializeInstructions(response.instructions);
-      const txid = await buildAndSignTransaction(instructions, publicKey, signTransaction, connection, onStatus);
-      await refreshTraderData();
-      return txid;
+      const toastId = addToast("loading", "Building transaction...");
+
+      try {
+        const builder = type === "market" ? api.buildMarketOrder : api.buildLimitOrder;
+        const response = await builder({ ...params, authority: publicKey.toBase58() });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => {
+            onStatus?.(status);
+            updateToast(toastId, { message: STATUS_LABELS[status] });
+          }
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Transaction confirmed" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Transaction sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Transaction failed" });
+        throw e;
+      }
     },
-    [publicKey, signTransaction, connection, refreshTraderData]
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const cancelOrders = useCallback(
-    async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]) => {
+    async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const response = await api.buildCancelOrders({
-        authority: publicKey.toBase58(),
-        symbol,
-        order_ids: orderIds,
-      });
-      const instructions = deserializeInstructions(response.instructions);
-      const txid = await buildAndSignTransaction(instructions, publicKey, signTransaction, connection);
-      await refreshTraderData();
-      return txid;
+      const toastId = addToast("loading", "Building cancel transaction...");
+
+      try {
+        const response = await api.buildCancelOrders({
+          authority: publicKey.toBase58(),
+          symbol,
+          order_ids: orderIds,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Order cancelled" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Cancel sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Cancel failed" });
+        throw e;
+      }
     },
-    [publicKey, signTransaction, connection, refreshTraderData]
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const deposit = useCallback(
-    async (amountUsdc: number) => {
+    async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const response = await api.buildDeposit({
-        authority: publicKey.toBase58(),
-        amount_usdc: amountUsdc,
-      });
-      const instructions = deserializeInstructions(response.instructions);
-      const txid = await buildAndSignTransaction(instructions, publicKey, signTransaction, connection);
-      await refreshTraderData();
-      return txid;
+      const toastId = addToast("loading", "Building deposit transaction...");
+
+      try {
+        const response = await api.buildDeposit({
+          authority: publicKey.toBase58(),
+          amount_usdc: amountUsdc,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Deposit confirmed" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Deposit sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Deposit failed" });
+        throw e;
+      }
     },
-    [publicKey, signTransaction, connection, refreshTraderData]
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const withdraw = useCallback(
-    async (amountUsdc: number) => {
+    async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const response = await api.buildWithdraw({
-        authority: publicKey.toBase58(),
-        amount_usdc: amountUsdc,
-      });
-      const instructions = deserializeInstructions(response.instructions);
-      const txid = await buildAndSignTransaction(instructions, publicKey, signTransaction, connection);
-      await refreshTraderData();
-      return txid;
+      const toastId = addToast("loading", "Building withdraw transaction...");
+
+      try {
+        const response = await api.buildWithdraw({
+          authority: publicKey.toBase58(),
+          amount_usdc: amountUsdc,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, signTransaction, connection,
+          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", message: "Withdrawal confirmed" });
+        } else {
+          updateToast(toastId, { type: "info", message: "Withdrawal sent — awaiting confirmation" });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", message: e?.message || "Withdrawal failed" });
+        throw e;
+      }
     },
-    [publicKey, signTransaction, connection, refreshTraderData]
+    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   return { submitOrder, cancelOrders, deposit, withdraw, connected: !!publicKey };

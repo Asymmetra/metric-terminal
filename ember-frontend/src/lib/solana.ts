@@ -16,7 +16,13 @@ interface SerializedInstruction {
 export function deserializeInstructions(
   serialized: SerializedInstruction[]
 ): TransactionInstruction[] {
-  return serialized.map((ix) => {
+  if (!Array.isArray(serialized) || serialized.length === 0) {
+    throw new Error("Backend returned no instructions");
+  }
+  return serialized.map((ix, i) => {
+    if (!ix.programId || !ix.accounts || !ix.data) {
+      throw new Error(`Instruction ${i} missing required fields`);
+    }
     return new TransactionInstruction({
       programId: new PublicKey(ix.programId),
       keys: ix.accounts.map((a) => ({
@@ -31,13 +37,18 @@ export function deserializeInstructions(
 
 export type TxStatus = "simulating" | "signing" | "submitting";
 
+export interface TxResult {
+  txid: string;
+  confirmed: boolean;
+}
+
 export async function buildAndSignTransaction(
   instructions: TransactionInstruction[],
   payer: PublicKey,
   signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>,
   connection: Connection,
   onStatus?: (status: TxStatus) => void
-): Promise<string> {
+): Promise<TxResult> {
   let blockhash: string;
   let lastValidBlockHeight: number;
   try {
@@ -77,18 +88,22 @@ export async function buildAndSignTransaction(
   const signed = await signTransaction(transaction);
 
   onStatus?.("submitting");
-  const txid = await connection.sendTransaction(signed);
+  // skipPreflight: true — Phantom injects Lighthouse assertions during signing
+  // that cause preflight simulation to fail on the RPC node
+  const txid = await connection.sendTransaction(signed, { skipPreflight: true });
 
-  // Wait for on-chain confirmation before returning
+  // Wait for on-chain confirmation
+  let confirmed = false;
   try {
     await connection.confirmTransaction(
       { signature: txid, blockhash, lastValidBlockHeight },
       "confirmed"
     );
+    confirmed = true;
   } catch {
-    // Don't throw — tx was sent and may still land on-chain
+    // TX was already sent — it may still land on-chain
     console.warn("[solana] confirmTransaction timed out for", txid);
   }
 
-  return txid;
+  return { txid, confirmed };
 }

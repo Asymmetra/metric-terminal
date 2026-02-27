@@ -4,6 +4,14 @@ import { useToastStore, Toast } from "@/stores/toastStore";
 import clsx from "clsx";
 
 function ToastIcon({ type }: { type: Toast["type"] }) {
+  if (type === "loading") {
+    return (
+      <svg className="h-3.5 w-3.5 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="8" cy="8" r="6" strokeOpacity="0.3" />
+        <path d="M8 2a6 6 0 014.9 9.4" />
+      </svg>
+    );
+  }
   if (type === "success") {
     return (
       <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -37,7 +45,8 @@ function ToastItem({ toast }: { toast: Toast }) {
         "shadow-[0_4px_24px_rgba(0,0,0,0.4)]",
         toast.type === "success" && "border-ember-green/20 border-l-ember-green bg-ember-green/[0.08] text-ember-green",
         toast.type === "error" && "border-ember-red/20 border-l-ember-red bg-ember-red/[0.08] text-ember-red",
-        toast.type === "info" && "border-ember-border border-l-ember-orange bg-surface-l2 text-text-secondary"
+        toast.type === "info" && "border-ember-border border-l-ember-orange bg-surface-l2 text-text-secondary",
+        toast.type === "loading" && "border-ember-border border-l-ember-orange bg-surface-l2 text-ember-orange"
       )}
     >
       <ToastIcon type={toast.type} />
