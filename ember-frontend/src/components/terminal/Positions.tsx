@@ -228,11 +228,12 @@ export function Positions() {
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map((pos, i) => {
+                  {positions.map((pos) => {
                     const isLong = pos.side.toLowerCase() === "long";
+                    const posKey = `${pos.symbol}-${pos.subaccount_index}`;
                     return (
                       <tr
-                        key={i}
+                        key={posKey}
                         className="font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
                         style={{ height: "28px" }}
                       >
@@ -379,9 +380,9 @@ export function Positions() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tradeHistory.map((trade, i) => (
+                  {tradeHistory.map((trade) => (
                     <tr
-                      key={i}
+                      key={`${trade.transactionSignature}-${trade.timestamp}`}
                       className="font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
                       style={{ height: "28px" }}
                     >
