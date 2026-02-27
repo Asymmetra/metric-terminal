@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useTraderStore } from "@/stores/traderStore";
 import { useMarketStore } from "@/stores/marketStore";
+import { useStatsStore } from "@/stores/statsStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
@@ -26,11 +27,21 @@ export function Positions() {
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryItem[]>([]);
   const [loadingTrades, setLoadingTrades] = useState(false);
 
-  const positions = useTraderStore((s) => s.positions);
+  const rawPositions = useTraderStore((s) => s.positions);
   const limitOrders = useTraderStore((s) => s.limitOrders);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
+  const markPrice = useStatsStore((s) => s.stats?.mark_price ?? 0);
   const { submitOrder, cancelOrders, connected } = useTransactionBuilder();
   const { publicKey } = useWallet();
+
+  // Inject live mark_price from statsStore into positions (fixes stale mark_price bug)
+  const positions = useMemo(() =>
+    rawPositions.map((pos) => ({
+      ...pos,
+      mark_price: pos.symbol === selectedSymbol ? markPrice : pos.mark_price,
+    })),
+    [rawPositions, selectedSymbol, markPrice]
+  );
 
   // Flatten limitOrders map into a displayable list with symbol attached
   const allOrders = useMemo(() => {

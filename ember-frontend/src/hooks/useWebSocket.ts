@@ -13,9 +13,14 @@ export function useWebSocket() {
   const setMarketConfig = useMarketStore((s) => s.setMarketConfig);
   const setOrderbook = useOrderbookStore((s) => s.setOrderbook);
   const addTrades = useTradeStore((s) => s.addTrades);
+  const setTrades = useTradeStore((s) => s.setTrades);
   const setStats = useStatsStore((s) => s.setStats);
 
   useEffect(() => {
+    // Clear stale data from previous market
+    setTrades([]);
+    setStats(null);
+
     wsClient.connect();
 
     // Fetch market config (maxLeverage, baseLotsDecimals, tickSize)
@@ -71,5 +76,5 @@ export function useWebSocket() {
       unsubTrades();
       unsubStats();
     };
-  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, setStats]);
+  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, setTrades, setStats]);
 }

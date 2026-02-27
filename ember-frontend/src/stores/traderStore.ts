@@ -11,23 +11,18 @@ function sdkNum(val: any): number {
 }
 
 // Transform SDK position (camelCase + Decimal objects) → display-ready TraderPosition
+// NOTE: mark_price is NOT set here — it's computed reactively in Positions component
+// from statsStore to avoid stale data between account refreshes
 function transformPosition(sdkPos: any): TraderPosition {
   const rawSize = sdkNum(sdkPos.positionSize);
   const side = rawSize >= 0 ? "Long" : "Short";
-
-  // Import mark_price from stats store at call time (avoid circular dep)
-  let markPrice = 0;
-  try {
-    const { useStatsStore } = require("@/stores/statsStore");
-    markPrice = useStatsStore.getState().stats?.mark_price ?? 0;
-  } catch { /* statsStore not available */ }
 
   return {
     symbol: sdkPos.marketSymbol || sdkPos.symbol || "",
     side,
     size: Math.abs(rawSize),
     entry_price: sdkNum(sdkPos.entryPrice),
-    mark_price: markPrice,
+    mark_price: 0,
     unrealized_pnl: sdkNum(sdkPos.unrealizedPnl),
     discounted_unrealized_pnl: sdkNum(sdkPos.discountedUnrealizedPnl),
   };
