@@ -167,14 +167,28 @@ fn validate_subaccount_index(index: u8) -> Result<(), AppError> {
 fn build_bracket(
     stop_loss_price: Option<f64>,
     take_profit_price: Option<f64>,
-) -> Option<BracketLegOrders> {
+) -> Result<Option<BracketLegOrders>, AppError> {
+    if let Some(p) = stop_loss_price {
+        if p <= 0.0 || !p.is_finite() {
+            return Err(AppError::BadRequest(
+                "stop_loss_price must be a positive finite number".to_string(),
+            ));
+        }
+    }
+    if let Some(p) = take_profit_price {
+        if p <= 0.0 || !p.is_finite() {
+            return Err(AppError::BadRequest(
+                "take_profit_price must be a positive finite number".to_string(),
+            ));
+        }
+    }
     if stop_loss_price.is_some() || take_profit_price.is_some() {
-        Some(BracketLegOrders {
+        Ok(Some(BracketLegOrders {
             stop_loss_price,
             take_profit_price,
-        })
+        }))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -213,7 +227,7 @@ async fn market_order(
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
-    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price);
+    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
 
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
@@ -381,7 +395,7 @@ async fn isolated_market_order(
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let collateral = build_collateral(req.collateral_usdc)?;
-    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price);
+    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
     let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
     let instructions = state
@@ -468,6 +482,19 @@ async fn transfer_collateral(
     );
 
     let authority = parse_authority(&req.authority)?;
+
+    // Validate subaccount indices (0 = cross-margin, 1-100 = isolated)
+    if req.from_subaccount_index > 100 || req.to_subaccount_index > 100 {
+        return Err(AppError::BadRequest(
+            "subaccount indices must be between 0 and 100".to_string(),
+        ));
+    }
+    if req.from_subaccount_index == req.to_subaccount_index {
+        return Err(AppError::BadRequest(
+            "from and to subaccount indices must be different".to_string(),
+        ));
+    }
+
     let src_pda = TraderKey::derive_pda(&authority, 0, req.from_subaccount_index);
     let dst_pda = TraderKey::derive_pda(&authority, 0, req.to_subaccount_index);
 
