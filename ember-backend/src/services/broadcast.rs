@@ -56,4 +56,10 @@ impl BroadcastHub {
             let _ = tx.send(msg);
         }
     }
+
+    /// Remove a dynamically-created channel (e.g. trader_margin:<pubkey>).
+    /// Prevents unbounded DashMap growth from one-off trader subscriptions.
+    pub fn remove_channel(&self, key: &str) {
+        self.channels.remove(key);
+    }
 }

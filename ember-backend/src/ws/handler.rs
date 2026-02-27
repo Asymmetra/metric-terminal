@@ -3,7 +3,9 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use futures::stream::StreamExt;
 use futures::SinkExt;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 use crate::state::AppState;
 use crate::ws::messages::{ClientMessage, ServerMessage};
@@ -18,6 +20,10 @@ pub async fn ws_upgrade(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ServerMessage>();
+
+    // BE-BUG-2 FIX: Track forwarder tasks so we can abort them on
+    // unsubscribe or disconnect.
+    let mut forwarders: HashMap<String, JoinHandle<()>> = HashMap::new();
 
     // Forward messages from mpsc channel to WebSocket
     let send_task = tokio::spawn(async move {
@@ -52,6 +58,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     symbol.as_deref().unwrap_or("*")
                                 )
                             };
+
+                            // Skip duplicate subscriptions from the same client
+                            if forwarders.contains_key(&key) {
+                                tracing::debug!("Already subscribed to {}, skipping", key);
+                                continue;
+                            }
+
                             tracing::info!("Client subscribing to {}", key);
 
                             if channel == "trader_margin" {
@@ -60,44 +73,69 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 let tx_clone = tx.clone();
                                 let mut sub_rx = broadcast_rx;
 
-                                // Start trader relay via SDK if needed
+                                // BE-BUG-1 FIX: Only start relay if not already running.
                                 if let Some(pubkey) = authority {
                                     let relay_ws = state.ws_client.clone();
                                     let relay_bcast = state.broadcast.clone();
+                                    let relay_active = state.active_trader_relays.clone();
                                     let relay_pubkey = pubkey.clone();
                                     tokio::spawn(async move {
                                         crate::ws::relay::start_trader_relay(
                                             relay_ws,
                                             relay_bcast,
+                                            relay_active,
                                             relay_pubkey,
                                         )
                                         .await;
                                     });
                                 }
 
-                                tokio::spawn(async move {
+                                let handle = tokio::spawn(async move {
                                     while let Ok(msg) = sub_rx.recv().await {
                                         if tx_clone.send(msg).is_err() {
                                             break;
                                         }
                                     }
                                 });
+                                forwarders.insert(key, handle);
                             } else if let Some(broadcast_rx) =
                                 state.broadcast.subscribe(&key)
                             {
                                 let tx_clone = tx.clone();
                                 let mut sub_rx = broadcast_rx;
-                                tokio::spawn(async move {
+                                let handle = tokio::spawn(async move {
                                     while let Ok(msg) = sub_rx.recv().await {
                                         if tx_clone.send(msg).is_err() {
                                             break;
                                         }
                                     }
                                 });
+                                forwarders.insert(key, handle);
                             }
                         }
-                        ClientMessage::Unsubscribe { .. } => {
-                            // Subscriptions are cleaned up when client disconnects
+                        // BE-BUG-2 FIX: Actually unsubscribe by aborting
+                        // the forwarder task (which drops the broadcast
+                        // receiver, decrementing subscriber count).
+                        ClientMessage::Unsubscribe {
+                            channel,
+                            symbol,
+                            authority,
+                        } => {
+                            let key = if channel == "trader_margin" {
+                                let pubkey = authority.as_deref().unwrap_or("unknown");
+                                format!("trader_margin:{}", pubkey)
+                            } else {
+                                format!(
+                                    "{}:{}",
+                                    channel,
+                                    symbol.as_deref().unwrap_or("*")
+                                )
+                            };
+
+                            if let Some(handle) = forwarders.remove(&key) {
+                                handle.abort();
+                                tracing::info!("Client unsubscribed from {}", key);
+                            }
                         }
                     }
                 }
@@ -105,6 +143,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             Message::Close(_) => break,
             _ => {}
         }
+    }
+
+    // BE-BUG-2 FIX: Abort all remaining forwarders on disconnect.
+    // This drops broadcast receivers, which decrements subscriber counts
+    // and allows trader relays to detect zero subscribers and shut down.
+    for (key, handle) in forwarders.drain() {
+        handle.abort();
+        tracing::debug!("Cleaned up forwarder for {} on disconnect", key);
     }
 
     send_task.abort();
