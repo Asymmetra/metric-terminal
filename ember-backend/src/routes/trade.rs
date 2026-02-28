@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixTxBuilder, Side, TraderKey};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de};
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -36,9 +36,31 @@ pub struct LimitOrderRequest {
     pub size_lots: u64,
 }
 
+/// Deserialize a u64 that may arrive as a JSON number or a JSON string.
+/// This is needed because JavaScript cannot represent u64 values precisely
+/// (Number.MAX_SAFE_INTEGER = 2^53 - 1), so Phoenix SDK and frontends
+/// may serialize these fields as strings.
+fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrU64 {
+        Num(u64),
+        Str(String),
+    }
+    match StringOrU64::deserialize(deserializer)? {
+        StringOrU64::Num(n) => Ok(n),
+        StringOrU64::Str(s) => s.parse().map_err(de::Error::custom),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct CancelOrderId {
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub price_in_ticks: u64,
+    #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub order_sequence_number: u64,
 }
 
