@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
+use phoenix_math_utils::WrapperNum;
 use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixTxBuilder, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
 use solana_pubkey::Pubkey;
@@ -58,8 +59,9 @@ where
 
 #[derive(Deserialize)]
 pub struct CancelOrderId {
-    #[serde(deserialize_with = "deserialize_u64_or_string")]
-    pub price_in_ticks: u64,
+    /// USD price of the order (e.g. 50.0 for $50). Converted to on-chain
+    /// ticks via the market calculator's price_to_ticks().
+    pub price: f64,
     #[serde(deserialize_with = "deserialize_u64_or_string")]
     pub order_sequence_number: u64,
 }
@@ -339,13 +341,24 @@ async fn cancel_orders(
     let authority = parse_authority(&req.authority)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
 
+    let metadata = state.metadata.read().await;
+
+    let calc = metadata
+        .get_market_calculator(&req.symbol)
+        .ok_or_else(|| AppError::MarketNotFound(req.symbol.clone()))?;
+
     let order_ids: Vec<CancelId> = req
         .order_ids
         .iter()
-        .map(|id| CancelId::new(id.price_in_ticks, id.order_sequence_number))
-        .collect();
+        .map(|id| {
+            let price_in_ticks = calc
+                .price_to_ticks(id.price)
+                .map_err(|e| AppError::BadRequest(format!("Invalid price {}: {}", id.price, e)))?
+                .as_inner();
+            Ok(CancelId::new(price_in_ticks, id.order_sequence_number))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
 
-    let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder

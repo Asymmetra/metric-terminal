@@ -182,7 +182,7 @@ async function testPostTxBuild(authority) {
 
   // Cancel (with dummy order IDs — tests instruction build only)
   const co = await api("POST", "/api/tx/cancel-orders", {
-    authority, symbol: MARKET_SYMBOL, order_ids: [{ price_in_ticks: 1, order_sequence_number: 1 }],
+    authority, symbol: MARKET_SYMBOL, order_ids: [{ price: 50.0, order_sequence_number: 1 }],
   });
   record("POST /api/tx/cancel-orders (build)", co.ok ? "PASS" : "FAIL", null,
     `HTTP ${co.status} | ${co.ok ? co.json.instructions.length + " instructions" : co.text.substring(0, 100)}`);
@@ -392,34 +392,31 @@ async function testFullTxFlow(connection, kp, authority) {
   if (limitOrderPlaced) {
     log("Step 5: Cancel limit order...");
     try {
-      // Try to get orders from trader endpoint
-      const orders = await api("GET", `/api/trader/${authority}/orders`);
-      if (orders.ok && orders.json?.orders?.length > 0) {
-        // Find our limit order
-        const order = orders.json.orders[0]; // Most recent
-        // Values may be strings (Phoenix SDK serializes u64 as strings for JS safety)
-        const pit = order.price_in_ticks ?? order.priceInTicks ?? 1;
-        const osn = order.order_sequence_number ?? order.orderSequenceNumber ?? 1;
+      // Fetch trader state to get limit order details
+      const traderState = await api("GET", `/api/trader/${authority}`);
+      const limitOrders = traderState.json?.accounts?.[0]?.limitOrders?.[MARKET_SYMBOL];
+      if (traderState.ok && limitOrders?.length > 0) {
+        const order = limitOrders[0];
+        // Extract USD price and order sequence number
+        const usdPrice = parseFloat(order.price?.ui ?? LIMIT_PRICE);
+        const osn = order.orderSequenceNumber ?? order.order_sequence_number ?? "1";
         const cancelReq = {
           authority,
           symbol: MARKET_SYMBOL,
           order_ids: [{
-            price_in_ticks: typeof pit === "string" ? pit : String(pit),
-            order_sequence_number: typeof osn === "string" ? osn : String(osn),
+            price: usdPrice,
+            order_sequence_number: String(osn),
           }],
         };
-        log(`Cancel request: price_in_ticks=${cancelReq.order_ids[0].price_in_ticks}, osn=${cancelReq.order_ids[0].order_sequence_number}`);
+        log(`Cancel request: price=${usdPrice}, osn=${osn}`);
         const co = await api("POST", "/api/tx/cancel-orders", cancelReq);
         if (!co.ok) throw new Error(`Backend returned ${co.status}: ${co.text}`);
         const ixs = deserializeInstructions(co.json.instructions);
         const sig = await buildSignSubmit(connection, kp, ixs);
         record("TX: Cancel limit order", "PASS", sig, "Order cancelled");
       } else {
-        // Fallback: use cancel-all approach — build with dummy IDs
-        // The SDK's cancel_orders with any IDs will attempt to cancel.
-        // If trader endpoint is down, we report it.
         record("TX: Cancel limit order", "SKIP", null,
-          `Trader endpoint returned ${orders.status} — cannot fetch order IDs for cancel`);
+          `No limit orders found in trader state for ${MARKET_SYMBOL}`);
       }
     } catch (err) {
       record("TX: Cancel limit order", "FAIL", null, err.message.substring(0, 200));

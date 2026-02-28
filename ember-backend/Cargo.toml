@@ -8,6 +8,7 @@ edition = "2021"
 phoenix-sdk = { path = "../phoenix-rise-sdk/rust/sdk" }
 phoenix-types = { path = "../phoenix-rise-sdk/rust/types" }
 phoenix-ix = { path = "../phoenix-rise-sdk/rust/ix" }
+phoenix-math-utils = { path = "../phoenix-rise-sdk/rust/math" }
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
