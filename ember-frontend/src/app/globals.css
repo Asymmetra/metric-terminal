@@ -70,6 +70,19 @@ body {
   animation: trade-slide-in 200ms ease-out;
 }
 
+/* ── Access Gate Shake ── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 400ms ease-out;
+}
+
 /* ── Solana Wallet Adapter Modal Overrides ── */
 .wallet-adapter-modal-wrapper {
   background-color: rgba(0, 0, 0, 0.7) !important;
