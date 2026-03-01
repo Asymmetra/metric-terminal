@@ -288,9 +288,8 @@ export function MarketHeader() {
       {(
         [
           { href: "/terminal", label: "Terminal" },
-          { href: "/analytics", label: "Analytics" },
+          { href: "/analytics", label: "Profile" },
           { href: "/leaderboard", label: "Leaderboard" },
-          { href: "/accounts", label: "Accounts" },
         ] as const
       ).map(({ href, label }) => (
         <Link
