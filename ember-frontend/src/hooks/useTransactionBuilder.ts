@@ -70,9 +70,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: `${label} Confirmed` });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -105,9 +105,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Order Cancelled" });
+          updateToast(toastId, { type: "success", title: "Order Cancelled", txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out before landing. Your order was NOT cancelled — please try again." });
+          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out before landing. Your order was NOT cancelled — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -139,9 +139,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Deposit Confirmed" });
+          updateToast(toastId, { type: "success", title: "Deposit Confirmed", txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
+          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -173,9 +173,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Withdrawal Confirmed" });
+          updateToast(toastId, { type: "success", title: "Withdrawal Confirmed", txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
+          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -209,9 +209,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: `${label} Confirmed` });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -245,9 +245,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Transfer Confirmed" });
+          updateToast(toastId, { type: "success", title: "Transfer Confirmed", txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
+          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
         }
 
         await refreshTraderData();

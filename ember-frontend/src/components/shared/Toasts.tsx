@@ -4,6 +4,12 @@ import { useState } from "react";
 import { useToastStore, Toast } from "@/stores/toastStore";
 import clsx from "clsx";
 
+const EXPLORER_URL = "https://orbmarkets.io/tx";
+
+function getTxUrl(txid: string): string {
+  return `${EXPLORER_URL}/${txid}`;
+}
+
 function ToastIcon({ type }: { type: Toast["type"] }) {
   if (type === "loading") {
     return (
@@ -40,7 +46,10 @@ function CopyButton({ toast }: { toast: Toast }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    const text = toast.detail ? `${toast.title}: ${toast.detail}` : toast.title;
+    let text = toast.detail ? `${toast.title}: ${toast.detail}` : toast.title;
+    if (toast.txid) {
+      text += `\n${getTxUrl(toast.txid)}`;
+    }
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -66,6 +75,24 @@ function CopyButton({ toast }: { toast: Toast }) {
   );
 }
 
+function ExplorerLink({ txid }: { txid: string }) {
+  return (
+    <a
+      href={getTxUrl(txid)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="shrink-0 text-current/60 transition-colors hover:text-current"
+      title="View on explorer"
+    >
+      <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M6 3H3v10h10v-3" />
+        <path d="M9 2h5v5" />
+        <path d="M14 2L7 9" />
+      </svg>
+    </a>
+  );
+}
+
 function ToastItem({ toast }: { toast: Toast }) {
   const removeToast = useToastStore((s) => s.removeToast);
 
@@ -86,8 +113,19 @@ function ToastItem({ toast }: { toast: Toast }) {
         {toast.detail && (
           <p className="text-[10px] opacity-80 break-words mt-0.5 leading-relaxed">{toast.detail}</p>
         )}
+        {toast.txid && (
+          <a
+            href={getTxUrl(toast.txid)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 block text-[10px] opacity-70 hover:opacity-100 transition-opacity underline underline-offset-2"
+          >
+            View on Explorer
+          </a>
+        )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
+        {toast.txid && <ExplorerLink txid={toast.txid} />}
         <CopyButton toast={toast} />
         <button
           onClick={() => removeToast(toast.id)}

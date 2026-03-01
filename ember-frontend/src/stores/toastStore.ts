@@ -5,12 +5,13 @@ export interface Toast {
   type: "success" | "error" | "info" | "loading";
   title: string;
   detail?: string;
+  txid?: string;
 }
 
 interface ToastStore {
   toasts: Toast[];
   addToast: (type: Toast["type"], title: string, detail?: string) => string;
-  updateToast: (id: string, updates: Partial<Pick<Toast, "type" | "title" | "detail">>) => void;
+  updateToast: (id: string, updates: Partial<Pick<Toast, "type" | "title" | "detail" | "txid">>) => void;
   removeToast: (id: string) => void;
 }
 
