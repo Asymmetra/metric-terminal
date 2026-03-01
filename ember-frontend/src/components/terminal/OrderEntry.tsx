@@ -678,10 +678,19 @@ export function OrderEntry() {
                   {unrealizedPnl >= 0 ? "+" : ""}{formatUsd(unrealizedPnl)}
                 </span>
               </div>
-              {riskState && riskState !== "Healthy" && riskState !== "ZeroCollateralNoPositions" && (
+              {riskState && (
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Risk</span>
-                  <span className="font-mono text-[10px] text-ember-red">{riskState}</span>
+                  <span className={clsx(
+                    "font-mono text-[10px]",
+                    riskState === "Healthy" || riskState === "Active" || riskState === "ZeroCollateralNoPositions"
+                      ? "text-ember-green"
+                      : riskState === "BeingLiquidated" || riskState === "Liquidatable"
+                        ? "text-ember-red"
+                        : "text-yellow-500"
+                  )}>
+                    {riskState === "ZeroCollateralNoPositions" ? "No Positions" : riskState}
+                  </span>
                 </div>
               )}
             </div>
