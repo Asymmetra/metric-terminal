@@ -15,13 +15,17 @@ class EmberWSClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private statusListeners: Set<StatusListener> = new Set();
+  private currentStatus: "connected" | "disconnected" | "reconnecting" = "disconnected";
 
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
+    // Immediately replay current status so late subscribers get the right state
+    listener(this.currentStatus);
     return () => { this.statusListeners.delete(listener); };
   }
 
   private emitStatus(status: "connected" | "disconnected" | "reconnecting") {
+    this.currentStatus = status;
     this.statusListeners.forEach((l) => l(status));
   }
 
