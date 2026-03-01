@@ -6,8 +6,8 @@ import { useOrderbookStore } from "@/stores/orderbookStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
+import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatPrice } from "@/lib/format";
-import { DepositWithdraw } from "./DepositWithdraw";
 import { MarginMode } from "@/types/trader";
 import clsx from "clsx";
 
@@ -23,12 +23,22 @@ export function OrderEntry() {
   const [tpPrice, setTpPrice] = useState("");
   const [slPrice, setSlPrice] = useState("");
   const [txPhase, setTxPhase] = useState<"idle" | "building" | "simulating" | "signing" | "submitting">("idle");
-  const [showDeposit, setShowDeposit] = useState(false);
   const submittingRef = useRef(false);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const marketConfig = useMarketStore((s) => s.marketConfig);
   const markPrice = useStatsStore((s) => s.stats?.mark_price) ?? 0;
   const { submitOrder, submitIsolatedOrder, connected } = useTransactionBuilder();
+
+  // Consume focusSide from keyboard shortcuts
+  const focusSide = useUiStore((s) => s.focusSide);
+  const setFocusSide = useUiStore((s) => s.setFocusSide);
+
+  useEffect(() => {
+    if (focusSide) {
+      setSide(focusSide);
+      setFocusSide(null);
+    }
+  }, [focusSide, setFocusSide]);
 
   // Listen for orderbook click-to-fill
   const fillPrice = useOrderbookStore((s) => s.fillPrice);
@@ -106,8 +116,8 @@ export function OrderEntry() {
       if (orderType === "limit") {
         params.price = parseFloat(price);
       }
-      // Attach TP/SL if enabled and valid — only for market orders (backend doesn't support bracket legs on limit orders)
-      if (showTpSl && orderType === "market") {
+      // Attach TP/SL if enabled and valid
+      if (showTpSl) {
         const tp = parseFloat(tpPrice);
         const sl = parseFloat(slPrice);
         if (!isNaN(tp) && tp > 0) params.take_profit_price = tp;
@@ -305,8 +315,8 @@ export function OrderEntry() {
             </div>
           </div>
 
-          {/* TP/SL toggle + inputs — only for market orders (limit orders don't support bracket legs yet) */}
-          {orderType === "market" && <div>
+          {/* TP/SL toggle + inputs */}
+          <div>
             <button
               onClick={() => setShowTpSl(!showTpSl)}
               className="flex w-full items-center justify-between py-1"
@@ -434,7 +444,7 @@ export function OrderEntry() {
                 </div>
               </div>
             )}
-          </div>}
+          </div>
 
           {/* Order summary */}
           {orderSummary && (
@@ -566,19 +576,9 @@ export function OrderEntry() {
               )}
             </div>
 
-            {/* Deposit / Withdraw button */}
-            <button
-              onClick={() => setShowDeposit(true)}
-              className="mt-3 w-full border border-ember-border py-2 font-mono text-[10px] uppercase tracking-wider text-text-secondary transition-colors hover:border-ember-orange/40 hover:text-ember-orange"
-            >
-              Deposit / Withdraw
-            </button>
           </div>
         )}
       </div>
-
-      {/* Deposit/Withdraw modal */}
-      {showDeposit && <DepositWithdraw onClose={() => setShowDeposit(false)} />}
     </>
   );
 }

@@ -12,6 +12,8 @@ import { Positions } from "@/components/terminal/Positions";
 import { ConnectionStatus } from "@/components/shared/ConnectionStatus";
 import { Toasts } from "@/components/shared/Toasts";
 import { TradeDetailPanel } from "@/components/terminal/TradeDetailPanel";
+import { KeyboardShortcutOverlay } from "@/components/terminal/KeyboardShortcutOverlay";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 const ACCESS_KEY = "ember-access";
 const PASSCODE = "getrekt";
@@ -94,6 +96,8 @@ export default function TerminalPage() {
     return <AccessGate onUnlock={() => setAuthed(true)} />;
   }
 
+  useKeyboardShortcuts();
+
   return (
     <div className="flex h-full flex-col">
       <ConnectionStatus />
@@ -111,6 +115,7 @@ export default function TerminalPage() {
       />
       <Toasts />
       <TradeDetailPanel />
+      <KeyboardShortcutOverlay />
     </div>
   );
 }
