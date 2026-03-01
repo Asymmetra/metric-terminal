@@ -85,19 +85,25 @@ export function Orderbook() {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let debounceTimer: ReturnType<typeof setTimeout>;
 
     const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const totalHeight = entry.contentRect.height;
-        // Subtract: column headers(~24px) + spread bar(24px)
-        const available = totalHeight - 48;
-        const rowsPerSide = Math.max(1, Math.floor(available / 2 / 22));
-        setMaxRows(rowsPerSide);
-      }
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        for (const entry of entries) {
+          const totalHeight = entry.contentRect.height;
+          const available = totalHeight - 48;
+          const rowsPerSide = Math.max(1, Math.floor(available / 2 / 22));
+          setMaxRows(rowsPerSide);
+        }
+      }, 100);
     });
 
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      clearTimeout(debounceTimer);
+      observer.disconnect();
+    };
   }, []);
 
   const handleClickPrice = useCallback((price: number) => {
@@ -133,11 +139,10 @@ export function Orderbook() {
     };
   }, [bids, asks, maxRows]);
 
-  // Pad asks with empty rows to fill space (avoids blank gap at top)
   const paddedAsks = useMemo(() => {
     const padded = [...displayAsks];
     while (padded.length < maxRows) {
-      padded.unshift({ level: { price: 0, size: 0 }, cumulative: 0 });
+      padded.push({ level: { price: 0, size: 0 }, cumulative: 0 });
     }
     return padded;
   }, [displayAsks, maxRows]);
@@ -171,7 +176,7 @@ export function Orderbook() {
       </div>
 
       {/* Asks (sells) — reversed so cheapest is at bottom near spread */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col justify-end overflow-hidden">
         <div className="flex flex-col">
           {[...paddedAsks].reverse().map((item, i) =>
             item.level.price === 0 ? (
