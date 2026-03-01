@@ -70,6 +70,10 @@ export function OrderEntry() {
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const riskState = useTraderStore((s) => s.riskState);
 
+  // Free collateral = total collateral minus what's already locked by open positions.
+  // This is what's actually available for new trades on-chain.
+  const freeCollateral = Math.max(0, collateral - initialMargin);
+
   // TP/SL validation
   const tpValid = useMemo(() => {
     const tp = parseFloat(tpPrice);
@@ -143,13 +147,13 @@ export function OrderEntry() {
     if (orderType === "limit" && (!price || parseFloat(price) <= 0)) return;
     if (showTpSl && (!tpValid || !slValid)) return;
 
-    // Pre-flight margin check
-    if (collateral > 0 && derivedOrder.collateral > collateral) {
-      addToast("error", "Insufficient Margin", `Need $${derivedOrder.collateral.toFixed(2)} but only $${collateral.toFixed(2)} available. Deposit more or reduce size.`);
-      return;
-    }
+    // Pre-flight margin check — compare against FREE collateral (total minus locked)
     if (collateral <= 0) {
       addToast("error", "No Collateral", "Deposit USDC before trading.");
+      return;
+    }
+    if (derivedOrder.collateral > freeCollateral) {
+      addToast("error", "Insufficient Margin", `Need $${derivedOrder.collateral.toFixed(2)} but only $${freeCollateral.toFixed(2)} free (${formatUsd(initialMargin)} locked by open positions). Reduce size or close positions.`);
       return;
     }
 
@@ -280,8 +284,8 @@ export function OrderEntry() {
                 <button
                   key={pct}
                   onClick={() => {
-                    if (collateral > 0) {
-                      setCollateralInput(((collateral * pct) / 100).toFixed(2));
+                    if (freeCollateral > 0) {
+                      setCollateralInput(((freeCollateral * pct) / 100).toFixed(2));
                     }
                   }}
                   className="flex-1 py-1 font-mono text-[9px] text-text-secondary/60 bg-surface-l2 border border-ember-border/30 hover:text-ember-orange hover:border-ember-orange/40 transition-colors"
@@ -609,6 +613,10 @@ export function OrderEntry() {
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Collateral</span>
                 <span className="font-mono text-[11px] text-text-primary">{formatUsd(collateral)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-ember-orange/80">Available</span>
+                <span className="font-mono text-[11px] text-ember-orange">{formatUsd(freeCollateral)}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Portfolio</span>
