@@ -82,21 +82,7 @@ function AccessGate({ onUnlock }: { onUnlock: () => void }) {
   );
 }
 
-export default function TerminalPage() {
-  const [authed, setAuthed] = useState(false);
-  const [checked, setChecked] = useState(false);
-
-  useEffect(() => {
-    setAuthed(sessionStorage.getItem(ACCESS_KEY) === "1");
-    setChecked(true);
-  }, []);
-
-  if (!checked) return null;
-
-  if (!authed) {
-    return <AccessGate onUnlock={() => setAuthed(true)} />;
-  }
-
+function Terminal() {
   useKeyboardShortcuts();
 
   return (
@@ -120,4 +106,22 @@ export default function TerminalPage() {
       <KeyboardShortcutOverlay />
     </div>
   );
+}
+
+export default function TerminalPage() {
+  const [authed, setAuthed] = useState(false);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    setAuthed(sessionStorage.getItem(ACCESS_KEY) === "1");
+    setChecked(true);
+  }, []);
+
+  if (!checked) return null;
+
+  if (!authed) {
+    return <AccessGate onUnlock={() => setAuthed(true)} />;
+  }
+
+  return <Terminal />;
 }

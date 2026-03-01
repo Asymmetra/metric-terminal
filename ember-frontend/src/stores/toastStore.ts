@@ -18,7 +18,7 @@ let nextId = 0;
 
 export const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
-  addToast: (type, title, detail?) => {
+  addToast: (type, title, detail) => {
     const id = `toast-${nextId++}`;
     set((s) => ({ toasts: [...s.toasts, { id, type, title, detail }] }));
     // Auto-dismiss non-loading toasts after 5s
