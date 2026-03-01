@@ -150,7 +150,10 @@ function MobileTerminal() {
       </div>
 
       {/* Tab content area */}
-      <div className="flex-1 overflow-hidden">
+      <div className={clsx(
+        "flex-1",
+        mobileTab === "trade" ? "overflow-y-auto" : "overflow-hidden"
+      )}>
         {mobileTab === "book" && (
           <MarketDataPanel
             orderbook={<Orderbook />}
