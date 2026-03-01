@@ -6,6 +6,7 @@ import { useOrderbookStore } from "@/stores/orderbookStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
+import { useToastStore } from "@/stores/toastStore";
 import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatPrice } from "@/lib/format";
 import { MarginMode } from "@/types/trader";
@@ -28,6 +29,7 @@ export function OrderEntry() {
   const marketConfig = useMarketStore((s) => s.marketConfig);
   const markPrice = useStatsStore((s) => s.stats?.mark_price) ?? 0;
   const { submitOrder, submitIsolatedOrder, connected } = useTransactionBuilder();
+  const addToast = useToastStore((s) => s.addToast);
 
   // Consume focusSide from keyboard shortcuts
   const focusSide = useUiStore((s) => s.focusSide);
@@ -105,6 +107,17 @@ export function OrderEntry() {
     if (isNaN(baseSize) || baseSize <= 0) return;
     const sizeLots = Math.round(baseSize / lotSize);
     if (sizeLots <= 0) return;
+
+    // Pre-flight margin check — prevent TX simulation failures
+    if (orderSummary && collateral > 0 && orderSummary.requiredMargin > collateral) {
+      addToast("error", `Insufficient margin: need $${orderSummary.requiredMargin.toFixed(2)} but only $${collateral.toFixed(2)} available. Deposit more USDC or reduce size.`);
+      return;
+    }
+    if (collateral <= 0) {
+      addToast("error", "No collateral deposited. Deposit USDC before trading.");
+      return;
+    }
+
     submittingRef.current = true;
     setTxPhase("building");
     try {
