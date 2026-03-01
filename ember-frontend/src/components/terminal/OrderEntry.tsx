@@ -86,6 +86,10 @@ export function OrderEntry() {
   const lotSize = useMemo(() => 10 ** -(marketConfig?.baseLotsDecimals || 2), [marketConfig]);
   const maxLeverage = marketConfig?.maxLeverage || 10;
 
+  // 3% safety buffer: marks price can move between simulation and on-chain execution.
+  // Without buffer, a 1-2% price move causes margin check to fail with Custom:6001.
+  const POSITION_SAFETY_BUFFER = 0.97;
+
   // Derive order from collateral + leverage
   const derivedOrder = useMemo(() => {
     const col = parseFloat(collateralInput || "0");
@@ -97,7 +101,9 @@ export function OrderEntry() {
 
     const notional = col * leverage;
     const baseSize = notional / effectivePrice;
-    const sizeLots = Math.floor(baseSize / lotSize);
+    // Apply safety buffer to prevent on-chain InsufficientFunds (Custom:6001) when
+    // mark price moves between our pre-flight simulation and actual on-chain execution.
+    const sizeLots = Math.floor(baseSize * POSITION_SAFETY_BUFFER / lotSize);
     if (sizeLots <= 0) return null;
 
     // Snap to lot grid

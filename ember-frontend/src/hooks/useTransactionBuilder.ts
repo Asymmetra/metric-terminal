@@ -13,6 +13,22 @@ const STATUS_LABELS: Record<TxStatus, string> = {
   submitting: "Submitting to Solana...",
 };
 
+/**
+ * Decode opaque on-chain errors into human-readable messages.
+ * Custom:6001 = InsufficientFunds in the Phoenix Anchor program (2nd error, 0-indexed from 6000).
+ * This occurs when mark price moves between our pre-simulation and actual execution, causing
+ * the required margin to exceed available collateral.
+ */
+function decodeOrderError(raw: string): string {
+  if (raw.includes("Custom:6001") || raw.includes('"Custom":6001')) {
+    return "Insufficient margin: the mark price moved between simulation and execution, raising the margin requirement above your collateral. Try reducing leverage or depositing more USDC.";
+  }
+  if (raw.includes("InsufficientFunds")) {
+    return "Insufficient funds: deposit more USDC before trading.";
+  }
+  return raw;
+}
+
 export function useTransactionBuilder() {
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
@@ -61,7 +77,7 @@ export function useTransactionBuilder() {
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: e?.message });
+        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: decodeOrderError(e?.message ?? "") });
         throw e;
       }
     },
@@ -200,7 +216,7 @@ export function useTransactionBuilder() {
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: e?.message });
+        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: decodeOrderError(e?.message ?? "") });
         throw e;
       }
     },
