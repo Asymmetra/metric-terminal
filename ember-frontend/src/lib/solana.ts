@@ -55,80 +55,78 @@ async function getBlockhash(connection: Connection): Promise<{ blockhash: string
   }
 }
 
+const MAX_LIGHTHOUSE_RETRIES = 2;
+
 export async function buildAndSignTransaction(
   instructions: TransactionInstruction[],
   payer: PublicKey,
-  signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>,
+  sendTransaction: (tx: VersionedTransaction, connection: Connection, opts?: any) => Promise<string>,
   connection: Connection,
   onStatus?: (status: TxStatus) => void
 ): Promise<TxResult> {
-  // Step 1: Simulate with replaceRecentBlockhash so the RPC uses its own latest
-  // blockhash. This avoids wasting any of the ~150-slot validity window before
-  // the user has even seen the Phantom dialog.
-  onStatus?.("simulating");
-  const simMsg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: "11111111111111111111111111111111", // placeholder — replaced by RPC
-    instructions,
-  }).compileToV0Message();
-  const simTx = new VersionedTransaction(simMsg);
-  const simulation = await connection.simulateTransaction(simTx, {
-    sigVerify: false,
-    replaceRecentBlockhash: true,
-  });
-  if (simulation.value.err) {
-    const logs = simulation.value.logs?.join("\n") || "No logs";
-    throw new Error(
-      `Transaction simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
-    );
-  }
-
-  // Step 2: Get a FRESH blockhash right before signing so the user has the
-  // maximum possible window (~150 slots ≈ 60 s) to approve in Phantom.
-  // Previously the blockhash was fetched before simulation, eating into the
-  // validity window before the user even saw the dialog.
-  const { blockhash, lastValidBlockHeight } = await getBlockhash(connection);
-
-  const messageV0 = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions,
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(messageV0);
-
-  onStatus?.("signing");
-  const signed = await signTransaction(transaction);
-
-  onStatus?.("submitting");
-  // skipPreflight: true — Phantom injects Lighthouse assertions during signing
-  // that cause preflight simulation to fail on the RPC node.
-  // maxRetries: 5 — ask the RPC to re-broadcast if validators don't respond.
-  const txid = await connection.sendTransaction(signed, {
-    skipPreflight: true,
-    maxRetries: 5,
-  });
-
-  // Wait for on-chain confirmation and verify success
-  let confirmed = false;
-  try {
-    const confirmation = await connection.confirmTransaction(
-      { signature: txid, blockhash, lastValidBlockHeight },
-      "confirmed"
-    );
-    if (confirmation.value.err) {
+  for (let attempt = 0; attempt <= MAX_LIGHTHOUSE_RETRIES; attempt++) {
+    // Simulate with replaceRecentBlockhash so the RPC uses its own latest blockhash.
+    onStatus?.("simulating");
+    const simMsg = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: "11111111111111111111111111111111",
+      instructions,
+    }).compileToV0Message();
+    const simTx = new VersionedTransaction(simMsg);
+    const simulation = await connection.simulateTransaction(simTx, {
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+    });
+    if (simulation.value.err) {
+      const logs = simulation.value.logs?.join("\n") || "No logs";
       throw new Error(
-        `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`
+        `Transaction simulation failed: ${JSON.stringify(simulation.value.err)}\n${logs}`
       );
     }
-    confirmed = true;
-  } catch (err: any) {
-    if (err?.message?.includes("failed on-chain")) {
-      throw err; // Re-throw on-chain failures — these are real errors
+
+    // Fresh blockhash right before signing to maximize validity window.
+    const { blockhash, lastValidBlockHeight } = await getBlockhash(connection);
+    const messageV0 = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: blockhash,
+      instructions,
+    }).compileToV0Message();
+    const transaction = new VersionedTransaction(messageV0);
+
+    // Sign + send atomically via wallet adapter's sendTransaction.
+    // This uses Phantom's signAndSendTransaction internally, minimizing the gap
+    // between signing (when Lighthouse snapshots state) and on-chain inclusion.
+    onStatus?.("signing");
+    const txid = await sendTransaction(transaction, connection, {
+      skipPreflight: true,
+      maxRetries: 5,
+    });
+
+    onStatus?.("submitting");
+    try {
+      const confirmation = await connection.confirmTransaction(
+        { signature: txid, blockhash, lastValidBlockHeight },
+        "confirmed"
+      );
+      if (confirmation.value.err) {
+        const errStr = JSON.stringify(confirmation.value.err);
+        // Custom:6001 on-chain after simulation passed = Lighthouse anti-MEV rejection.
+        // Retry with fresh blockhash + fresh Lighthouse hashes.
+        if ((errStr.includes('"Custom":6001') || errStr.includes("Custom:6001")) && attempt < MAX_LIGHTHOUSE_RETRIES) {
+          console.warn(`[solana] On-chain Custom:6001 (likely Lighthouse), retrying (${attempt + 1}/${MAX_LIGHTHOUSE_RETRIES})...`);
+          continue;
+        }
+        throw new Error(`Transaction failed on-chain: ${errStr}`);
+      }
+      return { txid, confirmed: true };
+    } catch (err: any) {
+      if (err?.message?.includes("failed on-chain")) {
+        throw err;
+      }
+      console.warn("[solana] confirmTransaction timed out for", txid);
+      return { txid, confirmed: false };
     }
-    // Timeout: TX was sent but didn't confirm within the validity window.
-    // The transaction has expired — funds were NOT moved. The user should retry.
-    console.warn("[solana] confirmTransaction timed out for", txid);
   }
 
-  return { txid, confirmed };
+  throw new Error("Transaction failed after retries — exchange state kept changing during signing. Please try again.");
 }

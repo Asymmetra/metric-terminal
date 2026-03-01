@@ -10,7 +10,6 @@ import { useToastStore } from "@/stores/toastStore";
 import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatPrice } from "@/lib/format";
 import { MarginMode } from "@/types/trader";
-import { api } from "@/lib/api";
 import clsx from "clsx";
 
 export function OrderEntry() {
@@ -71,14 +70,7 @@ export function OrderEntry() {
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const riskState = useTraderStore((s) => s.riskState);
 
-  // Reserve 5% of free collateral to absorb margin drift on existing positions
-  // between REST refreshes — on-chain initialMargin changes with mark price,
-  // so the frontend's cached value can be stale.
-  const MARGIN_RESERVE = 0.95;
-
-  // Free collateral = total collateral minus what's already locked by open positions,
-  // with reserve applied so users never allocate 100% of what they see as "free."
-  const freeCollateral = Math.max(0, (collateral - initialMargin) * MARGIN_RESERVE);
+  const freeCollateral = Math.max(0, collateral - initialMargin);
 
   // TP/SL validation
   const tpValid = useMemo(() => {
@@ -96,11 +88,7 @@ export function OrderEntry() {
   const lotSize = useMemo(() => 10 ** -(marketConfig?.baseLotsDecimals || 2), [marketConfig]);
   const maxLeverage = marketConfig?.maxLeverage || 10;
 
-  // Scale safety buffer with leverage: higher leverage = larger buffer needed.
-  // At 1x: ~2% buffer, at 5x: ~5%, at 10x: ~8%.
-  // This absorbs mark-price drift between simulation and on-chain execution,
-  // preventing Custom:6001 (InsufficientFunds) at high leverage.
-  const POSITION_SAFETY_BUFFER = Math.max(0.90, 1 - 0.008 * leverage);
+  const POSITION_SAFETY_BUFFER = 0.97;
 
   // Derive order from collateral + leverage
   const derivedOrder = useMemo(() => {
@@ -113,8 +101,6 @@ export function OrderEntry() {
 
     const notional = col * leverage;
     const baseSize = notional / effectivePrice;
-    // Apply safety buffer to prevent on-chain InsufficientFunds (Custom:6001) when
-    // mark price moves between our pre-flight simulation and actual on-chain execution.
     const sizeLots = Math.floor(baseSize * POSITION_SAFETY_BUFFER / lotSize);
     if (sizeLots <= 0) return null;
 
@@ -155,31 +141,12 @@ export function OrderEntry() {
     if (orderType === "limit" && (!price || parseFloat(price) <= 0)) return;
     if (showTpSl && (!tpValid || !slValid)) return;
 
-    // Re-fetch trader state to get fresh initialMargin before pre-flight check.
-    // This mitigates stale margin data causing false "sufficient" readings.
-    const authority = useTraderStore.getState().authority;
-    if (authority) {
-      try {
-        const data = await api.getTrader(authority);
-        if (data?.accounts?.length > 0) {
-          useTraderStore.getState().setAccounts(data.accounts);
-        }
-      } catch {
-        // Non-fatal — proceed with cached values
-      }
-    }
-
-    // Pre-flight margin check — compare against FREE collateral (total minus locked)
-    const latestCollateral = useTraderStore.getState().collateral;
-    const latestInitialMargin = useTraderStore.getState().initialMargin;
-    const latestFreeCol = Math.max(0, (latestCollateral - latestInitialMargin) * MARGIN_RESERVE);
-
-    if (latestCollateral <= 0) {
+    if (collateral <= 0) {
       addToast("error", "No Collateral", "Deposit USDC before trading.");
       return;
     }
-    if (derivedOrder.collateral > latestFreeCol) {
-      addToast("error", "Insufficient Margin", `Need $${derivedOrder.collateral.toFixed(2)} but only $${latestFreeCol.toFixed(2)} free (${formatUsd(latestInitialMargin)} locked by open positions). Reduce size or close positions.`);
+    if (derivedOrder.collateral > freeCollateral) {
+      addToast("error", "Insufficient Margin", `Need $${derivedOrder.collateral.toFixed(2)} but only $${freeCollateral.toFixed(2)} free (${formatUsd(initialMargin)} locked by open positions). Reduce size or close positions.`);
       return;
     }
 

@@ -13,15 +13,16 @@ const STATUS_LABELS: Record<TxStatus, string> = {
   submitting: "Submitting to Solana...",
 };
 
-/**
- * Decode opaque on-chain errors into human-readable messages.
- * Custom:6001 = InsufficientFunds in the Phoenix Anchor program (2nd error, 0-indexed from 6000).
- * This occurs when mark price moves between our pre-simulation and actual execution, causing
- * the required margin to exceed available collateral.
- */
 function decodeOrderError(raw: string): string {
-  if (raw.includes("Custom:6001") || raw.includes('"Custom":6001')) {
-    return "Insufficient margin: the mark price moved between simulation and execution, raising the margin requirement above your collateral. Try reducing leverage or depositing more USDC.";
+  const is6001 = raw.includes("Custom:6001") || raw.includes('"Custom":6001');
+  if (is6001 && raw.includes("simulation failed")) {
+    return "Insufficient margin for this position size. Reduce size or add collateral.";
+  }
+  if (is6001 && raw.includes("failed on-chain")) {
+    return "Transaction was blocked because exchange prices updated during signing. Please retry.";
+  }
+  if (is6001) {
+    return "Transaction rejected (Custom:6001). This may be a margin issue or a signing conflict — please retry.";
   }
   if (raw.includes("InsufficientFunds")) {
     return "Insufficient funds: deposit more USDC before trading.";
@@ -30,7 +31,7 @@ function decodeOrderError(raw: string): string {
 }
 
 export function useTransactionBuilder() {
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const addToast = useToastStore((s) => s.addToast);
   const updateToast = useToastStore((s) => s.updateToast);
@@ -50,7 +51,7 @@ export function useTransactionBuilder() {
 
   const submitOrder = useCallback(
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const label = type === "market" ? "Market Order" : "Limit Order";
       const toastId = addToast("loading", `Building ${label}`);
@@ -61,7 +62,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => {
             onStatus?.(status);
             updateToast(toastId, { title: STATUS_LABELS[status] });
@@ -81,12 +82,12 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const cancelOrders = useCallback(
     async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Cancel");
 
@@ -99,7 +100,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
@@ -116,12 +117,12 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const deposit = useCallback(
     async (amountUsdc: number): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Deposit");
 
@@ -133,7 +134,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
@@ -150,12 +151,12 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const withdraw = useCallback(
     async (amountUsdc: number): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Withdrawal");
 
@@ -167,7 +168,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
@@ -184,12 +185,12 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const submitIsolatedOrder = useCallback(
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const label = type === "market" ? "Isolated Market Order" : "Isolated Limit Order";
       const toastId = addToast("loading", `Building ${label}`);
@@ -200,7 +201,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => {
             onStatus?.(status);
             updateToast(toastId, { title: STATUS_LABELS[status] });
@@ -220,12 +221,12 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   const transferCollateral = useCallback(
     async (fromSubaccountIndex: number, toSubaccountIndex: number, amountUsdc: number): Promise<TxResult> => {
-      if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Transfer");
 
@@ -239,7 +240,7 @@ export function useTransactionBuilder() {
         const instructions = deserializeInstructions(response.instructions);
 
         const result = await buildAndSignTransaction(
-          instructions, publicKey, signTransaction, connection,
+          instructions, publicKey, sendTransaction, connection,
           (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
@@ -256,7 +257,7 @@ export function useTransactionBuilder() {
         throw e;
       }
     },
-    [publicKey, signTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
   return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, connected: !!publicKey };
