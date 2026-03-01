@@ -14,9 +14,16 @@ interface DayData {
   pnl: number;
 }
 
+interface MonthBlock {
+  label: string;
+  year: number;
+  weeks: { date: Date; pnl: number | null }[][];
+}
+
 export function PnlCalendar({ authority }: PnlCalendarProps) {
   const [data, setData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [tooltip, setTooltip] = useState<{ date: string; pnl: number; x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -37,76 +44,91 @@ export function PnlCalendar({ authority }: PnlCalendarProps) {
       .finally(() => setLoading(false));
   }, [authority]);
 
-  const { weeks, months } = useMemo(() => {
-    if (data.length === 0) return { weeks: [], months: [] };
-
+  const allMonths = useMemo(() => {
     const pnlMap = new Map(data.map((d) => [d.date, d.pnl]));
     const today = new Date();
     const startDate = new Date(today);
     startDate.setDate(startDate.getDate() - 364);
-    // Align to start of week (Sunday)
-    startDate.setDate(startDate.getDate() - startDate.getDay());
+    startDate.setDate(1); // Align to first of month
 
-    const allWeeks: { date: Date; pnl: number | null }[][] = [];
-    const monthLabels: { label: string; col: number }[] = [];
-    let currentWeek: { date: Date; pnl: number | null }[] = [];
-    let lastMonth = -1;
-
+    const months: MonthBlock[] = [];
     const cursor = new Date(startDate);
+
     while (cursor <= today) {
-      const dateStr = cursor.toISOString().slice(0, 10);
-      const dayOfWeek = cursor.getDay();
+      const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+      const label = monthStart.toLocaleDateString("en-US", { month: "short" });
+      const year = monthStart.getFullYear();
 
-      if (dayOfWeek === 0 && currentWeek.length > 0) {
-        allWeeks.push(currentWeek);
-        currentWeek = [];
+      // Build weeks for this month
+      const weeks: { date: Date; pnl: number | null }[][] = [];
+      let currentWeek: { date: Date; pnl: number | null }[] = [];
+
+      // Pad start of first week
+      const firstDayOfWeek = monthStart.getDay();
+      for (let i = 0; i < firstDayOfWeek; i++) {
+        currentWeek.push({ date: new Date(0), pnl: null }); // placeholder
       }
 
-      const month = cursor.getMonth();
-      if (month !== lastMonth) {
-        monthLabels.push({
-          label: cursor.toLocaleDateString("en-US", { month: "short" }),
-          col: allWeeks.length,
+      const day = new Date(monthStart);
+      while (day <= monthEnd && day <= today) {
+        const dateStr = day.toISOString().slice(0, 10);
+        if (day.getDay() === 0 && currentWeek.length > 0) {
+          weeks.push(currentWeek);
+          currentWeek = [];
+        }
+        currentWeek.push({
+          date: new Date(day),
+          pnl: pnlMap.has(dateStr) ? pnlMap.get(dateStr)! : null,
         });
-        lastMonth = month;
+        day.setDate(day.getDate() + 1);
       }
 
-      currentWeek.push({
-        date: new Date(cursor),
-        pnl: pnlMap.has(dateStr) ? pnlMap.get(dateStr)! : null,
-      });
+      // Pad end of last week
+      while (currentWeek.length < 7) {
+        currentWeek.push({ date: new Date(0), pnl: null });
+      }
+      if (currentWeek.length > 0) weeks.push(currentWeek);
 
-      cursor.setDate(cursor.getDate() + 1);
+      months.push({ label, year, weeks });
+
+      // Move to next month
+      cursor.setMonth(cursor.getMonth() + 1);
     }
-    if (currentWeek.length > 0) allWeeks.push(currentWeek);
 
-    return { weeks: allWeeks, months: monthLabels };
+    return months;
   }, [data]);
+
+  const visibleMonths = useMemo(() => {
+    if (expanded) return allMonths;
+    return allMonths.slice(-3);
+  }, [allMonths, expanded]);
 
   const maxAbsPnl = useMemo(() => {
     const vals = data.map((d) => Math.abs(d.pnl)).filter((v) => v > 0);
     return vals.length > 0 ? Math.max(...vals) : 1;
   }, [data]);
 
-  function getCellColor(pnl: number | null): string {
-    if (pnl === null) return "bg-surface-l2/30";
-    if (pnl === 0) return "bg-surface-l2";
+  function getCellColor(pnl: number | null, isPlaceholder: boolean): string {
+    if (isPlaceholder) return "bg-transparent";
+    if (pnl === null) return "bg-[#1E1F25] border border-[#2A2B33]/50";
+    if (pnl === 0) return "bg-[#2A2B33] border border-[#2A2B33]";
     const intensity = Math.min(Math.abs(pnl) / maxAbsPnl, 1);
     if (pnl > 0) {
-      if (intensity > 0.75) return "bg-ember-green";
-      if (intensity > 0.5) return "bg-ember-green/70";
-      if (intensity > 0.25) return "bg-ember-green/40";
-      return "bg-ember-green/20";
+      if (intensity > 0.75) return "bg-ember-green border border-ember-green/60";
+      if (intensity > 0.5) return "bg-ember-green/70 border border-ember-green/40";
+      if (intensity > 0.25) return "bg-ember-green/40 border border-ember-green/25";
+      return "bg-ember-green/20 border border-ember-green/15";
     }
-    if (intensity > 0.75) return "bg-ember-red";
-    if (intensity > 0.5) return "bg-ember-red/70";
-    if (intensity > 0.25) return "bg-ember-red/40";
-    return "bg-ember-red/20";
+    if (intensity > 0.75) return "bg-ember-red border border-ember-red/60";
+    if (intensity > 0.5) return "bg-ember-red/70 border border-ember-red/40";
+    if (intensity > 0.25) return "bg-ember-red/40 border border-ember-red/25";
+    return "bg-ember-red/20 border border-ember-red/15";
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-6">
         <span className="font-mono text-[10px] text-text-secondary/40 animate-pulse">
           Loading PnL calendar...
         </span>
@@ -116,7 +138,7 @@ export function PnlCalendar({ authority }: PnlCalendarProps) {
 
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-6">
         <span className="font-mono text-[10px] text-text-secondary/40">No data available</span>
       </div>
     );
@@ -126,88 +148,103 @@ export function PnlCalendar({ authority }: PnlCalendarProps) {
     <div className="border border-ember-border bg-surface-l1 p-4">
       <div className="mb-3 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
-          Daily PnL Calendar
+          Daily PnL
         </span>
-        <div className="flex items-center gap-1">
-          <span className="font-mono text-[9px] text-text-secondary/40">Loss</span>
-          <span className="h-2 w-2 bg-ember-red/40" />
-          <span className="h-2 w-2 bg-ember-red" />
-          <span className="h-2 w-2 bg-surface-l2" />
-          <span className="h-2 w-2 bg-ember-green/40" />
-          <span className="h-2 w-2 bg-ember-green" />
-          <span className="font-mono text-[9px] text-text-secondary/40">Profit</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="font-mono text-[8px] text-text-secondary/40">Loss</span>
+            <span className="h-2 w-2 rounded-[1px] bg-ember-red/30 border border-ember-red/20" />
+            <span className="h-2 w-2 rounded-[1px] bg-ember-red border border-ember-red/60" />
+            <span className="h-2 w-2 rounded-[1px] bg-[#2A2B33] border border-[#2A2B33]" />
+            <span className="h-2 w-2 rounded-[1px] bg-ember-green/30 border border-ember-green/20" />
+            <span className="h-2 w-2 rounded-[1px] bg-ember-green border border-ember-green/60" />
+            <span className="font-mono text-[8px] text-text-secondary/40">Profit</span>
+          </div>
+          {allMonths.length > 3 && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="font-mono text-[9px] text-ember-orange/70 hover:text-ember-orange transition-colors"
+            >
+              {expanded ? "Show 3 months" : `Show all (${allMonths.length}mo)`}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="relative overflow-x-auto">
-        {/* Month labels */}
-        <div className="flex gap-[2px] mb-1 ml-6">
-          {months.map((m, i) => (
-            <div
-              key={`${m.label}-${i}`}
-              className="font-mono text-[8px] text-text-secondary/40"
-              style={{ position: "absolute", left: `${m.col * 13 + 24}px` }}
-            >
-              {m.label}
+      <div className="flex gap-4 overflow-x-auto">
+        {visibleMonths.map((month, mi) => (
+          <div key={`${month.label}-${month.year}-${mi}`} className="flex-shrink-0">
+            {/* Month header */}
+            <div className="mb-1.5 flex items-baseline gap-1">
+              <span className="font-mono text-[10px] font-medium text-text-primary">
+                {month.label}
+              </span>
+              <span className="font-mono text-[8px] text-text-secondary/40">
+                {month.year}
+              </span>
             </div>
-          ))}
-        </div>
 
-        <div className="flex gap-[2px] mt-4">
-          {/* Day labels */}
-          <div className="flex flex-col gap-[2px] mr-1">
-            {["", "M", "", "W", "", "F", ""].map((d, i) => (
-              <div key={i} className="h-[11px] flex items-center">
-                <span className="font-mono text-[8px] text-text-secondary/30 w-3">{d}</span>
+            {/* Day labels + grid */}
+            <div className="flex gap-[2px]">
+              {/* Day-of-week labels */}
+              <div className="flex flex-col gap-[2px] mr-0.5">
+                {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                  <div key={i} className="h-[12px] w-3 flex items-center justify-end">
+                    <span className="font-mono text-[7px] text-text-secondary/25">{d}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          {/* Calendar grid */}
-          {weeks.map((week, wi) => (
-            <div key={wi} className="flex flex-col gap-[2px]">
-              {Array.from({ length: 7 }, (_, di) => {
-                const cell = week.find((c) => c.date.getDay() === di);
-                if (!cell) {
-                  return <div key={di} className="h-[11px] w-[11px]" />;
-                }
-                return (
-                  <div
-                    key={di}
-                    className={clsx("h-[11px] w-[11px] cursor-pointer transition-opacity hover:opacity-80", getCellColor(cell.pnl))}
-                    onMouseEnter={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setTooltip({
-                        date: cell.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-                        pnl: cell.pnl || 0,
-                        x: rect.left,
-                        y: rect.top - 40,
-                      });
-                    }}
-                    onMouseLeave={() => setTooltip(null)}
-                  />
-                );
-              })}
+              {/* Week columns */}
+              {month.weeks.map((week, wi) => (
+                <div key={wi} className="flex flex-col gap-[2px]">
+                  {week.map((cell, ci) => {
+                    const isPlaceholder = cell.date.getTime() === 0;
+                    if (isPlaceholder) {
+                      return <div key={ci} className="h-[12px] w-[12px]" />;
+                    }
+                    return (
+                      <div
+                        key={ci}
+                        className={clsx(
+                          "h-[12px] w-[12px] rounded-[1px] cursor-pointer transition-all hover:brightness-125 hover:scale-110",
+                          getCellColor(cell.pnl, false)
+                        )}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setTooltip({
+                            date: cell.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+                            pnl: cell.pnl || 0,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top - 44,
+                          });
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
 
       {/* Tooltip */}
       {tooltip && (
         <div
-          className="fixed z-50 px-2 py-1 border border-ember-border bg-surface-l2 shadow-lg pointer-events-none"
+          className="fixed z-50 -translate-x-1/2 px-2.5 py-1.5 border border-ember-border bg-surface-l2 shadow-lg pointer-events-none"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
-          <span className="font-mono text-[9px] text-text-secondary">{tooltip.date}: </span>
-          <span
+          <div className="font-mono text-[9px] text-text-secondary">{tooltip.date}</div>
+          <div
             className={clsx(
-              "font-mono text-[9px] font-medium",
-              tooltip.pnl > 0 ? "text-ember-green" : tooltip.pnl < 0 ? "text-ember-red" : "text-text-secondary"
+              "font-mono text-[10px] font-medium",
+              tooltip.pnl > 0 ? "text-ember-green" : tooltip.pnl < 0 ? "text-ember-red" : "text-text-secondary/60"
             )}
           >
             {tooltip.pnl > 0 ? "+" : ""}{formatUsd(tooltip.pnl)}
-          </span>
+          </div>
         </div>
       )}
     </div>

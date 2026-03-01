@@ -5,7 +5,6 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { api } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
-import { ActivityHeatmap } from "@/components/accounts/ActivityHeatmap";
 import { ExposureChart } from "@/components/accounts/ExposureChart";
 import { FundingLog } from "@/components/accounts/FundingLog";
 import { OrderHistory } from "@/components/accounts/OrderHistory";
@@ -35,6 +34,15 @@ function sdkNum(val: any): number {
   return 0;
 }
 
+function isEmptyAccount(account: SubaccountData): boolean {
+  return (
+    sdkNum(account.effectiveCollateral) === 0 &&
+    sdkNum(account.portfolioValue) === 0 &&
+    (account.positions || []).length === 0 &&
+    Object.values(account.limitOrders || {}).reduce((s, o) => s + (o as any[]).length, 0) === 0
+  );
+}
+
 function MarginBar({ usage }: { usage: number }) {
   const clampedUsage = Math.min(Math.max(usage, 0), 100);
   const barColor =
@@ -57,7 +65,6 @@ function SubaccountCard({ account }: { account: SubaccountData }) {
   const portfolio = sdkNum(account.portfolioValue);
   const pnl = sdkNum(account.unrealizedPnl);
   const initMargin = sdkNum(account.initialMargin);
-  const maintMargin = sdkNum(account.maintenanceMargin);
   const positionCount = (account.positions || []).length;
   const orderCount = Object.values(account.limitOrders || {}).reduce(
     (s, orders) => s + (orders as any[]).length,
@@ -184,6 +191,26 @@ function SubaccountCard({ account }: { account: SubaccountData }) {
   );
 }
 
+/** Compact single-row for empty isolated subaccounts */
+function EmptySubaccountRow({ account }: { account: SubaccountData }) {
+  const idx = account.traderSubaccountIndex ?? 0;
+  return (
+    <div className="flex items-center justify-between border border-ember-border/40 bg-surface-l1/50 px-4 py-2">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[11px] text-ember-orange/60">
+          Isolated #{idx}
+        </span>
+        <span className="px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider bg-ember-border/30 text-text-secondary/40">
+          empty
+        </span>
+      </div>
+      <span className="font-mono text-[10px] text-text-secondary/30">
+        $0.00
+      </span>
+    </div>
+  );
+}
+
 function StatCell({
   label,
   value,
@@ -212,7 +239,7 @@ export default function AccountsPage() {
   const [accounts, setAccounts] = useState<SubaccountData[]>([]);
   const [loading, setLoading] = useState(true);
   const [showTransfer, setShowTransfer] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "orders" | "funding">("overview");
+  const [activeTab, setActiveTab] = useState<"orders" | "funding">("orders");
 
   useEffect(() => {
     setAuthed(sessionStorage.getItem(ACCESS_KEY) === "1");
@@ -251,13 +278,18 @@ export default function AccountsPage() {
     );
   }
 
-  const subaccountOptions = accounts
-    .sort((a, b) => (a.traderSubaccountIndex ?? 0) - (b.traderSubaccountIndex ?? 0))
-    .map((a) => ({
-      index: a.traderSubaccountIndex ?? 0,
-      label: (a.traderSubaccountIndex ?? 0) === 0 ? "Cross Margin" : `Isolated #${a.traderSubaccountIndex}`,
-      collateral: sdkNum(a.effectiveCollateral),
-    }));
+  const sorted = [...accounts].sort(
+    (a, b) => (a.traderSubaccountIndex ?? 0) - (b.traderSubaccountIndex ?? 0)
+  );
+  const activeAccounts = sorted.filter((a) => !isEmptyAccount(a));
+  const emptyAccounts = sorted.filter((a) => isEmptyAccount(a));
+  const hasPositions = activeAccounts.some((a) => (a.positions || []).length > 0);
+
+  const subaccountOptions = sorted.map((a) => ({
+    index: a.traderSubaccountIndex ?? 0,
+    label: (a.traderSubaccountIndex ?? 0) === 0 ? "Cross Margin" : `Isolated #${a.traderSubaccountIndex}`,
+    collateral: sdkNum(a.effectiveCollateral),
+  }));
 
   return (
     <div className="flex min-h-screen flex-col bg-ember-black">
@@ -317,13 +349,13 @@ export default function AccountsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-3 p-4">
-          {/* Activity Heatmap */}
-          <ActivityHeatmap authority={authority} />
-
           {/* Header row with count + transfer button */}
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
               {accounts.length} subaccount{accounts.length !== 1 ? "s" : ""}
+              {emptyAccounts.length > 0 && (
+                <span className="text-text-secondary/30"> ({emptyAccounts.length} empty)</span>
+              )}
             </span>
             {accounts.length >= 2 && (
               <button
@@ -335,24 +367,36 @@ export default function AccountsPage() {
             )}
           </div>
 
-          {/* Subaccount cards + Exposure */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {accounts
-              .sort((a, b) => (a.traderSubaccountIndex ?? 0) - (b.traderSubaccountIndex ?? 0))
-              .map((acct) => (
+          {/* Active subaccount cards — full detail */}
+          {activeAccounts.length > 0 && (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {activeAccounts.map((acct) => (
                 <SubaccountCard
                   key={acct.traderSubaccountIndex ?? 0}
                   account={acct}
                 />
               ))}
-          </div>
+            </div>
+          )}
 
-          {/* Exposure Chart */}
-          <ExposureChart authority={authority} />
+          {/* Empty subaccounts — collapsed into compact rows */}
+          {emptyAccounts.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {emptyAccounts.map((acct) => (
+                <EmptySubaccountRow
+                  key={acct.traderSubaccountIndex ?? 0}
+                  account={acct}
+                />
+              ))}
+            </div>
+          )}
 
-          {/* Tabs: Orders / Funding */}
-          <div className="flex border-b border-ember-border mt-2">
-            {(["overview", "orders", "funding"] as const).map((tab) => (
+          {/* Exposure — only show if there are positions */}
+          {hasPositions && <ExposureChart authority={authority} />}
+
+          {/* Order History / Funding tabs — shown immediately, default to orders */}
+          <div className="flex border-b border-ember-border mt-1">
+            {(["orders", "funding"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -363,12 +407,11 @@ export default function AccountsPage() {
                     : "text-text-secondary/50 hover:text-text-secondary"
                 )}
               >
-                {tab === "overview" ? "Overview" : tab === "orders" ? "Order History" : "Funding Log"}
+                {tab === "orders" ? "Order History" : "Funding Log"}
               </button>
             ))}
           </div>
 
-          {/* Tab content */}
           {activeTab === "orders" && (
             <section>
               <OrderHistory authority={authority} />
