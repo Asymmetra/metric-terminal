@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useSearchParams } from "next/navigation";
 import { WalletButton } from "@/components/shared/WalletButton";
@@ -24,6 +24,18 @@ function truncateAddress(addr: string): string {
 }
 
 export default function AnalyticsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-ember-black">
+        <span className="font-mono text-[10px] text-text-secondary/40 animate-pulse">Loading...</span>
+      </div>
+    }>
+      <AnalyticsContent />
+    </Suspense>
+  );
+}
+
+function AnalyticsContent() {
   const { publicKey } = useWallet();
   const searchParams = useSearchParams();
   const [authed, setAuthed] = useState(false);
