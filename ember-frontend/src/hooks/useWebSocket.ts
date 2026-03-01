@@ -18,14 +18,18 @@ export function useWebSocket() {
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
 
   useEffect(() => {
-    // Clear stale data from previous market
+    // Clear stale data from previous market immediately
+    setOrderbook([], []);
     setTrades([]);
     setStats(null);
+
+    const abortController = new AbortController();
+    const { signal } = abortController;
 
     wsClient.connect();
 
     // Fetch market config (maxLeverage, baseLotsDecimals, tickSize)
-    api.getMarket(selectedSymbol)
+    api.getMarket(selectedSymbol, signal)
       .then((data) => {
         setMarketConfig({
           maxLeverage: data.maxLeverage || 10,
@@ -33,16 +37,22 @@ export function useWebSocket() {
           tickSize: data.tickSize || 100,
         });
       })
-      .catch((err) => console.error("[REST] Market config fetch failed:", err));
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("[REST] Market config fetch failed:", err);
+      });
 
     // Fetch initial orderbook snapshot via REST (immediate data)
-    api.getOrderbook(selectedSymbol)
+    api.getOrderbook(selectedSymbol, signal)
       .then((data) => {
         if (data.bids && data.asks) {
           setOrderbook(data.bids, data.asks);
         }
       })
-      .catch((err) => console.error("[REST] Orderbook fetch failed:", err));
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("[REST] Orderbook fetch failed:", err);
+      });
 
     const unsubOrderbook = wsClient.subscribe(
       "orderbook",
@@ -76,6 +86,7 @@ export function useWebSocket() {
     );
 
     return () => {
+      abortController.abort();
       unsubOrderbook();
       unsubTrades();
       unsubStats();

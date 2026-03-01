@@ -1,6 +1,6 @@
 import { API_BASE_URL } from "./constants";
 
-async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+async function fetchApi<T>(path: string, options?: RequestInit & { signal?: AbortSignal }): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
@@ -14,10 +14,10 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getMarkets: () => fetchApi<any[]>("/api/markets"),
-  getMarket: (symbol: string) => fetchApi<any>(`/api/markets/${symbol}`),
-  getOrderbook: (symbol: string) => fetchApi<any>(`/api/orderbook/${symbol}`),
-  getCandles: (symbol: string, timeframe = "1m", limit = 300) =>
-    fetchApi<any[]>(`/api/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`),
+  getMarket: (symbol: string, signal?: AbortSignal) => fetchApi<any>(`/api/markets/${symbol}`, { signal }),
+  getOrderbook: (symbol: string, signal?: AbortSignal) => fetchApi<any>(`/api/orderbook/${symbol}`, { signal }),
+  getCandles: (symbol: string, timeframe = "1m", limit = 300, signal?: AbortSignal) =>
+    fetchApi<any[]>(`/api/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { signal }),
   getTrader: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}`),
   getTraderOrders: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/orders`),
   getTraderTrades: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/trades`),

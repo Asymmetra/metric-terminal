@@ -60,6 +60,7 @@ export function Chart() {
     let chart: any;
     let observer: ResizeObserver | null = null;
     let unsubCandles: (() => void) | null = null;
+    const abortController = new AbortController();
 
     async function initChart() {
       const { createChart, ColorType, CrosshairMode } = await import("lightweight-charts");
@@ -131,7 +132,8 @@ export function Chart() {
       // Fetch historical candles from REST
       try {
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/candles/${selectedSymbol}?timeframe=${activeTimeframe}&limit=300`
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/candles/${selectedSymbol}?timeframe=${activeTimeframe}&limit=300`,
+          { signal: abortController.signal }
         );
         if (res.ok) {
           const candles = await res.json();
@@ -153,6 +155,7 @@ export function Chart() {
           volumeSeries.setData(volumeData);
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error("Failed to fetch candles:", e);
       }
 
@@ -180,6 +183,7 @@ export function Chart() {
     initChart();
 
     return () => {
+      abortController.abort();
       unsubCandles?.();
       observer?.disconnect();
       chart?.remove();
