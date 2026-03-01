@@ -3,19 +3,21 @@
 import { ReactNode, useState } from "react";
 import clsx from "clsx";
 
-type MarketDataTab = "book" | "trades";
+type MarketDataTab = "book" | "trades" | "depth";
 
 const TABS: { key: MarketDataTab; label: string }[] = [
   { key: "book", label: "Book" },
   { key: "trades", label: "Trades" },
+  { key: "depth", label: "Depth" },
 ];
 
 interface MarketDataPanelProps {
   orderbook: ReactNode;
   tradeHistory: ReactNode;
+  depthChart: ReactNode;
 }
 
-export function MarketDataPanel({ orderbook, tradeHistory }: MarketDataPanelProps) {
+export function MarketDataPanel({ orderbook, tradeHistory, depthChart }: MarketDataPanelProps) {
   const [activeTab, setActiveTab] = useState<MarketDataTab>("book");
 
   return (
@@ -43,7 +45,9 @@ export function MarketDataPanel({ orderbook, tradeHistory }: MarketDataPanelProp
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "book" ? orderbook : tradeHistory}
+        {activeTab === "book" && orderbook}
+        {activeTab === "trades" && tradeHistory}
+        {activeTab === "depth" && depthChart}
       </div>
     </div>
   );

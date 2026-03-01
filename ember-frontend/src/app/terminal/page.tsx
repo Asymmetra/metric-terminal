@@ -14,6 +14,7 @@ import { Toasts } from "@/components/shared/Toasts";
 import { TradeDetailPanel } from "@/components/terminal/TradeDetailPanel";
 import { KeyboardShortcutOverlay } from "@/components/terminal/KeyboardShortcutOverlay";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { DepthChart } from "@/components/terminal/DepthChart";
 
 const ACCESS_KEY = "ember-access";
 const PASSCODE = "getrekt";
@@ -107,6 +108,7 @@ export default function TerminalPage() {
           <MarketDataPanel
             orderbook={<Orderbook />}
             tradeHistory={<TradeHistory />}
+            depthChart={<DepthChart />}
           />
         }
         chart={<Chart />}
