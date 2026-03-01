@@ -187,6 +187,38 @@ export function OrderEntry() {
 
   const baseDecimals = marketConfig?.baseLotsDecimals || 2;
 
+  // ── Validation ──
+  const collateralVal = parseFloat(collateralInput || "0");
+  const priceVal = parseFloat(price || "0");
+
+  const validation = useMemo(() => {
+    const issues: string[] = [];
+    if (!connected) return { ready: false, issues: ["Connect wallet"], buttonLabel: "CONNECT WALLET" };
+    if (collateralVal <= 0) issues.push("Enter collateral amount");
+    if (orderType === "limit" && (!price || priceVal <= 0)) issues.push("Enter limit price");
+    if (collateral <= 0 && collateralVal > 0) issues.push("No deposited collateral");
+    if (derivedOrder && derivedOrder.collateral > freeCollateral) issues.push("Insufficient margin");
+    if (showTpSl && !tpValid) issues.push(`TP must be ${side === "buy" ? "above" : "below"} mark`);
+    if (showTpSl && !slValid) issues.push(`SL must be ${side === "buy" ? "below" : "above"} mark`);
+    if (!markPrice) issues.push("Waiting for market data");
+
+    const ready = issues.length === 0 && !!derivedOrder;
+    let buttonLabel: string;
+    if (txPhase !== "idle") {
+      buttonLabel = txPhase === "building" ? "BUILDING..." : txPhase === "simulating" ? "SIMULATING..." : txPhase === "signing" ? "SIGNING..." : "SUBMITTING...";
+    } else if (ready && derivedOrder) {
+      buttonLabel = `${side === "buy" ? "LONG" : "SHORT"} ${derivedOrder.baseSize.toFixed(baseDecimals)} ${selectedSymbol} ≈ $${formatPrice(derivedOrder.notional)}`;
+    } else if (issues.length > 0) {
+      buttonLabel = issues[0];
+    } else {
+      buttonLabel = side === "buy" ? `BUY ${selectedSymbol}` : `SELL ${selectedSymbol}`;
+    }
+    return { ready, issues, buttonLabel };
+  }, [connected, collateralVal, priceVal, price, orderType, collateral, freeCollateral, derivedOrder, showTpSl, tpValid, slValid, side, markPrice, txPhase, baseDecimals, selectedSymbol]);
+
+  const needsCollateral = connected && collateralVal <= 0;
+  const needsPrice = connected && orderType === "limit" && collateralVal > 0 && (!price || priceVal <= 0);
+
   return (
     <>
       <div className="flex h-full flex-col">
@@ -266,7 +298,10 @@ export function OrderEntry() {
                 placeholder="0.00"
                 min="0"
                 step="0.01"
-                className="w-full border border-ember-border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:border-ember-orange/60 focus:outline-none transition-colors"
+                className={clsx(
+                  "w-full border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:outline-none transition-colors",
+                  needsCollateral ? "border-ember-orange/50 focus:border-ember-orange" : "border-ember-border focus:border-ember-orange/60"
+                )}
               />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-secondary/60">
                 USDC
@@ -292,18 +327,24 @@ export function OrderEntry() {
           {/* Price input (limit only) */}
           {orderType === "limit" && (
             <div>
-              <label className="mb-1 block text-[10px] tracking-wider text-text-secondary/70 uppercase">
-                Price
+              <label className={clsx(
+                "mb-1 block text-[10px] tracking-wider uppercase",
+                needsPrice ? "text-ember-orange" : "text-text-secondary/70"
+              )}>
+                Price {needsPrice && <span className="normal-case text-ember-orange/80">— required</span>}
               </label>
               <div className="relative">
                 <input
                   type="number"
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
-                  placeholder="0.00"
+                  placeholder={markPrice > 0 ? formatPrice(markPrice) : "0.00"}
                   min="0"
                   step="0.01"
-                  className="w-full border border-ember-border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:border-ember-orange/60 focus:outline-none transition-colors"
+                  className={clsx(
+                    "w-full border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:outline-none transition-colors",
+                    needsPrice ? "border-ember-orange/50 focus:border-ember-orange" : "border-ember-border focus:border-ember-orange/60"
+                  )}
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-secondary/60">
                   USD
@@ -561,13 +602,13 @@ export function OrderEntry() {
             </div>
           )}
 
-          {/* Submit button — Jupiter-style with computed size + notional */}
+          {/* Submit button */}
           <button
             onClick={handleSubmit}
-            disabled={!connected || !derivedOrder || txPhase !== "idle" || (orderType === "limit" && (!price || parseFloat(price) <= 0)) || (showTpSl && (!tpValid || !slValid))}
+            disabled={!validation.ready || txPhase !== "idle"}
             className={clsx(
               "flex w-full items-center justify-center gap-2 py-2.5 font-mono text-[11px] font-medium tracking-wider transition-all duration-150",
-              !connected
+              !validation.ready
                 ? "bg-surface-l2 text-text-secondary/50 cursor-not-allowed"
                 : side === "buy"
                   ? "bg-ember-green text-ember-black hover:brightness-110 active:brightness-95"
@@ -581,21 +622,7 @@ export function OrderEntry() {
                 <path d="M8 2a6 6 0 014.9 9.4" />
               </svg>
             )}
-            {!connected
-              ? "CONNECT WALLET"
-              : txPhase === "building"
-                ? "BUILDING..."
-                : txPhase === "simulating"
-                  ? "SIMULATING..."
-                  : txPhase === "signing"
-                    ? "SIGNING..."
-                    : txPhase === "submitting"
-                      ? "SUBMITTING..."
-                      : derivedOrder
-                        ? `${side === "buy" ? "LONG" : "SHORT"} ${derivedOrder.baseSize.toFixed(baseDecimals)} ${selectedSymbol} ≈ $${formatPrice(derivedOrder.notional)}`
-                        : side === "buy"
-                          ? `BUY ${selectedSymbol}`
-                          : `SELL ${selectedSymbol}`}
+            {validation.buttonLabel}
           </button>
         </div>
 
