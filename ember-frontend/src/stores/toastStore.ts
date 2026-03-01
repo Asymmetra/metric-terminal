@@ -3,13 +3,14 @@ import { create } from "zustand";
 export interface Toast {
   id: string;
   type: "success" | "error" | "info" | "loading";
-  message: string;
+  title: string;
+  detail?: string;
 }
 
 interface ToastStore {
   toasts: Toast[];
-  addToast: (type: Toast["type"], message: string) => string;
-  updateToast: (id: string, updates: Partial<Pick<Toast, "type" | "message">>) => void;
+  addToast: (type: Toast["type"], title: string, detail?: string) => string;
+  updateToast: (id: string, updates: Partial<Pick<Toast, "type" | "title" | "detail">>) => void;
   removeToast: (id: string) => void;
 }
 
@@ -17,9 +18,9 @@ let nextId = 0;
 
 export const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
-  addToast: (type, message) => {
+  addToast: (type, title, detail?) => {
     const id = `toast-${nextId++}`;
-    set((s) => ({ toasts: [...s.toasts, { id, type, message }] }));
+    set((s) => ({ toasts: [...s.toasts, { id, type, title, detail }] }));
     // Auto-dismiss non-loading toasts after 5s
     if (type !== "loading") {
       setTimeout(() => {

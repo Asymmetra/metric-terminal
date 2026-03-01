@@ -16,10 +16,9 @@ export function OrderEntry() {
   const [orderType, setOrderType] = useState<"market" | "limit">("limit");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
-  const [size, setSize] = useState("");
+  const [collateralInput, setCollateralInput] = useState("");
   const [leverage, setLeverage] = useState(1);
   const [marginMode, setMarginMode] = useState<MarginMode>("cross");
-  const [isolatedCollateral, setIsolatedCollateral] = useState("");
   const [showTpSl, setShowTpSl] = useState(false);
   const [tpPrice, setTpPrice] = useState("");
   const [slPrice, setSlPrice] = useState("");
@@ -54,67 +53,97 @@ export function OrderEntry() {
     }
   }, [fillPrice, orderType, setFillPrice]);
 
-  // Reset leverage, margin mode, and TP/SL when market changes
+  // Reset when market changes
   useEffect(() => {
     setLeverage(1);
     setMarginMode("cross");
-    setIsolatedCollateral("");
+    setCollateralInput("");
     setShowTpSl(false);
     setTpPrice("");
     setSlPrice("");
   }, [selectedSymbol]);
 
-  // Trader account info (SDK TraderView fields)
+  // Trader account info
   const collateral = useTraderStore((s) => s.collateral);
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
   const initialMargin = useTraderStore((s) => s.initialMargin);
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const riskState = useTraderStore((s) => s.riskState);
 
-  // TP/SL validation — side-aware (TP must be favorable, SL must be adverse)
+  // TP/SL validation
   const tpValid = useMemo(() => {
     const tp = parseFloat(tpPrice);
-    if (!tpPrice || isNaN(tp) || tp <= 0 || !markPrice) return true; // empty is valid
+    if (!tpPrice || isNaN(tp) || tp <= 0 || !markPrice) return true;
     return side === "buy" ? tp > markPrice : tp < markPrice;
   }, [tpPrice, markPrice, side]);
 
   const slValid = useMemo(() => {
     const sl = parseFloat(slPrice);
-    if (!slPrice || isNaN(sl) || sl <= 0 || !markPrice) return true; // empty is valid
+    if (!slPrice || isNaN(sl) || sl <= 0 || !markPrice) return true;
     return side === "buy" ? sl < markPrice : sl > markPrice;
   }, [slPrice, markPrice, side]);
 
-  // Order summary calculations
   const lotSize = useMemo(() => 10 ** -(marketConfig?.baseLotsDecimals || 2), [marketConfig]);
-  const orderSummary = useMemo(() => {
-    const baseSize = parseFloat(size || "0");
-    if (baseSize <= 0 || !markPrice || markPrice <= 0) return null;
-    const notional = baseSize * markPrice;
-    const requiredMargin = marginMode === "isolated" && isolatedCollateral
-      ? parseFloat(isolatedCollateral)
-      : notional / leverage;
-    return { baseSize, notional, requiredMargin };
-  }, [size, markPrice, leverage, marginMode, isolatedCollateral]);
+  const maxLeverage = marketConfig?.maxLeverage || 10;
+
+  // Derive order from collateral + leverage
+  const derivedOrder = useMemo(() => {
+    const col = parseFloat(collateralInput || "0");
+    if (col <= 0 || !markPrice || markPrice <= 0) return null;
+
+    const effectivePrice = (orderType === "limit" && price)
+      ? parseFloat(price) : markPrice;
+    if (!effectivePrice || effectivePrice <= 0 || isNaN(effectivePrice)) return null;
+
+    const notional = col * leverage;
+    const baseSize = notional / effectivePrice;
+    const sizeLots = Math.floor(baseSize / lotSize);
+    if (sizeLots <= 0) return null;
+
+    // Snap to lot grid
+    const adjBaseSize = sizeLots * lotSize;
+    const adjNotional = adjBaseSize * effectivePrice;
+
+    // Approximate liquidation price (~2.5% maintenance margin ratio)
+    const mmr = 0.025;
+    const liqPrice = side === "buy"
+      ? effectivePrice * (1 - 1 / leverage + mmr)
+      : effectivePrice * (1 + 1 / leverage - mmr);
+
+    return {
+      collateral: col,
+      notional: adjNotional,
+      baseSize: adjBaseSize,
+      sizeLots,
+      effectivePrice,
+      liqPrice: leverage > 1 ? liqPrice : null,
+    };
+  }, [collateralInput, leverage, markPrice, orderType, price, lotSize, side]);
+
+  // Leverage breakpoints
+  const leverageBreakpoints = useMemo(() => {
+    const pts: number[] = [1];
+    const step = Math.max(1, Math.floor(maxLeverage / 4));
+    for (let i = step; i < maxLeverage; i += step) {
+      if (!pts.includes(i)) pts.push(i);
+    }
+    if (!pts.includes(maxLeverage)) pts.push(maxLeverage);
+    return pts;
+  }, [maxLeverage]);
 
   const handleSubmit = async () => {
     if (submittingRef.current) return;
-    if (!connected || !size) return;
-    // Guard against empty price on limit orders
+    if (!connected || !derivedOrder) return;
     if (orderType === "limit" && (!price || parseFloat(price) <= 0)) return;
-    // Block submission when TP/SL is enabled but invalid
     if (showTpSl && (!tpValid || !slValid)) return;
-    const baseSize = parseFloat(size);
-    if (isNaN(baseSize) || baseSize <= 0) return;
-    const sizeLots = Math.round(baseSize / lotSize);
-    if (sizeLots <= 0) return;
 
-    // Pre-flight margin check — prevent TX simulation failures
-    if (orderSummary && collateral > 0 && orderSummary.requiredMargin > collateral) {
-      addToast("error", `Insufficient margin: need $${orderSummary.requiredMargin.toFixed(2)} but only $${collateral.toFixed(2)} available. Deposit more USDC or reduce size.`);
+    // Pre-flight margin check
+    if (collateral > 0 && derivedOrder.collateral > collateral) {
+      addToast("error", "Insufficient Margin", `Need $${derivedOrder.collateral.toFixed(2)} but only $${collateral.toFixed(2)} available. Deposit more or reduce size.`);
       return;
     }
     if (collateral <= 0) {
-      addToast("error", "No collateral deposited. Deposit USDC before trading.");
+      addToast("error", "No Collateral", "Deposit USDC before trading.");
       return;
     }
 
@@ -124,12 +153,11 @@ export function OrderEntry() {
       const params: any = {
         symbol: selectedSymbol,
         side: side === "buy" ? "bid" : "ask",
-        size_lots: sizeLots,
+        size_lots: derivedOrder.sizeLots,
       };
       if (orderType === "limit") {
         params.price = parseFloat(price);
       }
-      // Attach TP/SL if enabled and valid
       if (showTpSl) {
         const tp = parseFloat(tpPrice);
         const sl = parseFloat(slPrice);
@@ -137,15 +165,12 @@ export function OrderEntry() {
         if (!isNaN(sl) && sl > 0) params.stop_loss_price = sl;
       }
       if (marginMode === "isolated") {
-        const isoCollateral = parseFloat(isolatedCollateral);
-        if (!isNaN(isoCollateral) && isoCollateral > 0) {
-          params.collateral_usdc = isoCollateral;
-        }
+        params.collateral_usdc = derivedOrder.collateral;
         await submitIsolatedOrder(orderType, params, (status) => setTxPhase(status));
       } else {
         await submitOrder(orderType, params, (status) => setTxPhase(status));
       }
-      setSize("");
+      setCollateralInput("");
       setTpPrice("");
       setSlPrice("");
       setShowTpSl(false);
@@ -156,6 +181,8 @@ export function OrderEntry() {
       submittingRef.current = false;
     }
   };
+
+  const baseDecimals = marketConfig?.baseLotsDecimals || 2;
 
   return (
     <>
@@ -205,7 +232,7 @@ export function OrderEntry() {
             </button>
           </div>
 
-          {/* Margin mode toggle — filled button style per design spec */}
+          {/* Margin mode toggle */}
           <div className="grid grid-cols-2 gap-px bg-ember-border">
             {(["cross", "isolated"] as const).map((mode) => (
               <button
@@ -223,66 +250,41 @@ export function OrderEntry() {
             ))}
           </div>
 
-          {/* Leverage slider */}
+          {/* Collateral input (USDC) */}
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] tracking-wider text-text-secondary/70 uppercase">
-                Leverage
-              </label>
-              <span className="font-mono text-[11px] text-ember-orange">{leverage}x</span>
+            <label className="mb-1 block text-[10px] tracking-wider text-text-secondary/70 uppercase">
+              Collateral
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                value={collateralInput}
+                onChange={(e) => setCollateralInput(e.target.value)}
+                placeholder="0.00"
+                min="0"
+                step="0.01"
+                className="w-full border border-ember-border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:border-ember-orange/60 focus:outline-none transition-colors"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-secondary/60">
+                USDC
+              </span>
             </div>
-            <input
-              type="range"
-              min={1}
-              max={marketConfig?.maxLeverage || 10}
-              step={1}
-              value={leverage}
-              onChange={(e) => setLeverage(parseInt(e.target.value))}
-              className="w-full accent-ember-orange"
-            />
-            <div className="flex justify-between mt-0.5">
-              <span className="text-[9px] text-text-secondary/50">1x</span>
-              <span className="text-[9px] text-text-secondary/50">{marketConfig?.maxLeverage || 10}x</span>
+            <div className="mt-1 flex gap-1">
+              {[10, 25, 50, 100].map((pct) => (
+                <button
+                  key={pct}
+                  onClick={() => {
+                    if (collateral > 0) {
+                      setCollateralInput(((collateral * pct) / 100).toFixed(2));
+                    }
+                  }}
+                  className="flex-1 py-1 font-mono text-[9px] text-text-secondary/60 bg-surface-l2 border border-ember-border/30 hover:text-ember-orange hover:border-ember-orange/40 transition-colors"
+                >
+                  {pct}%
+                </button>
+              ))}
             </div>
           </div>
-
-          {/* Isolated collateral input */}
-          {marginMode === "isolated" && (
-            <div>
-              <label className="mb-1 block text-[10px] tracking-wider text-text-secondary/70 uppercase">
-                Collateral
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={isolatedCollateral}
-                  onChange={(e) => setIsolatedCollateral(e.target.value)}
-                  placeholder={orderSummary ? formatPrice(orderSummary.requiredMargin) : "0.00"}
-                  min="0"
-                  step="0.01"
-                  className="w-full border border-ember-border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:border-ember-orange/60 focus:outline-none transition-colors"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-secondary/60">
-                  USDC
-                </span>
-              </div>
-              <div className="mt-1 flex gap-1">
-                {[25, 50, 75, 100].map((pct) => (
-                  <button
-                    key={pct}
-                    onClick={() => {
-                      if (collateral > 0) {
-                        setIsolatedCollateral(((collateral * pct) / 100).toFixed(2));
-                      }
-                    }}
-                    className="flex-1 py-1 font-mono text-[9px] text-text-secondary/60 bg-surface-l2 border border-ember-border/30 hover:text-ember-orange hover:border-ember-orange/40 transition-colors"
-                  >
-                    {pct}%
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Price input (limit only) */}
           {orderType === "limit" && (
@@ -307,24 +309,50 @@ export function OrderEntry() {
             </div>
           )}
 
-          {/* Size input (base units) */}
+          {/* Leverage slider with +/- buttons and breakpoints */}
           <div>
-            <label className="mb-1 block text-[10px] tracking-wider text-text-secondary/70 uppercase">
-              Size
-            </label>
-            <div className="relative">
-              <input
-                type="number"
-                value={size}
-                onChange={(e) => setSize(e.target.value)}
-                placeholder="0.00"
-                min={lotSize}
-                step={lotSize}
-                className="w-full border border-ember-border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:border-ember-orange/60 focus:outline-none transition-colors"
-              />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-secondary/60">
-                {selectedSymbol}
-              </span>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] tracking-wider text-text-secondary/70 uppercase">
+                Leverage
+              </label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setLeverage((l) => Math.max(1, l - 1))}
+                  className="h-5 w-5 flex items-center justify-center border border-ember-border bg-surface-l2 font-mono text-[11px] text-text-secondary hover:text-ember-orange hover:border-ember-orange/40 transition-colors"
+                >
+                  -
+                </button>
+                <span className="font-mono text-[11px] text-ember-orange min-w-[28px] text-center">{leverage}x</span>
+                <button
+                  onClick={() => setLeverage((l) => Math.min(maxLeverage, l + 1))}
+                  className="h-5 w-5 flex items-center justify-center border border-ember-border bg-surface-l2 font-mono text-[11px] text-text-secondary hover:text-ember-orange hover:border-ember-orange/40 transition-colors"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={maxLeverage}
+              step={1}
+              value={leverage}
+              onChange={(e) => setLeverage(parseInt(e.target.value))}
+              className="w-full accent-ember-orange"
+            />
+            <div className="flex justify-between mt-0.5">
+              {leverageBreakpoints.map((bp) => (
+                <button
+                  key={bp}
+                  onClick={() => setLeverage(bp)}
+                  className={clsx(
+                    "text-[9px] font-mono transition-colors",
+                    leverage === bp ? "text-ember-orange" : "text-text-secondary/50 hover:text-text-secondary"
+                  )}
+                >
+                  {bp}x
+                </button>
+              ))}
             </div>
           </div>
 
@@ -358,7 +386,7 @@ export function OrderEntry() {
                     </label>
                     {tpPrice && markPrice > 0 && (
                       <span className="font-mono text-[10px] text-ember-green">
-                        Est. PnL: +${formatPrice(Math.abs((parseFloat(tpPrice) - markPrice) * parseFloat(size || "0")))}
+                        Est. PnL: +${formatPrice(Math.abs((parseFloat(tpPrice) - markPrice) * (derivedOrder?.baseSize || 0)))}
                       </span>
                     )}
                   </div>
@@ -411,7 +439,7 @@ export function OrderEntry() {
                     </label>
                     {slPrice && markPrice > 0 && (
                       <span className="font-mono text-[10px] text-ember-red">
-                        Est. PnL: -${formatPrice(Math.abs((parseFloat(slPrice) - markPrice) * parseFloat(size || "0")))}
+                        Est. PnL: -${formatPrice(Math.abs((parseFloat(slPrice) - markPrice) * (derivedOrder?.baseSize || 0)))}
                       </span>
                     )}
                   </div>
@@ -460,26 +488,36 @@ export function OrderEntry() {
           </div>
 
           {/* Order summary */}
-          {orderSummary && (
+          {derivedOrder && (
             <div className="flex flex-col gap-1 border border-ember-border/30 bg-surface-l2/30 p-2">
               <div className="flex justify-between">
-                <span className="text-[10px] text-text-secondary/70">Size</span>
+                <span className="text-[10px] text-text-secondary/70">Position Size</span>
                 <span className="font-mono text-[10px] text-text-primary">
-                  {orderSummary.baseSize.toFixed(marketConfig?.baseLotsDecimals || 2)} {selectedSymbol}
+                  {derivedOrder.baseSize.toFixed(baseDecimals)} {selectedSymbol}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[10px] text-text-secondary/70">Notional</span>
-                <span className="font-mono text-[10px] text-text-primary">${formatPrice(orderSummary.notional)}</span>
+                <span className="text-[10px] text-text-secondary/70">Notional Value</span>
+                <span className="font-mono text-[10px] text-text-primary">${formatPrice(derivedOrder.notional)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[10px] text-text-secondary/70">Est. Margin</span>
-                <span className="font-mono text-[10px] text-text-primary">${formatPrice(orderSummary.requiredMargin)}</span>
+                <span className="text-[10px] text-text-secondary/70">Est. Entry Price</span>
+                <span className="font-mono text-[10px] text-text-primary">${formatPrice(derivedOrder.effectivePrice)}</span>
+              </div>
+              {derivedOrder.liqPrice !== null && (
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-text-secondary/70">Est. Liq. Price</span>
+                  <span className="font-mono text-[10px] text-ember-red">${formatPrice(derivedOrder.liqPrice)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-[10px] text-text-secondary/70">Collateral</span>
+                <span className="font-mono text-[10px] text-text-primary">${formatPrice(derivedOrder.collateral)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[10px] text-text-secondary/70">Eff. Leverage</span>
                 <span className="font-mono text-[10px] text-ember-orange">
-                  {collateral > 0 ? (orderSummary.notional / collateral).toFixed(1) : "—"}x
+                  {(derivedOrder.notional / derivedOrder.collateral).toFixed(1)}x
                 </span>
               </div>
               <div className="flex justify-between">
@@ -511,7 +549,7 @@ export function OrderEntry() {
                     ${formatPrice(parseFloat(slPrice))}
                     {markPrice > 0 && (
                       <span className="text-text-secondary/50 ml-1">
-                        ({side === "buy" ? "-" : "+"}{ ((Math.abs(parseFloat(slPrice) - markPrice) / markPrice) * 100).toFixed(1)}%)
+                        ({side === "buy" ? "-" : "+"}{((Math.abs(parseFloat(slPrice) - markPrice) / markPrice) * 100).toFixed(1)}%)
                       </span>
                     )}
                   </span>
@@ -520,10 +558,10 @@ export function OrderEntry() {
             </div>
           )}
 
-          {/* Submit button */}
+          {/* Submit button — Jupiter-style with computed size + notional */}
           <button
             onClick={handleSubmit}
-            disabled={!connected || !size || txPhase !== "idle" || (orderType === "limit" && (!price || parseFloat(price) <= 0)) || (showTpSl && (!tpValid || !slValid))}
+            disabled={!connected || !derivedOrder || txPhase !== "idle" || (orderType === "limit" && (!price || parseFloat(price) <= 0)) || (showTpSl && (!tpValid || !slValid))}
             className={clsx(
               "flex w-full items-center justify-center gap-2 py-2.5 font-mono text-[11px] font-medium tracking-wider transition-all duration-150",
               !connected
@@ -550,9 +588,11 @@ export function OrderEntry() {
                     ? "SIGNING..."
                     : txPhase === "submitting"
                       ? "SUBMITTING..."
-                      : side === "buy"
-                        ? `BUY ${selectedSymbol}`
-                        : `SELL ${selectedSymbol}`}
+                      : derivedOrder
+                        ? `${side === "buy" ? "LONG" : "SHORT"} ${derivedOrder.baseSize.toFixed(baseDecimals)} ${selectedSymbol} ≈ $${formatPrice(derivedOrder.notional)}`
+                        : side === "buy"
+                          ? `BUY ${selectedSymbol}`
+                          : `SELL ${selectedSymbol}`}
           </button>
         </div>
 

@@ -8,8 +8,8 @@ import { useTraderStore } from "@/stores/traderStore";
 import { useToastStore } from "@/stores/toastStore";
 
 const STATUS_LABELS: Record<TxStatus, string> = {
-  simulating: "Simulating transaction...",
-  signing: "Waiting for wallet signature...",
+  simulating: "Simulating...",
+  signing: "Waiting for Signature...",
   submitting: "Submitting to Solana...",
 };
 
@@ -36,7 +36,8 @@ export function useTransactionBuilder() {
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building transaction...");
+      const label = type === "market" ? "Market Order" : "Limit Order";
+      const toastId = addToast("loading", `Building ${label}`);
 
       try {
         const builder = type === "market" ? api.buildMarketOrder : api.buildLimitOrder;
@@ -47,20 +48,20 @@ export function useTransactionBuilder() {
           instructions, publicKey, signTransaction, connection,
           (status) => {
             onStatus?.(status);
-            updateToast(toastId, { message: STATUS_LABELS[status] });
+            updateToast(toastId, { title: STATUS_LABELS[status] });
           }
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Transaction confirmed" });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed` });
         } else {
-          updateToast(toastId, { type: "info", message: "Transaction sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: `${label} Sent`, detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Transaction failed" });
+        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: e?.message });
         throw e;
       }
     },
@@ -71,7 +72,7 @@ export function useTransactionBuilder() {
     async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building cancel transaction...");
+      const toastId = addToast("loading", "Building Cancel");
 
       try {
         const response = await api.buildCancelOrders({
@@ -83,19 +84,19 @@ export function useTransactionBuilder() {
 
         const result = await buildAndSignTransaction(
           instructions, publicKey, signTransaction, connection,
-          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Order cancelled" });
+          updateToast(toastId, { type: "success", title: "Order Cancelled" });
         } else {
-          updateToast(toastId, { type: "info", message: "Cancel sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: "Cancel Sent", detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Cancel failed" });
+        updateToast(toastId, { type: "error", title: "Cancel Failed", detail: e?.message });
         throw e;
       }
     },
@@ -106,7 +107,7 @@ export function useTransactionBuilder() {
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building deposit transaction...");
+      const toastId = addToast("loading", "Building Deposit");
 
       try {
         const response = await api.buildDeposit({
@@ -117,19 +118,19 @@ export function useTransactionBuilder() {
 
         const result = await buildAndSignTransaction(
           instructions, publicKey, signTransaction, connection,
-          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Deposit confirmed" });
+          updateToast(toastId, { type: "success", title: "Deposit Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", message: "Deposit sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: "Deposit Sent", detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Deposit failed" });
+        updateToast(toastId, { type: "error", title: "Deposit Failed", detail: e?.message });
         throw e;
       }
     },
@@ -140,7 +141,7 @@ export function useTransactionBuilder() {
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building withdraw transaction...");
+      const toastId = addToast("loading", "Building Withdrawal");
 
       try {
         const response = await api.buildWithdraw({
@@ -151,19 +152,19 @@ export function useTransactionBuilder() {
 
         const result = await buildAndSignTransaction(
           instructions, publicKey, signTransaction, connection,
-          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Withdrawal confirmed" });
+          updateToast(toastId, { type: "success", title: "Withdrawal Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", message: "Withdrawal sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: "Withdrawal Sent", detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Withdrawal failed" });
+        updateToast(toastId, { type: "error", title: "Withdrawal Failed", detail: e?.message });
         throw e;
       }
     },
@@ -174,7 +175,8 @@ export function useTransactionBuilder() {
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building isolated order...");
+      const label = type === "market" ? "Isolated Market Order" : "Isolated Limit Order";
+      const toastId = addToast("loading", `Building ${label}`);
 
       try {
         const builder = type === "market" ? api.buildIsolatedMarketOrder : api.buildIsolatedLimitOrder;
@@ -185,20 +187,20 @@ export function useTransactionBuilder() {
           instructions, publicKey, signTransaction, connection,
           (status) => {
             onStatus?.(status);
-            updateToast(toastId, { message: STATUS_LABELS[status] });
+            updateToast(toastId, { title: STATUS_LABELS[status] });
           }
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Isolated order confirmed" });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed` });
         } else {
-          updateToast(toastId, { type: "info", message: "Isolated order sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: `${label} Sent`, detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Isolated order failed" });
+        updateToast(toastId, { type: "error", title: `${label} Failed`, detail: e?.message });
         throw e;
       }
     },
@@ -209,7 +211,7 @@ export function useTransactionBuilder() {
     async (fromSubaccountIndex: number, toSubaccountIndex: number, amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !signTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building collateral transfer...");
+      const toastId = addToast("loading", "Building Transfer");
 
       try {
         const response = await api.buildTransferCollateral({
@@ -222,19 +224,19 @@ export function useTransactionBuilder() {
 
         const result = await buildAndSignTransaction(
           instructions, publicKey, signTransaction, connection,
-          (status) => updateToast(toastId, { message: STATUS_LABELS[status] })
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", message: "Collateral transfer confirmed" });
+          updateToast(toastId, { type: "success", title: "Transfer Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", message: "Transfer sent — awaiting confirmation" });
+          updateToast(toastId, { type: "info", title: "Transfer Sent", detail: "Awaiting confirmation" });
         }
 
         await refreshTraderData();
         return result;
       } catch (e: any) {
-        updateToast(toastId, { type: "error", message: e?.message || "Transfer failed" });
+        updateToast(toastId, { type: "error", title: "Transfer Failed", detail: e?.message });
         throw e;
       }
     },

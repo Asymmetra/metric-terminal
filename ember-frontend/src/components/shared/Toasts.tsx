@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useToastStore, Toast } from "@/stores/toastStore";
 import clsx from "clsx";
 
@@ -35,6 +36,36 @@ function ToastIcon({ type }: { type: Toast["type"] }) {
   );
 }
 
+function CopyButton({ toast }: { toast: Toast }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    const text = toast.detail ? `${toast.title}: ${toast.detail}` : toast.title;
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="shrink-0 text-current/60 transition-colors hover:text-current"
+      title="Copy to clipboard"
+    >
+      {copied ? (
+        <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M3 8.5l3.5 3.5L13 4" />
+        </svg>
+      ) : (
+        <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <rect x="5" y="5" width="8" height="8" rx="1" />
+          <path d="M3 11V3h8" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 function ToastItem({ toast }: { toast: Toast }) {
   const removeToast = useToastStore((s) => s.removeToast);
 
@@ -50,15 +81,23 @@ function ToastItem({ toast }: { toast: Toast }) {
       )}
     >
       <ToastIcon type={toast.type} />
-      <span className="flex-1 leading-relaxed">{toast.message}</span>
-      <button
-        onClick={() => removeToast(toast.id)}
-        className="shrink-0 text-current/60 transition-colors hover:text-current"
-      >
-        <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M4 4l8 8M12 4l-8 8" />
-        </svg>
-      </button>
+      <div className="flex-1 min-w-0">
+        <span className="font-semibold leading-relaxed">{toast.title}</span>
+        {toast.detail && (
+          <p className="text-[10px] opacity-80 break-words mt-0.5 leading-relaxed">{toast.detail}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <CopyButton toast={toast} />
+        <button
+          onClick={() => removeToast(toast.id)}
+          className="shrink-0 text-current/60 transition-colors hover:text-current"
+        >
+          <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -69,7 +108,7 @@ export function Toasts() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-3 right-3 z-[200] flex flex-col gap-1.5 w-[340px]">
+    <div className="fixed top-3 right-3 z-[200] flex flex-col gap-1.5 w-[420px]">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} />
       ))}
