@@ -104,7 +104,7 @@ export default function LeaderboardPage() {
             href="/analytics"
             className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 hover:text-ember-orange transition-colors"
           >
-            Analytics
+            Profile
           </Link>
           <WalletButton />
         </div>
