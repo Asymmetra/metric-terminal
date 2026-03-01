@@ -13,15 +13,17 @@ pub async fn start_relay(
     market_cache: Arc<MarketCache>,
     broadcast: Arc<BroadcastHub>,
     symbols: Vec<String>,
+    known_traders: Option<Arc<dashmap::DashSet<String>>>,
 ) {
     for symbol in symbols {
         let ws = ws_client.clone();
         let cache = market_cache.clone();
         let bcast = broadcast.clone();
         let sym = symbol.clone();
+        let traders = known_traders.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = start_market_relay(ws, cache, bcast, &sym).await {
+            if let Err(e) = start_market_relay(ws, cache, bcast, &sym, traders).await {
                 tracing::error!("Failed to start relay for {}: {:?}", sym, e);
             }
         });
@@ -34,6 +36,7 @@ async fn start_market_relay(
     cache: Arc<MarketCache>,
     broadcast: Arc<BroadcastHub>,
     symbol: &str,
+    known_traders: Option<Arc<dashmap::DashSet<String>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Starting SDK WS relay for {}", symbol);
 
@@ -77,6 +80,7 @@ async fn start_market_relay(
     let (mut trades_rx, trades_handle) = ws_client.subscribe_to_trades(symbol.to_string())?;
     let trades_bcast = broadcast.clone();
     let trades_sym = symbol.to_string();
+    let trades_known = known_traders.clone();
     tokio::spawn(async move {
         let _keep_alive = trades_handle; // prevent drop → unsubscribe
         while let Some(update) = trades_rx.recv().await {
@@ -84,6 +88,21 @@ async fn start_market_relay(
                 .trades
                 .iter()
                 .map(|t| {
+                    // Passive trader discovery: harvest taker pubkeys from trade stream
+                    if let Some(ref known) = trades_known {
+                        if !t.taker.is_empty()
+                            && Pubkey::from_str(&t.taker).is_ok()
+                            && known.insert(t.taker.clone())
+                        {
+                            tracing::debug!("Discovered new trader from trade stream: {}", t.taker);
+                            // Persist to disk
+                            let all: Vec<String> = known.iter().map(|r| r.clone()).collect();
+                            if let Ok(json) = serde_json::to_string_pretty(&all) {
+                                let _ = std::fs::write("known_traders.json", json);
+                            }
+                        }
+                    }
+
                     let price = if t.base_amount > 0.0 {
                         t.quote_amount / t.base_amount
                     } else {

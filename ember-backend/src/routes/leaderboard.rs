@@ -24,7 +24,17 @@ async fn register(
     let _ = Pubkey::from_str(&body.authority)
         .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
 
-    state.known_traders.insert(body.authority.clone());
+    let is_new = state.known_traders.insert(body.authority.clone());
+
+    // Persist to disk if this is a new trader
+    if is_new {
+        let traders: Vec<String> = state.known_traders.iter().map(|r| r.clone()).collect();
+        if let Ok(json) = serde_json::to_string_pretty(&traders) {
+            if let Err(e) = std::fs::write("known_traders.json", json) {
+                tracing::warn!("Failed to persist known_traders.json: {}", e);
+            }
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "registered": true,

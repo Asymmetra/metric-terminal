@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
         state.market_cache.clone(),
         state.broadcast.clone(),
         relay_symbols,
+        Some(state.known_traders.clone()),
     )
     .await;
 

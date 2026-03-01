@@ -182,7 +182,8 @@ export default function LeaderboardPage() {
                 {entries.map((entry, i) => (
                   <tr
                     key={entry.authority}
-                    className="border-b border-ember-border/40 last:border-b-0 transition-colors hover:bg-surface-l1/50"
+                    className="border-b border-ember-border/40 last:border-b-0 transition-colors hover:bg-surface-l1/50 cursor-pointer"
+                    onClick={() => window.location.href = `/analytics?trader=${entry.authority}`}
                   >
                     <td className="w-16 px-3 py-2.5 text-center">
                       <span
@@ -201,7 +202,7 @@ export default function LeaderboardPage() {
                       </span>
                     </td>
                     <td className="px-3 py-2.5">
-                      <span className="font-mono text-xs text-text-primary">
+                      <span className="font-mono text-xs text-text-primary hover:text-ember-orange transition-colors">
                         {truncateAddress(entry.authority)}
                       </span>
                     </td>

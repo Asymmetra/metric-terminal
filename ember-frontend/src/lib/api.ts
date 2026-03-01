@@ -19,9 +19,27 @@ export const api = {
   getCandles: (symbol: string, timeframe = "1m", limit = 300, signal?: AbortSignal) =>
     fetchApi<any[]>(`/api/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { signal }),
   getTrader: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}`),
-  getTraderOrders: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/orders`),
-  getTraderTrades: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/trades`),
-  getTraderFunding: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/funding`),
+  getTraderOrders: (pubkey: string, opts?: { cursor?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    if (opts?.limit) params.set("limit", opts.limit.toString());
+    const qs = params.toString();
+    return fetchApi<any>(`/api/trader/${pubkey}/orders${qs ? `?${qs}` : ""}`);
+  },
+  getTraderTrades: (pubkey: string, opts?: { cursor?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    if (opts?.limit) params.set("limit", opts.limit.toString());
+    const qs = params.toString();
+    return fetchApi<any>(`/api/trader/${pubkey}/trades${qs ? `?${qs}` : ""}`);
+  },
+  getTraderFunding: (pubkey: string, opts?: { cursor?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.cursor) params.set("cursor", opts.cursor);
+    if (opts?.limit) params.set("limit", opts.limit.toString());
+    const qs = params.toString();
+    return fetchApi<any>(`/api/trader/${pubkey}/funding${qs ? `?${qs}` : ""}`);
+  },
   buildMarketOrder: (params: any) =>
     fetchApi<any>("/api/tx/market-order", { method: "POST", body: JSON.stringify(params) }),
   buildLimitOrder: (params: any) =>

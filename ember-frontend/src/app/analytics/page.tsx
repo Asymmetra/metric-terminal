@@ -2,18 +2,30 @@
 
 import { useState, useEffect } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useSearchParams } from "next/navigation";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { PnlChart } from "@/components/analytics/PnlChart";
 import { TradeStats } from "@/components/analytics/TradeStats";
 import { MarketBreakdown } from "@/components/analytics/MarketBreakdown";
 import { DrawdownChart } from "@/components/analytics/DrawdownChart";
 import { CollateralTimeline } from "@/components/analytics/CollateralTimeline";
+import { FundingChart } from "@/components/analytics/FundingChart";
+import { TradeJournal } from "@/components/analytics/TradeJournal";
+import { PnlCalendar } from "@/components/analytics/PnlCalendar";
+import { PnlDistribution } from "@/components/analytics/PnlDistribution";
+import { ActivityByHour } from "@/components/analytics/ActivityByHour";
 import Link from "next/link";
 
 const ACCESS_KEY = "ember-access";
 
+function truncateAddress(addr: string): string {
+  if (addr.length <= 12) return addr;
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
 export default function AnalyticsPage() {
   const { publicKey } = useWallet();
+  const searchParams = useSearchParams();
   const [authed, setAuthed] = useState(false);
   const [checked, setChecked] = useState(false);
 
@@ -40,7 +52,10 @@ export default function AnalyticsPage() {
     );
   }
 
-  const authority = publicKey?.toBase58();
+  // Support viewing any trader via ?trader=PUBKEY query param
+  const traderParam = searchParams.get("trader");
+  const authority = traderParam || publicKey?.toBase58();
+  const isViewingOther = !!traderParam && traderParam !== publicKey?.toBase58();
 
   return (
     <div className="flex min-h-screen flex-col bg-ember-black">
@@ -60,6 +75,14 @@ export default function AnalyticsPage() {
           <span className="font-mono text-xs font-medium text-text-primary uppercase tracking-wider">
             Analytics
           </span>
+          {isViewingOther && authority && (
+            <>
+              <div className="h-4 w-px bg-ember-border" />
+              <span className="font-mono text-[10px] text-ember-orange">
+                {truncateAddress(authority)}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <Link
@@ -67,6 +90,12 @@ export default function AnalyticsPage() {
             className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 hover:text-ember-orange transition-colors"
           >
             Terminal
+          </Link>
+          <Link
+            href="/leaderboard"
+            className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 hover:text-ember-orange transition-colors"
+          >
+            Leaderboard
           </Link>
           <WalletButton />
         </div>
@@ -92,13 +121,33 @@ export default function AnalyticsPage() {
             <TradeStats authority={authority} />
           </section>
 
-          {/* Charts row */}
+          {/* PnL Calendar */}
+          <section>
+            <PnlCalendar authority={authority} />
+          </section>
+
+          {/* Charts row: PnL + Drawdown */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" style={{ minHeight: 320 }}>
             <section className="border border-ember-border bg-surface-l1">
               <PnlChart authority={authority} />
             </section>
             <section className="border border-ember-border bg-surface-l1">
               <DrawdownChart authority={authority} />
+            </section>
+          </div>
+
+          {/* Funding & Fees Chart */}
+          <section style={{ minHeight: 260 }}>
+            <FundingChart authority={authority} />
+          </section>
+
+          {/* Activity + Distribution row */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <section>
+              <ActivityByHour authority={authority} />
+            </section>
+            <section>
+              <PnlDistribution authority={authority} />
             </section>
           </div>
 
@@ -120,6 +169,14 @@ export default function AnalyticsPage() {
               </div>
             </section>
           </div>
+
+          {/* Trade Journal */}
+          <section>
+            <h2 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
+              Trade Journal
+            </h2>
+            <TradeJournal authority={authority} />
+          </section>
         </div>
       )}
     </div>

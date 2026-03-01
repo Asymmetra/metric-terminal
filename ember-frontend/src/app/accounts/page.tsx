@@ -5,6 +5,11 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { api } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
+import { ActivityHeatmap } from "@/components/accounts/ActivityHeatmap";
+import { ExposureChart } from "@/components/accounts/ExposureChart";
+import { FundingLog } from "@/components/accounts/FundingLog";
+import { OrderHistory } from "@/components/accounts/OrderHistory";
+import { TransferCollateral } from "@/components/accounts/TransferCollateral";
 import Link from "next/link";
 import clsx from "clsx";
 
@@ -28,6 +33,21 @@ function sdkNum(val: any): number {
   if (typeof val === "string") return parseFloat(val) || 0;
   if (typeof val === "object" && val.ui != null) return parseFloat(val.ui) || 0;
   return 0;
+}
+
+function MarginBar({ usage }: { usage: number }) {
+  const clampedUsage = Math.min(Math.max(usage, 0), 100);
+  const barColor =
+    clampedUsage > 80 ? "bg-ember-red" : clampedUsage > 50 ? "bg-yellow-500" : "bg-ember-green";
+
+  return (
+    <div className="h-1.5 w-full bg-surface-l2 overflow-hidden">
+      <div
+        className={clsx("h-full transition-all duration-500", barColor)}
+        style={{ width: `${clampedUsage}%` }}
+      />
+    </div>
+  );
 }
 
 function SubaccountCard({ account }: { account: SubaccountData }) {
@@ -82,6 +102,9 @@ function SubaccountCard({ account }: { account: SubaccountData }) {
           {account.riskState || "—"}
         </span>
       </div>
+
+      {/* Margin utilization bar */}
+      <MarginBar usage={marginUsage} />
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-px bg-ember-border/40 sm:grid-cols-3">
@@ -188,6 +211,8 @@ export default function AccountsPage() {
   const [checked, setChecked] = useState(false);
   const [accounts, setAccounts] = useState<SubaccountData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [activeTab, setActiveTab] = useState<"overview" | "orders" | "funding">("overview");
 
   useEffect(() => {
     setAuthed(sessionStorage.getItem(ACCESS_KEY) === "1");
@@ -225,6 +250,14 @@ export default function AccountsPage() {
       </div>
     );
   }
+
+  const subaccountOptions = accounts
+    .sort((a, b) => (a.traderSubaccountIndex ?? 0) - (b.traderSubaccountIndex ?? 0))
+    .map((a) => ({
+      index: a.traderSubaccountIndex ?? 0,
+      label: (a.traderSubaccountIndex ?? 0) === 0 ? "Cross Margin" : `Isolated #${a.traderSubaccountIndex}`,
+      collateral: sdkNum(a.effectiveCollateral),
+    }));
 
   return (
     <div className="flex min-h-screen flex-col bg-ember-black">
@@ -284,11 +317,25 @@ export default function AccountsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-3 p-4">
+          {/* Activity Heatmap */}
+          <ActivityHeatmap authority={authority} />
+
+          {/* Header row with count + transfer button */}
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
               {accounts.length} subaccount{accounts.length !== 1 ? "s" : ""}
             </span>
+            {accounts.length >= 2 && (
+              <button
+                onClick={() => setShowTransfer(true)}
+                className="px-3 py-1 border border-ember-orange/40 font-mono text-[10px] uppercase tracking-wider text-ember-orange hover:bg-ember-orange/10 transition-colors"
+              >
+                Transfer
+              </button>
+            )}
           </div>
+
+          {/* Subaccount cards + Exposure */}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {accounts
               .sort((a, b) => (a.traderSubaccountIndex ?? 0) - (b.traderSubaccountIndex ?? 0))
@@ -299,7 +346,48 @@ export default function AccountsPage() {
                 />
               ))}
           </div>
+
+          {/* Exposure Chart */}
+          <ExposureChart authority={authority} />
+
+          {/* Tabs: Orders / Funding */}
+          <div className="flex border-b border-ember-border mt-2">
+            {(["overview", "orders", "funding"] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={clsx(
+                  "px-4 py-2 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                  activeTab === tab
+                    ? "border-b border-ember-orange text-text-primary"
+                    : "text-text-secondary/50 hover:text-text-secondary"
+                )}
+              >
+                {tab === "overview" ? "Overview" : tab === "orders" ? "Order History" : "Funding Log"}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {activeTab === "orders" && (
+            <section>
+              <OrderHistory authority={authority} />
+            </section>
+          )}
+          {activeTab === "funding" && (
+            <section>
+              <FundingLog authority={authority} />
+            </section>
+          )}
         </div>
+      )}
+
+      {/* Transfer modal */}
+      {showTransfer && (
+        <TransferCollateral
+          onClose={() => setShowTransfer(false)}
+          subaccounts={subaccountOptions}
+        />
       )}
     </div>
   );
