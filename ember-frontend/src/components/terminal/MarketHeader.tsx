@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
@@ -9,6 +11,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useTraderSync } from "@/hooks/useTraderSync";
 import { WalletButton } from "@/components/shared/WalletButton";
+import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import clsx from "clsx";
 
 function MarketSelector() {
@@ -103,6 +106,9 @@ export function MarketHeader() {
   useMarkets();
   useTraderSync();
 
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const pathname = usePathname();
+
   const stats = useStatsStore((s) => s.stats);
   const traderConnected = useTraderStore((s) => s.connected);
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
@@ -167,10 +173,46 @@ export function MarketHeader() {
         </>
       )}
 
-      {/* Spacer + Wallet */}
-      <div className="ml-auto">
-        <WalletButton />
-      </div>
+      {/* Spacer */}
+      <div className="ml-auto" />
+
+      {/* Nav links */}
+      {(
+        [
+          { href: "/terminal", label: "Terminal" },
+          { href: "/analytics", label: "Analytics" },
+          { href: "/leaderboard", label: "Leaderboard" },
+          { href: "/accounts", label: "Accounts" },
+        ] as const
+      ).map(({ href, label }) => (
+        <Link
+          key={href}
+          href={href}
+          className={clsx(
+            "font-mono text-[10px] uppercase tracking-wider transition-colors",
+            pathname === href
+              ? "text-ember-orange"
+              : "text-text-secondary/60 hover:text-text-secondary"
+          )}
+        >
+          {label}
+        </Link>
+      ))}
+
+      <StatSeparator />
+
+      {/* Deposit button */}
+      <button
+        onClick={() => setShowDepositModal(true)}
+        className="border border-ember-orange/60 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-ember-orange transition-colors hover:bg-ember-orange/10"
+      >
+        Deposit
+      </button>
+
+      {/* Wallet */}
+      <WalletButton />
+
+      {showDepositModal && <DepositWithdraw onClose={() => setShowDepositModal(false)} />}
     </div>
   );
 }
