@@ -71,7 +71,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: `${label} Confirmed` });
         } else {
-          updateToast(toastId, { type: "info", title: `${label} Sent`, detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
         }
 
         await refreshTraderData();
@@ -106,7 +106,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Order Cancelled" });
         } else {
-          updateToast(toastId, { type: "info", title: "Cancel Sent", detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out before landing. Your order was NOT cancelled — please try again." });
         }
 
         await refreshTraderData();
@@ -140,7 +140,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Deposit Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", title: "Deposit Sent", detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
         }
 
         await refreshTraderData();
@@ -174,7 +174,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Withdrawal Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", title: "Withdrawal Sent", detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
         }
 
         await refreshTraderData();
@@ -210,7 +210,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: `${label} Confirmed` });
         } else {
-          updateToast(toastId, { type: "info", title: `${label} Sent`, detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
         }
 
         await refreshTraderData();
@@ -246,7 +246,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Transfer Confirmed" });
         } else {
-          updateToast(toastId, { type: "info", title: "Transfer Sent", detail: "Awaiting confirmation" });
+          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again." });
         }
 
         await refreshTraderData();
