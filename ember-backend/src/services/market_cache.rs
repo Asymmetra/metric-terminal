@@ -14,7 +14,8 @@ impl MarketCache {
     }
 
     pub fn get_orderbook(&self, symbol: &str) -> Option<OrderbookSnapshot> {
-        self.orderbooks.get(symbol).map(|r| OrderbookSnapshot {
+        let key = symbol.to_uppercase();
+        self.orderbooks.get(&key).map(|r| OrderbookSnapshot {
             bids: r.bids.clone(),
             asks: r.asks.clone(),
             symbol: r.symbol.clone(),
@@ -23,6 +24,7 @@ impl MarketCache {
     }
 
     pub fn update_orderbook(&self, symbol: &str, bids: Vec<OrderbookLevel>, asks: Vec<OrderbookLevel>) {
+        let key = symbol.to_uppercase();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -31,10 +33,10 @@ impl MarketCache {
         let snapshot = OrderbookSnapshot {
             bids,
             asks,
-            symbol: symbol.to_string(),
+            symbol: key.clone(),
             timestamp: now,
         };
 
-        self.orderbooks.insert(symbol.to_string(), snapshot);
+        self.orderbooks.insert(key, snapshot);
     }
 }

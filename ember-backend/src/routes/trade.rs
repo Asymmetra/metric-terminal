@@ -71,6 +71,8 @@ pub struct CancelOrdersRequest {
     pub authority: String,
     pub symbol: String,
     pub order_ids: Vec<CancelOrderId>,
+    #[serde(default)]
+    pub subaccount_index: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -339,7 +341,9 @@ async fn cancel_orders(
         ));
     }
     let authority = parse_authority(&req.authority)?;
-    let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
+    let subaccount_index = req.subaccount_index.unwrap_or(0);
+    validate_subaccount_index(subaccount_index)?;
+    let trader_pda = TraderKey::derive_pda(&authority, 0, subaccount_index);
 
     let metadata = state.metadata.read().await;
 

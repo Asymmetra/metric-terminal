@@ -24,7 +24,7 @@ async fn get_candles(
         .timeframe
         .unwrap_or_else(|| "1m".to_string())
         .to_lowercase();
-    let limit = query.limit.unwrap_or(300);
+    let limit = query.limit.unwrap_or(300).min(1000);
 
     let timeframe = Timeframe::from_str(&tf_str)
         .map_err(|e| AppError::BadRequest(format!("Invalid timeframe: {}", e)))?;
