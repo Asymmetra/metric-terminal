@@ -140,11 +140,25 @@ async fn get_leaderboard(
                         "cumulative_pnl": cumulative_pnl,
                         "fees": cumulative_fees,
                     }));
+                } else {
+                    // PnL returned OK but no data points — include trader with zero values
+                    entries.push(serde_json::json!({
+                        "authority": pubkey_str,
+                        "pnl": 0.0,
+                        "cumulative_pnl": 0.0,
+                        "fees": 0.0,
+                    }));
                 }
             }
             Err(e) => {
                 tracing::warn!("Leaderboard: failed to fetch PnL for {}: {}", pubkey_str, e);
-                continue;
+                // Still include the trader so they appear on the leaderboard
+                entries.push(serde_json::json!({
+                    "authority": pubkey_str,
+                    "pnl": 0.0,
+                    "cumulative_pnl": 0.0,
+                    "fees": 0.0,
+                }));
             }
         }
     }
