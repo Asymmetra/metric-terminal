@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useMarketStore } from "@/stores/marketStore";
+import { useStatsStore } from "@/stores/statsStore";
 import { wsClient } from "@/lib/ws";
 import { COLORS } from "@/lib/constants";
 import clsx from "clsx";
@@ -20,6 +21,7 @@ export function Chart() {
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const candleSeriesRef = useRef<any>(null);
   const volumeSeriesRef = useRef<any>(null);
+  const currentCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState("1m");
 
@@ -35,13 +37,9 @@ export function Chart() {
     const c = data.candle;
     // Bug fix #1: Backend sends ms timestamps, Lightweight Charts expects seconds
     const time = c.time > 1e12 ? Math.floor(c.time / 1000) : c.time;
-    candleSeriesRef.current.update({
-      time,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    });
+    const candle = { time, open: c.open, high: c.high, low: c.low, close: c.close };
+    currentCandleRef.current = candle;
+    candleSeriesRef.current.update(candle);
     if (volumeSeriesRef.current) {
       volumeSeriesRef.current.update({
         time,
@@ -144,6 +142,18 @@ export function Chart() {
           }));
           candleSeries.setData(normalized);
 
+          // Seed the current candle ref from the last historical candle
+          if (normalized.length > 0) {
+            const last = normalized[normalized.length - 1];
+            currentCandleRef.current = {
+              time: last.time,
+              open: last.open,
+              high: last.high,
+              low: last.low,
+              close: last.close,
+            };
+          }
+
           const volumeData = normalized.map((c: any) => ({
             time: c.time,
             value: c.volume || 0,
@@ -189,8 +199,47 @@ export function Chart() {
       chart?.remove();
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      currentCandleRef.current = null;
     };
   }, [selectedSymbol, activeTimeframe, handleCandleUpdate]);
+
+  // Real-time price tick: update current candle's close from mark_price
+  // This bridges the gap between infrequent WS candle events and the
+  // continuously-updating mark price from the stats channel.
+  useEffect(() => {
+    let lastPrice = 0;
+    const unsub = useStatsStore.subscribe((state) => {
+      const markPrice = state.stats?.mark_price;
+      if (!markPrice || markPrice === lastPrice || !candleSeriesRef.current) return;
+      lastPrice = markPrice;
+
+      const current = currentCandleRef.current;
+      if (!current) {
+        // No candle yet — compute the current candle time bucket
+        const tfSeconds: Record<string, number> = {
+          "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400,
+        };
+        const interval = tfSeconds[activeTimeframeRef.current] || 60;
+        const now = Math.floor(Date.now() / 1000);
+        const time = Math.floor(now / interval) * interval;
+        currentCandleRef.current = {
+          time: time as any,
+          open: markPrice,
+          high: markPrice,
+          low: markPrice,
+          close: markPrice,
+        };
+        candleSeriesRef.current.update(currentCandleRef.current);
+        return;
+      }
+      // Update the current candle with the latest price tick
+      current.close = markPrice;
+      if (markPrice > current.high) current.high = markPrice;
+      if (markPrice < current.low) current.low = markPrice;
+      candleSeriesRef.current.update({ ...current });
+    });
+    return unsub;
+  }, [selectedSymbol, activeTimeframe]);
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
