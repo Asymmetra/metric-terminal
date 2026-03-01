@@ -4,10 +4,9 @@ import { ReactNode } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 
 interface TerminalGridProps {
-  orderbook: ReactNode;
+  marketData: ReactNode;
   chart: ReactNode;
   orderEntry: ReactNode;
-  tradeHistory: ReactNode;
   positions: ReactNode;
 }
 
@@ -24,37 +23,33 @@ function ResizeHandle({ direction = "vertical" }: { direction?: "vertical" | "ho
 }
 
 export function TerminalGrid({
-  orderbook,
+  marketData,
   chart,
   orderEntry,
-  tradeHistory,
   positions,
 }: TerminalGridProps) {
   return (
     <Group orientation="vertical" className="flex-1 overflow-hidden">
-      {/* Top row: orderbook | chart+order | trades */}
+      {/* Top row: market data | chart | order entry */}
       <Panel defaultSize="70%" minSize="40%">
         <Group orientation="horizontal" className="h-full">
-          {/* Left: Orderbook */}
+          {/* Left: Tabbed Book/Trades */}
           <Panel defaultSize="20%" minSize="12%" maxSize="35%">
-            <div className="h-full bg-surface-l1 overflow-hidden">{orderbook}</div>
+            <div className="h-full bg-surface-l1 overflow-hidden">{marketData}</div>
           </Panel>
 
           <ResizeHandle direction="vertical" />
 
-          {/* Center: Chart + Order Entry */}
+          {/* Center: Chart */}
           <Panel defaultSize="55%" minSize="30%">
-            <div className="h-full bg-surface-l1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-hidden">{chart}</div>
-              <div className="border-t border-ember-border">{orderEntry}</div>
-            </div>
+            <div className="h-full bg-surface-l1 overflow-hidden">{chart}</div>
           </Panel>
 
           <ResizeHandle direction="vertical" />
 
-          {/* Right: Trade History */}
-          <Panel defaultSize="25%" minSize="12%" maxSize="35%">
-            <div className="h-full bg-surface-l1 overflow-hidden">{tradeHistory}</div>
+          {/* Right: Order Entry */}
+          <Panel defaultSize="25%" minSize="15%" maxSize="35%">
+            <div className="h-full bg-surface-l1 overflow-auto">{orderEntry}</div>
           </Panel>
         </Group>
       </Panel>

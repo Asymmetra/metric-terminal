@@ -89,8 +89,8 @@ export function Orderbook() {
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const totalHeight = entry.contentRect.height;
-        // Subtract: header(~28px) + column headers(~24px) + spread bar(24px)
-        const available = totalHeight - 76;
+        // Subtract: column headers(~24px) + spread bar(24px)
+        const available = totalHeight - 48;
         const rowsPerSide = Math.max(1, Math.floor(available / 2 / 22));
         setMaxRows(rowsPerSide);
       }
@@ -163,13 +163,6 @@ export function Orderbook() {
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-ember-border px-2 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-text-secondary">
-          Order Book
-        </span>
-      </div>
-
       {/* Column headers */}
       <div className="grid grid-cols-3 px-2 py-1 text-[10px] text-text-secondary/70">
         <span>Price</span>

@@ -1,20 +1,15 @@
 "use client";
 
 import { useTradeStore } from "@/stores/tradeStore";
+import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { formatPrice, formatSize } from "@/lib/format";
 
 export function TradeHistory() {
   const trades = useTradeStore((s) => s.trades);
+  const openRecentTrade = useTradeDetailStore((s) => s.openRecentTrade);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center border-b border-ember-border px-2 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-text-secondary">
-          Recent Trades
-        </span>
-      </div>
-
       {/* Column headers */}
       <div className="grid grid-cols-3 px-2 py-1 text-[10px] text-text-secondary/70">
         <span>Price</span>
@@ -27,7 +22,8 @@ export function TradeHistory() {
         {trades.map((trade, i) => (
           <div
             key={`${trade.timestamp}-${trade.price}-${trade.size}-${i}`}
-            className="grid grid-cols-3 px-2 font-mono text-[11px] leading-none transition-colors hover:bg-surface-l2/40 trade-slide-in"
+            onClick={() => openRecentTrade(trade)}
+            className="grid cursor-pointer grid-cols-3 px-2 font-mono text-[11px] leading-none transition-colors hover:bg-surface-l2/40 trade-slide-in"
             style={{ height: "22px", alignItems: "center" }}
           >
             <span className={trade.side === "bid" ? "text-ember-green" : "text-ember-red"}>

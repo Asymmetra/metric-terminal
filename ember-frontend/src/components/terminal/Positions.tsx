@@ -9,6 +9,7 @@ import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { wsClient } from "@/lib/ws";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
+import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
 
@@ -36,6 +37,8 @@ export function Positions() {
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
   const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, connected } = useTransactionBuilder();
   const { publicKey } = useWallet();
+  const openPosition = useTradeDetailStore((s) => s.openPosition);
+  const openTradeHistoryDetail = useTradeDetailStore((s) => s.openTradeHistory);
 
   // Subscribe to stats WS for all markets with open positions (not just selected)
   const positionSymbols = useMemo(
@@ -234,7 +237,8 @@ export function Positions() {
                     return (
                       <tr
                         key={posKey}
-                        className="font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
+                        onClick={() => openPosition(pos)}
+                        className="cursor-pointer font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
                         style={{ height: "28px" }}
                       >
                         <td className="px-3 text-text-primary">{pos.symbol}-PERP</td>
@@ -263,7 +267,7 @@ export function Positions() {
                           </span>
                           {pos.margin_mode === "isolated" && (
                             <button
-                              onClick={() => setCollateralPos(pos)}
+                              onClick={(e) => { e.stopPropagation(); setCollateralPos(pos); }}
                               className="ml-1 font-mono text-[9px] text-text-secondary/60 hover:text-ember-orange transition-colors"
                             >
                               +/−
@@ -282,7 +286,7 @@ export function Positions() {
                         </td>
                         <td className="px-3 text-right">
                           <button
-                            onClick={() => handleClose(pos)}
+                            onClick={(e) => { e.stopPropagation(); handleClose(pos); }}
                             disabled={closingSymbol === pos.symbol || closingAll}
                             className={clsx(
                               "font-mono text-[10px] uppercase tracking-wider transition-colors",
@@ -383,7 +387,8 @@ export function Positions() {
                   {tradeHistory.map((trade) => (
                     <tr
                       key={`${trade.transactionSignature}-${trade.timestamp}`}
-                      className="font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
+                      onClick={() => openTradeHistoryDetail(trade)}
+                      className="cursor-pointer font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
                       style={{ height: "28px" }}
                     >
                       <td className="px-3 text-text-primary">{trade.marketSymbol}-PERP</td>
