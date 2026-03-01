@@ -213,6 +213,8 @@ export function Positions() {
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Mark</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Collateral</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Unreal. PnL</th>
+                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">ROI%</th>
+                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Liq. Dist</th>
                     <th className="px-3 py-1.5 text-center font-normal uppercase tracking-wider">Mode</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">TP</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">SL</th>
@@ -234,6 +236,24 @@ export function Positions() {
                   {positions.map((pos) => {
                     const isLong = pos.side.toLowerCase() === "long";
                     const posKey = `${pos.symbol}-${pos.subaccount_index}`;
+
+                    // ROI%
+                    const notional = pos.size * pos.mark_price;
+                    const maxLev = 10; // fallback max leverage
+                    const roi = pos.margin_mode === "isolated" && pos.allocated_collateral > 0
+                      ? (pos.unrealized_pnl / pos.allocated_collateral) * 100
+                      : notional > 0 ? (pos.unrealized_pnl / (notional / maxLev)) * 100 : 0;
+
+                    // Liquidation distance
+                    const effLeverage = pos.margin_mode === "isolated" && pos.allocated_collateral > 0
+                      ? notional / pos.allocated_collateral : 1;
+                    const mmr = 0.025;
+                    const liqPrice = isLong
+                      ? pos.entry_price * (1 - 1 / effLeverage + mmr)
+                      : pos.entry_price * (1 + 1 / effLeverage - mmr);
+                    const liqDistPct = pos.mark_price > 0
+                      ? Math.abs((pos.mark_price - liqPrice) / pos.mark_price) * 100 : 999;
+
                     return (
                       <tr
                         key={posKey}
@@ -255,6 +275,18 @@ export function Positions() {
                         </td>
                         <td className={clsx("px-3 text-right font-medium", pos.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red")}>
                           {pos.unrealized_pnl >= 0 ? "+" : ""}{formatUsd(pos.unrealized_pnl)}
+                        </td>
+                        <td className={clsx("px-3 text-right font-mono text-[10px]", roi >= 0 ? "text-ember-green" : "text-ember-red")}>
+                          {roi >= 0 ? "+" : ""}{roi.toFixed(1)}%
+                        </td>
+                        <td className={clsx(
+                          "px-3 text-right font-mono text-[10px]",
+                          effLeverage <= 1 ? "text-text-secondary/50"
+                            : liqDistPct < 5 ? "text-ember-red"
+                            : liqDistPct < 10 ? "text-ember-orange"
+                            : "text-ember-green"
+                        )}>
+                          {effLeverage <= 1 ? "—" : `${liqDistPct.toFixed(1)}%`}
                         </td>
                         <td className="px-3 text-center">
                           <span className={clsx(

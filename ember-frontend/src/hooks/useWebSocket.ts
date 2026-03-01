@@ -22,6 +22,7 @@ export function useWebSocket() {
     setOrderbook([], []);
     setTrades([]);
     setStats(null);
+    useStatsStore.getState().setOpen24h(0);
 
     const abortController = new AbortController();
     const { signal } = abortController;
@@ -35,11 +36,24 @@ export function useWebSocket() {
           maxLeverage: data.maxLeverage || 10,
           baseLotsDecimals: data.baseLotsDecimals || 2,
           tickSize: data.tickSize || 100,
+          fundingIntervalSeconds: data.fundingIntervalSeconds || 3600,
         });
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("[REST] Market config fetch failed:", err);
+      });
+
+    // Fetch 1D candle for 24h open price
+    api.getCandles(selectedSymbol, "1d", 1, signal)
+      .then((candles) => {
+        if (candles?.[0]) {
+          useStatsStore.getState().setOpen24h(candles[0].open);
+        }
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("[REST] 1D candle fetch failed:", err);
       });
 
     // Fetch initial orderbook snapshot via REST (immediate data)

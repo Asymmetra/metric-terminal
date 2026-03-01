@@ -10,15 +10,38 @@ interface OrderbookLevel {
   size: number;
 }
 
+const GROUPING_OPTIONS = [0.01, 0.05, 0.10, 0.50, 1.00, 5.00, 10.00];
+
+function aggregateLevels(
+  levels: OrderbookLevel[],
+  increment: number,
+  side: "bid" | "ask"
+): OrderbookLevel[] {
+  if (increment <= 0) return levels;
+  const map = new Map<number, number>();
+  for (const level of levels) {
+    const bucket =
+      side === "bid"
+        ? Math.floor(level.price / increment) * increment
+        : Math.ceil(level.price / increment) * increment;
+    map.set(bucket, (map.get(bucket) || 0) + level.size);
+  }
+  const result = Array.from(map.entries()).map(([price, size]) => ({ price, size }));
+  return side === "bid"
+    ? result.sort((a, b) => b.price - a.price)
+    : result.sort((a, b) => a.price - b.price);
+}
+
 interface RowProps {
   level: OrderbookLevel;
   cumulative: number;
   maxCumulative: number;
   side: "bid" | "ask";
+  priceDecimals: number;
   onClickPrice: (price: number) => void;
 }
 
-const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulative, side, onClickPrice }: RowProps) {
+const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulative, side, priceDecimals, onClickPrice }: RowProps) {
   const depthPct = maxCumulative > 0 ? (cumulative / maxCumulative) * 100 : 0;
   const isBid = side === "bid";
   const prevSizeRef = useRef(level.size);
@@ -62,7 +85,7 @@ const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulati
       {/* Row data */}
       <div className="relative grid w-full grid-cols-3 font-mono text-[11px] leading-none">
         <span className={isBid ? "text-ember-green" : "text-ember-red"}>
-          {formatPrice(level.price)}
+          {formatPrice(level.price, priceDecimals)}
         </span>
         <span className="text-right text-text-primary/90">
           {formatSize(level.size)}
@@ -81,6 +104,7 @@ export function Orderbook() {
   const setFillPrice = useOrderbookStore((s) => s.setFillPrice);
   const containerRef = useRef<HTMLDivElement>(null);
   const [maxRows, setMaxRows] = useState(15);
+  const [grouping, setGrouping] = useState(0.10);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -110,10 +134,17 @@ export function Orderbook() {
     setFillPrice(price);
   }, [setFillPrice]);
 
+  // Aggregate levels by grouping increment
+  const groupedBids = useMemo(() => aggregateLevels(bids, grouping, "bid"), [bids, grouping]);
+  const groupedAsks = useMemo(() => aggregateLevels(asks, grouping, "ask"), [asks, grouping]);
+
+  // Decimal places based on grouping
+  const priceDecimals = grouping >= 1 ? 0 : grouping >= 0.1 ? 1 : 2;
+
   // Compute cumulative totals and max for depth bar proportions
   const { displayAsks, displayBids, maxCumulative } = useMemo(() => {
-    const askSlice = asks.slice(0, maxRows);
-    const bidSlice = bids.slice(0, maxRows);
+    const askSlice = groupedAsks.slice(0, maxRows);
+    const bidSlice = groupedBids.slice(0, maxRows);
 
     // Cumulative: asks top→bottom (closest to spread first), bids top→bottom
     const askCumulatives = askSlice.reduce<number[]>((acc, l) => {
@@ -137,7 +168,7 @@ export function Orderbook() {
       displayBids: bidSlice.map((l, i) => ({ level: l, cumulative: bidCumulatives[i] })),
       maxCumulative: maxCum,
     };
-  }, [bids, asks, maxRows]);
+  }, [groupedBids, groupedAsks, maxRows]);
 
   const paddedAsks = useMemo(() => {
     const padded = [...displayAsks];
@@ -156,23 +187,36 @@ export function Orderbook() {
     return padded;
   }, [displayBids, maxRows]);
 
-  // Spread calculation
+  // Spread calculation using grouped data
   const spread = useMemo(() => {
-    if (bids[0] && asks[0]) {
-      const spreadVal = asks[0].price - bids[0].price;
-      const spreadPct = (spreadVal / asks[0].price) * 100;
+    if (groupedBids[0] && groupedAsks[0]) {
+      const spreadVal = groupedAsks[0].price - groupedBids[0].price;
+      const spreadPct = (spreadVal / groupedAsks[0].price) * 100;
       return { value: spreadVal, pct: spreadPct };
     }
     return null;
-  }, [bids, asks]);
+  }, [groupedBids, groupedAsks]);
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
       {/* Column headers */}
-      <div className="grid grid-cols-3 px-2 py-1 text-[10px] text-text-secondary/70">
-        <span>Price</span>
-        <span className="text-right">Size</span>
-        <span className="text-right">Total</span>
+      <div className="flex items-center px-2 py-1 text-[10px] text-text-secondary/70">
+        <div className="grid flex-1 grid-cols-3">
+          <span>Price</span>
+          <span className="text-right">Size</span>
+          <span className="text-right">Total</span>
+        </div>
+        <select
+          value={grouping}
+          onChange={(e) => setGrouping(parseFloat(e.target.value))}
+          className="ml-1 bg-surface-l2 border border-ember-border/50 px-1 py-0.5 font-mono text-[9px] text-text-secondary/70 focus:outline-none focus:border-ember-orange/40 cursor-pointer"
+        >
+          {GROUPING_OPTIONS.map((g) => (
+            <option key={g} value={g}>
+              {g >= 1 ? g.toFixed(0) : g.toFixed(2)}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Asks (sells) — reversed so cheapest is at bottom near spread */}
@@ -188,6 +232,7 @@ export function Orderbook() {
                 cumulative={item.cumulative}
                 maxCumulative={maxCumulative}
                 side="ask"
+                priceDecimals={priceDecimals}
                 onClickPrice={handleClickPrice}
               />
             )
@@ -202,7 +247,7 @@ export function Orderbook() {
         </span>
         <span className="font-mono text-[10px] text-text-secondary/70">
           {spread
-            ? `${formatPrice(spread.value)} (${spread.pct.toFixed(2)}%)`
+            ? `${formatPrice(spread.value, priceDecimals)} (${spread.pct.toFixed(2)}%)`
             : "—"}
         </span>
       </div>
@@ -220,6 +265,7 @@ export function Orderbook() {
                 cumulative={item.cumulative}
                 maxCumulative={maxCumulative}
                 side="bid"
+                priceDecimals={priceDecimals}
                 onClickPrice={handleClickPrice}
               />
             )

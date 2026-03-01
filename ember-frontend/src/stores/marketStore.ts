@@ -5,6 +5,7 @@ export interface MarketConfig {
   maxLeverage: number;
   baseLotsDecimals: number;
   tickSize: number;
+  fundingIntervalSeconds: number;
 }
 
 interface MarketStore {

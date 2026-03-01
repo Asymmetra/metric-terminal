@@ -619,6 +619,29 @@ export function OrderEntry() {
                 <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Init Margin</span>
                 <span className="font-mono text-[11px] text-text-secondary">{formatUsd(initialMargin)}</span>
               </div>
+              {collateral > 0 && (() => {
+                const marginPct = (initialMargin / collateral) * 100;
+                const barColor = marginPct > 80 ? "bg-ember-red" : marginPct > 50 ? "bg-ember-orange" : "bg-ember-green";
+                return (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Margin Used</span>
+                      <span className={clsx(
+                        "font-mono text-[11px]",
+                        marginPct > 80 ? "text-ember-red" : marginPct > 50 ? "text-ember-orange" : "text-ember-green"
+                      )}>
+                        {marginPct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="h-1 w-full bg-surface-l2 overflow-hidden">
+                      <div
+                        className={clsx("h-full transition-all duration-300", barColor)}
+                        style={{ width: `${Math.min(marginPct, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Unreal. PnL</span>
                 <span className={clsx(

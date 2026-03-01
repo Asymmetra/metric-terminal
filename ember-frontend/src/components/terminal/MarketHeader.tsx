@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMarketStore } from "@/stores/marketStore";
@@ -101,6 +101,31 @@ function StatSeparator() {
   return <div className="h-6 w-px bg-ember-border/60" />;
 }
 
+function FundingCountdown({ intervalSeconds }: { intervalSeconds: number }) {
+  const [remaining, setRemaining] = useState("");
+
+  useEffect(() => {
+    function update() {
+      const now = Math.floor(Date.now() / 1000);
+      const next = Math.ceil(now / intervalSeconds) * intervalSeconds;
+      const diff = next - now;
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      setRemaining(`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+    }
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [intervalSeconds]);
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] leading-none text-text-secondary/60">Next Funding</span>
+      <span className="font-mono text-xs leading-none text-text-secondary">{remaining}</span>
+    </div>
+  );
+}
+
 export function MarketHeader() {
   useWebSocket();
   useMarkets();
@@ -110,6 +135,8 @@ export function MarketHeader() {
   const pathname = usePathname();
 
   const stats = useStatsStore((s) => s.stats);
+  const open24h = useStatsStore((s) => s.open24h);
+  const marketConfig = useMarketStore((s) => s.marketConfig);
   const traderConnected = useTraderStore((s) => s.connected);
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
@@ -137,6 +164,21 @@ export function MarketHeader() {
         <>
           <Stat label="Last" value={`$${formatPrice(stats.last_price)}`} />
 
+          {open24h != null && open24h > 0 && (() => {
+            const change = stats.mark_price - open24h;
+            const changePct = (change / open24h) * 100;
+            const positive = change >= 0;
+            return (
+              <>
+                <Stat
+                  label="24h Change"
+                  value={`${positive ? "+" : ""}${formatPrice(change)} (${positive ? "+" : ""}${changePct.toFixed(2)}%)`}
+                  colorClass={positive ? "text-ember-green" : "text-ember-red"}
+                />
+              </>
+            );
+          })()}
+
           <StatSeparator />
 
           <Stat label="Index" value={`$${formatPrice(stats.index_price)}`} />
@@ -148,6 +190,10 @@ export function MarketHeader() {
             value={formatPercent(stats.funding_rate)}
             colorClass={stats.funding_rate >= 0 ? "text-ember-green" : "text-ember-red"}
           />
+
+          {marketConfig && (
+            <FundingCountdown intervalSeconds={marketConfig.fundingIntervalSeconds} />
+          )}
 
           <StatSeparator />
 
