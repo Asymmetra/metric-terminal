@@ -160,3 +160,12 @@ body {
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+
+/* ── Scrollbar Hide Utility ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

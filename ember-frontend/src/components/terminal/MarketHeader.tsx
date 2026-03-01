@@ -12,6 +12,7 @@ import { useMarkets } from "@/hooks/useMarkets";
 import { useTraderSync } from "@/hooks/useTraderSync";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import clsx from "clsx";
 
 function MarketSelector() {
@@ -131,6 +132,7 @@ export function MarketHeader() {
   useMarkets();
   useTraderSync();
 
+  const isMobile = useIsMobile();
   const [showDepositModal, setShowDepositModal] = useState(false);
   const pathname = usePathname();
 
@@ -141,6 +143,66 @@ export function MarketHeader() {
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const collateral = useTraderStore((s) => s.collateral);
+
+  if (isMobile) {
+    return (
+      <div className="border-b border-ember-border bg-surface-l1">
+        {/* Row 1: Market selector + price + deposit + wallet */}
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+          <div className="flex items-center gap-2">
+            <MarketSelector />
+            {stats && (
+              <span
+                className="font-mono text-base font-semibold text-text-primary"
+                style={{ letterSpacing: "-0.02em" }}
+              >
+                ${formatPrice(stats.mark_price)}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDepositModal(true)}
+              className="border border-ember-orange/60 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-ember-orange transition-colors hover:bg-ember-orange/10"
+            >
+              Deposit
+            </button>
+            <WalletButton />
+          </div>
+        </div>
+
+        {/* Row 2: Scrollable stats */}
+        {stats && (
+          <div className="scrollbar-hide flex items-center gap-3 overflow-x-auto border-t border-ember-border/50 px-3 py-1">
+            {open24h != null && open24h > 0 && (() => {
+              const change = stats.mark_price - open24h;
+              const changePct = (change / open24h) * 100;
+              const positive = change >= 0;
+              return (
+                <Stat
+                  label="24h"
+                  value={`${positive ? "+" : ""}${changePct.toFixed(2)}%`}
+                  colorClass={positive ? "text-ember-green" : "text-ember-red"}
+                />
+              );
+            })()}
+            <Stat
+              label="Funding"
+              value={formatPercent(stats.funding_rate)}
+              colorClass={stats.funding_rate >= 0 ? "text-ember-green" : "text-ember-red"}
+            />
+            {marketConfig && (
+              <FundingCountdown intervalSeconds={marketConfig.fundingIntervalSeconds} />
+            )}
+            <Stat label="OI" value={`$${abbreviateNumber(stats.open_interest)}`} />
+            <Stat label="Vol" value={`$${abbreviateNumber(stats.volume_24h)}`} />
+          </div>
+        )}
+
+        {showDepositModal && <DepositWithdraw onClose={() => setShowDepositModal(false)} />}
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-4 border-b border-ember-border bg-surface-l1 px-3 py-1.5">

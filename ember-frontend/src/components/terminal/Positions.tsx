@@ -203,7 +203,8 @@ export function Positions() {
         {activeTab === "positions" && (
           <>
             {positions.length > 0 ? (
-              <table className="w-full">
+              <div className="scrollbar-hide overflow-x-auto">
+              <table className="w-full min-w-[800px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
@@ -335,6 +336,7 @@ export function Positions() {
                   })}
                 </tbody>
               </table>
+              </div>
             ) : (
               <EmptyState message={connected ? "No open positions" : "Connect wallet to view positions"} />
             )}
@@ -344,7 +346,8 @@ export function Positions() {
         {activeTab === "orders" && (
           <>
             {allOrders.length > 0 ? (
-              <table className="w-full">
+              <div className="scrollbar-hide overflow-x-auto">
+              <table className="w-full min-w-[600px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
@@ -391,6 +394,7 @@ export function Positions() {
                   })}
                 </tbody>
               </table>
+              </div>
             ) : (
               <EmptyState message={connected ? "No open orders" : "Connect wallet to view orders"} />
             )}
@@ -406,7 +410,8 @@ export function Positions() {
             ) : tradeHistory.length === 0 ? (
               <EmptyState message="No trade history" />
             ) : (
-              <table className="w-full">
+              <div className="scrollbar-hide overflow-x-auto">
+              <table className="w-full min-w-[500px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
@@ -433,6 +438,7 @@ export function Positions() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </>
         )}
