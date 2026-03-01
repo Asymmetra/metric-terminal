@@ -1,9 +1,11 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
+use phoenix_ix::{create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
-use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixTxBuilder, Side, TraderKey};
+use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
+use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,6 +37,10 @@ pub struct LimitOrderRequest {
     pub side: String,
     pub price: f64,
     pub size_lots: u64,
+    #[serde(default)]
+    pub stop_loss_price: Option<f64>,
+    #[serde(default)]
+    pub take_profit_price: Option<f64>,
 }
 
 /// Deserialize a u64 that may arrive as a JSON number or a JSON string.
@@ -116,6 +122,10 @@ pub struct IsolatedLimitOrderRequest {
     pub collateral_usdc: Option<f64>,
     #[serde(default)]
     pub allow_cross_and_isolated: Option<bool>,
+    #[serde(default)]
+    pub stop_loss_price: Option<f64>,
+    #[serde(default)]
+    pub take_profit_price: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +250,110 @@ fn build_collateral(collateral_usdc: Option<f64>) -> Result<Option<IsolatedColla
     }
 }
 
+/// Build bracket leg (TP/SL) stop-loss instructions for a limit order.
+/// Replicates the private `build_bracket_leg_orders` logic from the SDK.
+fn build_bracket_leg_ixs(
+    metadata: &PhoenixMetadata,
+    symbol: &str,
+    authority: Pubkey,
+    trader_account: Pubkey,
+    primary_side: Side,
+    bracket: &BracketLegOrders,
+) -> Result<Vec<Instruction>, AppError> {
+    let market = metadata
+        .get_market(symbol)
+        .ok_or_else(|| AppError::MarketNotFound(symbol.to_string()))?;
+    let calc = metadata
+        .get_market_calculator(symbol)
+        .ok_or_else(|| AppError::MarketNotFound(symbol.to_string()))?;
+
+    let keys = metadata.keys();
+    let perp_asset_map = Pubkey::from_str(&keys.perp_asset_map)
+        .map_err(|e| AppError::Phoenix(format!("Invalid perp_asset_map pubkey: {}", e)))?;
+    let global_trader_index: Vec<Pubkey> = keys
+        .global_trader_index
+        .iter()
+        .map(|s| Pubkey::from_str(s).map_err(|e| AppError::Phoenix(format!("Invalid pubkey: {}", e))))
+        .collect::<Result<_, _>>()?;
+    let active_trader_buffer: Vec<Pubkey> = keys
+        .active_trader_buffer
+        .iter()
+        .map(|s| Pubkey::from_str(s).map_err(|e| AppError::Phoenix(format!("Invalid pubkey: {}", e))))
+        .collect::<Result<_, _>>()?;
+    let orderbook = Pubkey::from_str(&market.market_pubkey)
+        .map_err(|e| AppError::Phoenix(format!("Invalid orderbook pubkey: {}", e)))?;
+    let spline_collection = Pubkey::from_str(&market.spline_pubkey)
+        .map_err(|e| AppError::Phoenix(format!("Invalid spline pubkey: {}", e)))?;
+    let asset_id = market.asset_id as u64;
+
+    let (bracket_trade_side, sl_direction, tp_direction) = match primary_side {
+        Side::Bid => (Side::Ask, Direction::LessThan, Direction::GreaterThan),
+        Side::Ask => (Side::Bid, Direction::GreaterThan, Direction::LessThan),
+    };
+
+    let mut ixs = Vec::new();
+
+    if let Some(sl_price) = bracket.stop_loss_price {
+        let price_in_ticks = calc
+            .price_to_ticks(sl_price)
+            .map_err(|e| AppError::Phoenix(format!("SL price conversion failed: {}", e)))?
+            .as_inner();
+        let params = StopLossParams::builder()
+            .funder(authority)
+            .trader_account(trader_account)
+            .position_authority(authority)
+            .perp_asset_map(perp_asset_map)
+            .orderbook(orderbook)
+            .spline_collection(spline_collection)
+            .global_trader_index(global_trader_index.clone())
+            .active_trader_buffer(active_trader_buffer.clone())
+            .asset_id(asset_id)
+            .trigger_price(price_in_ticks)
+            .execution_price(price_in_ticks)
+            .trade_side(bracket_trade_side)
+            .execution_direction(sl_direction)
+            .order_kind(StopLossOrderKind::IOC)
+            .build()
+            .map_err(|e| AppError::Phoenix(format!("Failed to build SL params: {}", e)))?;
+        ixs.push(
+            create_place_stop_loss_ix(params)
+                .map_err(|e| AppError::Phoenix(format!("Failed to build SL ix: {}", e)))?
+                .into(),
+        );
+    }
+
+    if let Some(tp_price) = bracket.take_profit_price {
+        let price_in_ticks = calc
+            .price_to_ticks(tp_price)
+            .map_err(|e| AppError::Phoenix(format!("TP price conversion failed: {}", e)))?
+            .as_inner();
+        let params = StopLossParams::builder()
+            .funder(authority)
+            .trader_account(trader_account)
+            .position_authority(authority)
+            .perp_asset_map(perp_asset_map)
+            .orderbook(orderbook)
+            .spline_collection(spline_collection)
+            .global_trader_index(global_trader_index.clone())
+            .active_trader_buffer(active_trader_buffer.clone())
+            .asset_id(asset_id)
+            .trigger_price(price_in_ticks)
+            .execution_price(price_in_ticks)
+            .trade_side(bracket_trade_side)
+            .execution_direction(tp_direction)
+            .order_kind(StopLossOrderKind::IOC)
+            .build()
+            .map_err(|e| AppError::Phoenix(format!("Failed to build TP params: {}", e)))?;
+        ixs.push(
+            create_place_stop_loss_ix(params)
+                .map_err(|e| AppError::Phoenix(format!("Failed to build TP ix: {}", e)))?
+                .into(),
+        );
+    }
+
+    Ok(ixs)
+}
+
 // ---------------------------------------------------------------------------
 // Cross-margin handlers (existing)
 // ---------------------------------------------------------------------------
@@ -301,11 +415,20 @@ async fn limit_order(
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
+    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
+
+    if bracket.is_some() {
+        tracing::info!(
+            "Limit order includes TP/SL bracket: SL={:?} TP={:?}",
+            req.stop_loss_price,
+            req.take_profit_price
+        );
+    }
 
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
 
-    let instructions = builder
+    let mut instructions = builder
         .build_limit_order(
             authority,
             trader_pda,
@@ -315,6 +438,13 @@ async fn limit_order(
             req.size_lots,
         )
         .map_err(|e| AppError::Phoenix(format!("Failed to build limit order: {}", e)))?;
+
+    // Append bracket leg (TP/SL) instructions if requested.
+    // These place on-chain stop-loss orders that trigger after the limit order fills.
+    if let Some(ref bracket_legs) = bracket {
+        let bracket_ixs = build_bracket_leg_ixs(&metadata, &req.symbol, authority, trader_pda, side, bracket_legs)?;
+        instructions.extend(bracket_ixs);
+    }
 
     Ok(Json(serialize_instructions(
         instructions,
@@ -388,12 +518,40 @@ async fn deposit(
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
 
-    let instructions = builder
+    // Check if trader is registered on Phoenix — if not, prepend registration
+    let mut all_instructions: Vec<Instruction> = Vec::new();
+
+    let trader_registered = state
+        .http_client
+        .get_traders(&authority)
+        .await
+        .map(|traders| {
+            traders
+                .iter()
+                .any(|t| t.trader_subaccount_index == 0)
+        })
+        .unwrap_or(false);
+
+    if !trader_registered {
+        tracing::info!(
+            "Trader {} not registered on Phoenix, prepending registration",
+            req.authority
+        );
+        let register_ixs = builder
+            .build_register_trader(authority, 0, 0)
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build register trader: {}", e))
+            })?;
+        all_instructions.extend(register_ixs);
+    }
+
+    let deposit_ixs = builder
         .build_deposit_funds(authority, trader_pda, req.amount_usdc)
         .map_err(|e| AppError::Phoenix(format!("Failed to build deposit: {}", e)))?;
+    all_instructions.extend(deposit_ixs);
 
     Ok(Json(serialize_instructions(
-        instructions,
+        all_instructions,
         format!("Deposit {} USDC", req.amount_usdc),
     )))
 }
@@ -485,9 +643,10 @@ async fn isolated_limit_order(
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let collateral = build_collateral(req.collateral_usdc)?;
+    let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
     let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
-    let instructions = state
+    let mut instructions = state
         .http_client
         .build_isolated_limit_order_tx(
             &authority,
@@ -502,6 +661,15 @@ async fn isolated_limit_order(
         .map_err(|e| {
             AppError::Phoenix(format!("Failed to build isolated limit order: {}", e))
         })?;
+
+    // Append bracket leg (TP/SL) instructions if requested
+    if let Some(ref bracket_legs) = bracket {
+        let metadata = state.metadata.read().await;
+        // For isolated, derive the subaccount PDA (the SDK auto-finds next available)
+        let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
+        let bracket_ixs = build_bracket_leg_ixs(&metadata, &req.symbol, authority, trader_pda, side, bracket_legs)?;
+        instructions.extend(bracket_ixs);
+    }
 
     Ok(Json(serialize_instructions(
         instructions,
