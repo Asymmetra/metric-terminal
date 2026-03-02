@@ -68,6 +68,7 @@ export function OrderEntry() {
   const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
   const riskState = useTraderStore((s) => s.riskState);
+  const account = useTraderStore((s) => s.account);
   const markPricesForEntry = useStatsStore((s) => s.markPrices);
 
   const freeCollateral = Math.max(0, collateral - initialMargin);
@@ -647,6 +648,16 @@ export function OrderEntry() {
         {/* Account info — shown when wallet connected */}
         {connected && (
           <div className="mt-auto border-t border-ember-border/50 p-3">
+            {!account ? (
+              <div className="flex items-center gap-2 rounded border border-ember-orange/30 bg-ember-orange/10 p-2">
+                <svg className="h-3.5 w-3.5 flex-shrink-0 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
+                </svg>
+                <span className="text-[10px] leading-tight text-ember-orange">
+                  No Phoenix account. Deposit USDC on app.phoenix.trade to trade.
+                </span>
+              </div>
+            ) : (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">Collateral</span>
@@ -712,7 +723,7 @@ export function OrderEntry() {
                 </div>
               )}
             </div>
-
+            )}
           </div>
         )}
       </div>
