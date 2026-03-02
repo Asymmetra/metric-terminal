@@ -77,8 +77,14 @@ function createParticle(canvasW: number, canvasH: number): Particle {
 
   // Spawn from bottom third, concentrated near bottom edge
   const spawnY = canvasH + 5 + Math.random() * 10;
-  // Slight horizontal concentration toward center
-  const centerBias = 0.3 + Math.random() * 0.4; // 0.3..0.7 range
+  // Wider horizontal spread (0.15..0.85 range) with center concentration
+  // Use gaussian-like distribution: most particles in center, but tails extend wider
+  const u = Math.random();
+  const v = Math.random();
+  // Box-Muller transform for normal distribution, then scale to spread
+  const normal = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  // Map normal distribution (-3 to 3) to 0.1..0.9 range, heavily concentrated at 0.5
+  const centerBias = 0.5 + Math.max(-0.4, Math.min(0.4, normal * 0.15));
   const x = canvasW * centerBias;
 
   return {
@@ -126,17 +132,18 @@ export function EmberParticles() {
     const h = () => window.innerHeight;
 
     function drawHeatGlow() {
-      // Bottom heat zone: a subtle radial gradient glow
+      // Bottom heat zone: wider, more pronounced radial gradient glow
       const gradient = ctx!.createRadialGradient(
-        w() * 0.5, h() * 1.05, 0,
-        w() * 0.5, h() * 1.05, h() * 0.5
+        w() * 0.5, h() * 1.02, 0,
+        w() * 0.5, h() * 1.02, h() * 0.65
       );
-      gradient.addColorStop(0, "rgba(255,85,0,0.06)");
-      gradient.addColorStop(0.3, "rgba(255,85,0,0.03)");
-      gradient.addColorStop(0.6, "rgba(242,59,78,0.01)");
+      gradient.addColorStop(0, "rgba(255,85,0,0.10)");
+      gradient.addColorStop(0.25, "rgba(255,85,0,0.06)");
+      gradient.addColorStop(0.5, "rgba(242,59,78,0.03)");
+      gradient.addColorStop(0.75, "rgba(255,60,0,0.01)");
       gradient.addColorStop(1, "rgba(0,0,0,0)");
       ctx!.fillStyle = gradient;
-      ctx!.fillRect(0, h() * 0.5, w(), h() * 0.5);
+      ctx!.fillRect(0, h() * 0.4, w(), h() * 0.6);
     }
 
     function animate() {
@@ -150,8 +157,8 @@ export function EmberParticles() {
       frameCount++;
 
       // Spawn particles — ramp up quickly, then maintain
-      const targetCount = 180;
-      const spawnRate = particles.length < targetCount * 0.5 ? 4 : 2;
+      const targetCount = 280;
+      const spawnRate = particles.length < targetCount * 0.5 ? 6 : 3;
       for (let s = 0; s < spawnRate; s++) {
         if (particles.length < targetCount) {
           particles.push(createParticle(w(), h()));
@@ -197,8 +204,8 @@ export function EmberParticles() {
 
         // Glow halo — only for sparks and embers, not ash
         if (p.kind !== "ash" && alpha > 0.1) {
-          const glowRadius = p.kind === "spark" ? p.size * 4 : p.size * 6;
-          const glowAlpha = alpha * (p.kind === "spark" ? 0.25 : 0.15);
+          const glowRadius = p.kind === "spark" ? p.size * 5 : p.size * 8;
+          const glowAlpha = alpha * (p.kind === "spark" ? 0.3 : 0.2);
           const gradient = ctx!.createRadialGradient(
             p.x, p.y, 0, p.x, p.y, glowRadius
           );

@@ -118,7 +118,7 @@ export function HeroSection() {
           variants={fadeUp}
           className="mt-8 font-mono text-[10px] tracking-widest text-text-secondary/30 uppercase"
         >
-          v0.1 &middot; devnet
+          v0.1 &middot; mainnet
         </motion.span>
       </motion.div>
     </div>
