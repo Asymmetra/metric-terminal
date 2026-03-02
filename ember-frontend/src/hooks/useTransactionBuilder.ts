@@ -30,6 +30,15 @@ function decodeOrderError(raw: string): string {
   return raw;
 }
 
+function formatOrderSummary(type: "market" | "limit", params: any): string {
+  const side = params.side === "bid" ? "Long" : "Short";
+  const symbol = params.symbol || "?";
+  const parts: string[] = [side, symbol];
+  if (params.collateral_usdc) parts.push(`$${params.collateral_usdc.toFixed(2)} collateral`);
+  if (type === "limit" && params.price) parts.push(`@ $${Number(params.price).toLocaleString()}`);
+  return parts.join(" · ");
+}
+
 export function useTransactionBuilder() {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
@@ -54,7 +63,8 @@ export function useTransactionBuilder() {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const label = type === "market" ? "Market Order" : "Limit Order";
-      const toastId = addToast("loading", `Building ${label}`);
+      const summary = formatOrderSummary(type, params);
+      const toastId = addToast("loading", `Building ${label}`, summary);
 
       try {
         const builder = type === "market" ? api.buildMarketOrder : api.buildLimitOrder;
@@ -70,9 +80,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: `${label} Confirmed`, txid: result.txid });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed`, detail: summary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -89,7 +99,7 @@ export function useTransactionBuilder() {
     async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building Cancel");
+      const toastId = addToast("loading", "Building Cancel", `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`);
 
       try {
         const response = await api.buildCancelOrders({
@@ -105,9 +115,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Order Cancelled", txid: result.txid });
+          updateToast(toastId, { type: "success", title: "Order Cancelled", detail: `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out before landing. Your order was NOT cancelled — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out. Your order was NOT cancelled — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -124,7 +134,7 @@ export function useTransactionBuilder() {
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building Deposit");
+      const toastId = addToast("loading", "Building Deposit", `$${amountUsdc.toFixed(2)} USDC`);
 
       try {
         const response = await api.buildDeposit({
@@ -139,9 +149,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Deposit Confirmed", txid: result.txid });
+          updateToast(toastId, { type: "success", title: "Deposit Confirmed", detail: `$${amountUsdc.toFixed(2)} USDC deposited`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -158,7 +168,7 @@ export function useTransactionBuilder() {
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building Withdrawal");
+      const toastId = addToast("loading", "Building Withdrawal", `$${amountUsdc.toFixed(2)} USDC`);
 
       try {
         const response = await api.buildWithdraw({
@@ -173,9 +183,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Withdrawal Confirmed", txid: result.txid });
+          updateToast(toastId, { type: "success", title: "Withdrawal Confirmed", detail: `$${amountUsdc.toFixed(2)} USDC withdrawn`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -193,7 +203,8 @@ export function useTransactionBuilder() {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const label = type === "market" ? "Isolated Market Order" : "Isolated Limit Order";
-      const toastId = addToast("loading", `Building ${label}`);
+      const summary = formatOrderSummary(type, params) + " · Isolated";
+      const toastId = addToast("loading", `Building ${label}`, summary);
 
       try {
         const builder = type === "market" ? api.buildIsolatedMarketOrder : api.buildIsolatedLimitOrder;
@@ -209,9 +220,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: `${label} Confirmed`, txid: result.txid });
+          updateToast(toastId, { type: "success", title: `${label} Confirmed`, detail: summary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -228,7 +239,10 @@ export function useTransactionBuilder() {
     async (fromSubaccountIndex: number, toSubaccountIndex: number, amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
-      const toastId = addToast("loading", "Building Transfer");
+      const fromLabel = fromSubaccountIndex === 0 ? "Cross" : `Isolated #${fromSubaccountIndex}`;
+      const toLabel = toSubaccountIndex === 0 ? "Cross" : `Isolated #${toSubaccountIndex}`;
+      const transferSummary = `$${amountUsdc.toFixed(2)} USDC · ${fromLabel} → ${toLabel}`;
+      const toastId = addToast("loading", "Building Transfer", transferSummary);
 
       try {
         const response = await api.buildTransferCollateral({
@@ -245,9 +259,9 @@ export function useTransactionBuilder() {
         );
 
         if (result.confirmed) {
-          updateToast(toastId, { type: "success", title: "Transfer Confirmed", txid: result.txid });
+          updateToast(toastId, { type: "success", title: "Transfer Confirmed", detail: transferSummary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out before landing. Your funds were NOT moved — please try again.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
         }
 
         await refreshTraderData();
