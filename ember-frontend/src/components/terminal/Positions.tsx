@@ -14,14 +14,30 @@ import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
 
 function ColHeader({ label, tooltip, align = "right" }: { label: string; tooltip: string; align?: "left" | "right" | "center" }) {
+  const [show, setShow] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+
   return (
     <th className={clsx("px-3 py-1.5 font-normal uppercase tracking-wider", `text-${align}`)}>
-      <span className="group relative cursor-help">
+      <span
+        className="cursor-help border-b border-dotted border-text-secondary/30"
+        onMouseEnter={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          setPos({ x: rect.left + rect.width / 2, y: rect.top });
+          setShow(true);
+        }}
+        onMouseLeave={() => setShow(false)}
+      >
         {label}
-        <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-normal w-52 rounded border border-ember-border bg-surface-l2 px-3 py-2 text-[10px] normal-case tracking-normal text-text-secondary/90 leading-relaxed shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
-          {tooltip}
-        </span>
       </span>
+      {show && (
+        <div
+          className="fixed z-[200] w-56 rounded border border-ember-border bg-[#1A1B20] px-3 py-2.5 text-[10px] normal-case tracking-normal text-text-secondary/90 leading-relaxed shadow-[0_8px_32px_rgba(0,0,0,0.6)] pointer-events-none"
+          style={{ left: Math.min(pos.x - 112, window.innerWidth - 240), top: pos.y - 8, transform: "translateY(-100%)" }}
+        >
+          {tooltip}
+        </div>
+      )}
     </th>
   );
 }
