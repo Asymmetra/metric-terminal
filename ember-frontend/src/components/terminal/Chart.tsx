@@ -104,6 +104,18 @@ export function Chart() {
           fixLeftEdge: false,
           fixRightEdge: true,
         },
+        localization: {
+          timeFormatter: (timestamp: number) => {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            });
+          },
+        },
         width: chartAreaRef.current.clientWidth,
         height: chartAreaRef.current.clientHeight,
       });
