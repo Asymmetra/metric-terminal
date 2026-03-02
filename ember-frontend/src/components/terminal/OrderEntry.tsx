@@ -188,6 +188,10 @@ export function OrderEntry() {
       }
       if (marginMode === "isolated") {
         params.collateral_usdc = derivedOrder.collateral;
+        const existingIsolatedPos = positions.find(
+          (p) => p.symbol === selectedSymbol && p.margin_mode === "isolated"
+        );
+        params.subaccount_index = existingIsolatedPos?.subaccount_index ?? 1;
         await submitIsolatedOrder(orderType, params, (status) => setTxPhase(status));
       } else {
         await submitOrder(orderType, params, (status) => setTxPhase(status));
