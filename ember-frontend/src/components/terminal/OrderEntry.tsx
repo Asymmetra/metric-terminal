@@ -654,7 +654,7 @@ export function OrderEntry() {
                   <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
                 </svg>
                 <span className="text-[10px] leading-tight text-ember-orange">
-                  No Phoenix account. Deposit USDC on app.phoenix.trade to trade.
+                  New Phoenix accounts must deposit first on app.phoenix.trade to enable trading.
                 </span>
               </div>
             ) : (

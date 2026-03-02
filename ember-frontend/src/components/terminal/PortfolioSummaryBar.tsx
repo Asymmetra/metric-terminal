@@ -47,7 +47,7 @@ export function PortfolioSummaryBar() {
           <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
         </svg>
         <span className="text-[10px] text-ember-orange">
-          No Phoenix account found. Deposit USDC on app.phoenix.trade to activate your account.
+          New Phoenix accounts must deposit first on app.phoenix.trade to enable trading.
         </span>
       </div>
     );
