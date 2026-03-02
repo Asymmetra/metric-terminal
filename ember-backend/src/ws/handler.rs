@@ -91,9 +91,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 }
 
                                 let handle = tokio::spawn(async move {
-                                    while let Ok(msg) = sub_rx.recv().await {
-                                        if tx_clone.send(msg).is_err() {
-                                            break;
+                                    loop {
+                                        match sub_rx.recv().await {
+                                            Ok(msg) => {
+                                                if tx_clone.send(msg).is_err() {
+                                                    break; // WS client disconnected
+                                                }
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                tracing::warn!("WS forwarder lagged by {} messages, continuing", n);
+                                                // Skip dropped messages, keep running
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                                break; // Broadcast channel shut down
+                                            }
                                         }
                                     }
                                 });
@@ -104,9 +115,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 let tx_clone = tx.clone();
                                 let mut sub_rx = broadcast_rx;
                                 let handle = tokio::spawn(async move {
-                                    while let Ok(msg) = sub_rx.recv().await {
-                                        if tx_clone.send(msg).is_err() {
-                                            break;
+                                    loop {
+                                        match sub_rx.recv().await {
+                                            Ok(msg) => {
+                                                if tx_clone.send(msg).is_err() {
+                                                    break; // WS client disconnected
+                                                }
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                tracing::warn!("WS forwarder lagged by {} messages, continuing", n);
+                                                // Skip dropped messages, keep running
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                                break; // Broadcast channel shut down
+                                            }
                                         }
                                     }
                                 });
