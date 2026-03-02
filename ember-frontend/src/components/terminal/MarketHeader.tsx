@@ -140,9 +140,11 @@ export function MarketHeader() {
   const open24h = useStatsStore((s) => s.open24h);
   const marketConfig = useMarketStore((s) => s.marketConfig);
   const traderConnected = useTraderStore((s) => s.connected);
+  const account = useTraderStore((s) => s.account);
   const portfolioValue = useTraderStore((s) => s.portfolioValue);
   const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const collateral = useTraderStore((s) => s.collateral);
+  const hasAccount = account != null;
 
   if (isMobile) {
     return (
@@ -268,7 +270,7 @@ export function MarketHeader() {
       )}
 
       {/* Portfolio info (wallet connected) */}
-      {traderConnected && (
+      {traderConnected && hasAccount && (
         <>
           <StatSeparator />
           <Stat label="Portfolio" value={formatUsd(portfolioValue)} colorClass="text-text-primary" />
@@ -278,6 +280,21 @@ export function MarketHeader() {
             colorClass={unrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
           />
           <Stat label="Collateral" value={formatUsd(collateral)} />
+        </>
+      )}
+
+      {/* No Phoenix account warning */}
+      {traderConnected && !hasAccount && (
+        <>
+          <StatSeparator />
+          <div className="flex items-center gap-2 px-2">
+            <svg className="h-3.5 w-3.5 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
+            </svg>
+            <span className="font-mono text-[10px] text-ember-orange">
+              No Phoenix account. Deposit on app.phoenix.trade to trade.
+            </span>
+          </div>
         </>
       )}
 
