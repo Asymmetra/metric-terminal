@@ -8,6 +8,7 @@ import clsx from "clsx";
 
 export function PortfolioSummaryBar() {
   const connected = useTraderStore((s) => s.connected);
+  const account = useTraderStore((s) => s.account);
   const collateral = useTraderStore((s) => s.collateral);
   const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
@@ -36,6 +37,21 @@ export function PortfolioSummaryBar() {
   const livePortfolioValue = collateral + liveUnrealizedPnl;
 
   if (!connected) return null;
+
+  // Show warning if wallet is connected but no Phoenix account exists
+  const hasAccount = account != null;
+  if (!hasAccount) {
+    return (
+      <div className="flex items-center justify-center gap-2 border-b border-ember-orange/30 bg-ember-orange/10 px-3 py-1.5">
+        <svg className="h-3.5 w-3.5 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
+        </svg>
+        <span className="text-[10px] text-ember-orange">
+          No Phoenix account found. Deposit USDC on app.phoenix.trade to activate your account.
+        </span>
+      </div>
+    );
+  }
 
   const marginUsage = collateral > 0 ? (initialMargin / collateral) * 100 : 0;
   const healthColor =
