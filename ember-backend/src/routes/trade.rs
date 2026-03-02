@@ -705,10 +705,7 @@ async fn isolated_limit_order(
         .build_isolated_limit_order_tx_with_request(PlaceIsolatedLimitOrderRequest {
             authority: req.authority.clone(),
             symbol: req.symbol.clone(),
-            side: match side {
-                Side::Bid => "bid".to_string(),
-                Side::Ask => "ask".to_string(),
-            },
+            side: side.to_api_string().to_string(),
             price: Some(req.price),
             num_base_lots: Some(req.size_lots),
             transfer_amount,
