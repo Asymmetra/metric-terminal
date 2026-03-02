@@ -65,12 +65,30 @@ export function OrderEntry() {
 
   // Trader account info
   const collateral = useTraderStore((s) => s.collateral);
-  const portfolioValue = useTraderStore((s) => s.portfolioValue);
+  const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
-  const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
   const riskState = useTraderStore((s) => s.riskState);
+  const markPricesForEntry = useStatsStore((s) => s.markPrices);
 
   const freeCollateral = Math.max(0, collateral - initialMargin);
+
+  // Compute live unrealized PnL from current mark prices (not stale REST snapshot)
+  const unrealizedPnl = useMemo(() => {
+    let total = 0;
+    for (const pos of positions) {
+      const mark = markPricesForEntry[pos.symbol] ?? pos.mark_price;
+      if (mark > 0 && pos.entry_price > 0) {
+        const isLong = pos.side.toLowerCase() === "long";
+        total += isLong
+          ? (mark - pos.entry_price) * pos.size
+          : (pos.entry_price - mark) * pos.size;
+      } else {
+        total += pos.unrealized_pnl;
+      }
+    }
+    return total;
+  }, [positions, markPricesForEntry]);
+  const portfolioValue = collateral + unrealizedPnl;
 
   // TP/SL validation
   const tpValid = useMemo(() => {

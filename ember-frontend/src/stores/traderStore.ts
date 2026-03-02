@@ -72,12 +72,13 @@ interface TraderStore {
   riskState: string;
   positions: TraderPosition[];
   limitOrders: Record<string, LimitOrder[]>;
+  lastRefresh: number; // increments on every setAccounts — used to trigger dependent refreshes
   setAccounts: (accounts: TraderAccount[]) => void;
   setConnected: (connected: boolean, authority?: string) => void;
   reset: () => void;
 }
 
-export const useTraderStore = create<TraderStore>((set) => ({
+export const useTraderStore = create<TraderStore>((set, get) => ({
   connected: false,
   authority: null,
   account: null,
@@ -89,6 +90,7 @@ export const useTraderStore = create<TraderStore>((set) => ({
   riskState: "",
   positions: [],
   limitOrders: {},
+  lastRefresh: 0,
   setAccounts: (accounts) => {
     // Use cross-margin account (index 0) for portfolio summary
     const primary = accounts.find((a) => a.traderSubaccountIndex === 0) || accounts[0];
@@ -118,6 +120,7 @@ export const useTraderStore = create<TraderStore>((set) => ({
       riskState: primary.riskState || "",
       positions,
       limitOrders,
+      lastRefresh: get().lastRefresh + 1,
     });
   },
   setConnected: (connected, authority) =>
@@ -133,6 +136,7 @@ export const useTraderStore = create<TraderStore>((set) => ({
       initialMargin: 0,
       maintenanceMargin: 0,
       riskState: "",
+      lastRefresh: 0,
       positions: [],
       limitOrders: {},
     }),

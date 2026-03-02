@@ -1,17 +1,39 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTraderStore } from "@/stores/traderStore";
+import { useStatsStore } from "@/stores/statsStore";
 import { formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
 export function PortfolioSummaryBar() {
   const connected = useTraderStore((s) => s.connected);
   const collateral = useTraderStore((s) => s.collateral);
-  const portfolioValue = useTraderStore((s) => s.portfolioValue);
-  const unrealizedPnl = useTraderStore((s) => s.unrealizedPnl);
+  const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
   const maintenanceMargin = useTraderStore((s) => s.maintenanceMargin);
   const riskState = useTraderStore((s) => s.riskState);
+  const markPrices = useStatsStore((s) => s.markPrices);
+
+  // Compute live unrealized PnL from current mark prices (not stale REST snapshot)
+  const liveUnrealizedPnl = useMemo(() => {
+    let total = 0;
+    for (const pos of positions) {
+      const mark = markPrices[pos.symbol] ?? pos.mark_price;
+      if (mark > 0 && pos.entry_price > 0) {
+        const isLong = pos.side.toLowerCase() === "long";
+        total += isLong
+          ? (mark - pos.entry_price) * pos.size
+          : (pos.entry_price - mark) * pos.size;
+      } else {
+        total += pos.unrealized_pnl;
+      }
+    }
+    return total;
+  }, [positions, markPrices]);
+
+  // Live portfolio value = collateral + live unrealized PnL
+  const livePortfolioValue = collateral + liveUnrealizedPnl;
 
   if (!connected) return null;
 
@@ -28,11 +50,11 @@ export function PortfolioSummaryBar() {
   return (
     <div className="flex items-center gap-4 border-b border-ember-border/50 bg-surface-l1/50 px-3 py-1">
       <SummaryItem label="Collateral" value={formatUsd(collateral)} />
-      <SummaryItem label="Portfolio" value={formatUsd(portfolioValue)} />
+      <SummaryItem label="Portfolio" value={formatUsd(livePortfolioValue)} />
       <SummaryItem
         label="Unreal. PnL"
-        value={`${unrealizedPnl >= 0 ? "+" : ""}${formatUsd(unrealizedPnl)}`}
-        colorClass={unrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
+        value={`${liveUnrealizedPnl >= 0 ? "+" : ""}${formatUsd(liveUnrealizedPnl)}`}
+        colorClass={liveUnrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
       />
       <SummaryItem
         label="Margin Usage"

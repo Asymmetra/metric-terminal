@@ -61,6 +61,7 @@ export function Positions() {
 
   const rawPositions = useTraderStore((s) => s.positions);
   const limitOrders = useTraderStore((s) => s.limitOrders);
+  const lastRefresh = useTraderStore((s) => s.lastRefresh);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
@@ -90,12 +91,27 @@ export function Positions() {
     return () => { unsubs.forEach((unsub) => unsub()); };
   }, [positionSymbols, selectedSymbol, setMarkPrice]);
 
-  // Inject live mark_price from statsStore per-market
+  // Inject live mark_price and recompute unrealized PnL from current prices.
+  // The REST snapshot PnL freezes at fetch time — this keeps it live.
   const positions = useMemo(() =>
-    rawPositions.map((pos) => ({
-      ...pos,
-      mark_price: markPrices[pos.symbol] ?? pos.mark_price,
-    })),
+    rawPositions.map((pos) => {
+      const liveMarkPrice = markPrices[pos.symbol] ?? pos.mark_price;
+      const isLong = pos.side.toLowerCase() === "long";
+      // Recompute PnL: (mark - entry) * size for longs, (entry - mark) * size for shorts
+      const livePnl = liveMarkPrice > 0 && pos.entry_price > 0
+        ? isLong
+          ? (liveMarkPrice - pos.entry_price) * pos.size
+          : (pos.entry_price - liveMarkPrice) * pos.size
+        : pos.unrealized_pnl;
+      // Recompute notional from live mark price
+      const liveNotional = liveMarkPrice > 0 ? pos.size * liveMarkPrice : pos.position_value;
+      return {
+        ...pos,
+        mark_price: liveMarkPrice,
+        unrealized_pnl: livePnl,
+        position_value: liveNotional,
+      };
+    }),
     [rawPositions, markPrices]
   );
 
@@ -124,11 +140,12 @@ export function Positions() {
     }
   }, [publicKey]);
 
+  // Refresh trade history when tab is active, wallet connects, or trader data updates (post-tx)
   useEffect(() => {
     if (activeTab === "trades" && publicKey) {
       fetchTradeHistory();
     }
-  }, [activeTab, publicKey, fetchTradeHistory]);
+  }, [activeTab, publicKey, fetchTradeHistory, lastRefresh]);
 
   // Cancel now requires price_in_ticks + order_sequence_number
   const handleCancel = async (order: LimitOrder & { symbol: string }) => {
