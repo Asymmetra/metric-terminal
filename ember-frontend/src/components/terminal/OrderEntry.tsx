@@ -68,7 +68,8 @@ export function OrderEntry() {
   const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
   const riskState = useTraderStore((s) => s.riskState);
-  const account = useTraderStore((s) => s.account);
+  const fetchingAccount = useTraderStore((s) => s.fetchingAccount);
+  const noAccount = useTraderStore((s) => s.noAccount);
   const markPricesForEntry = useStatsStore((s) => s.markPrices);
 
   const freeCollateral = Math.max(0, collateral - initialMargin);
@@ -648,7 +649,7 @@ export function OrderEntry() {
         {/* Account info — shown when wallet connected */}
         {connected && (
           <div className="mt-auto border-t border-ember-border/50 p-3">
-            {!account ? (
+            {(noAccount && !fetchingAccount) ? (
               <div className="flex items-center gap-2 rounded border border-ember-orange/30 bg-ember-orange/10 p-2">
                 <svg className="h-3.5 w-3.5 flex-shrink-0 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
