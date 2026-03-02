@@ -13,7 +13,7 @@ import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
 
-function ColHeader({ label, tooltip, align = "right" }: { label: string; tooltip: string; align?: "left" | "right" | "center" }) {
+function ColHeader({ label, tooltip, tooltipTitle, align = "right" }: { label: string; tooltip: string; tooltipTitle?: string; align?: "left" | "right" | "center" }) {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
 
@@ -32,10 +32,13 @@ function ColHeader({ label, tooltip, align = "right" }: { label: string; tooltip
       </span>
       {show && (
         <div
-          className="fixed z-[200] w-56 rounded border border-ember-border bg-[#1A1B20] px-3 py-2.5 text-[10px] normal-case tracking-normal text-text-secondary/90 leading-relaxed shadow-[0_8px_32px_rgba(0,0,0,0.6)] pointer-events-none"
+          className="fixed z-[200] w-56 rounded border border-ember-border bg-[#1A1B20] px-3 py-2.5 text-left text-[10px] normal-case tracking-normal text-text-secondary/90 leading-relaxed shadow-[0_8px_32px_rgba(0,0,0,0.6)] pointer-events-none"
           style={{ left: Math.min(pos.x - 112, window.innerWidth - 240), top: pos.y - 8, transform: "translateY(-100%)" }}
         >
-          {tooltip}
+          {tooltipTitle && (
+            <div className="mb-1 font-medium text-text-primary">{tooltipTitle}</div>
+          )}
+          <div>{tooltip}</div>
         </div>
       )}
     </th>
@@ -253,20 +256,20 @@ export function Positions() {
               <table className="w-full min-w-[1000px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
-                    <ColHeader label="Symbol" tooltip="Perpetual contract market symbol" align="left" />
-                    <ColHeader label="Side" tooltip="Position direction: Long (profit when price rises) or Short (profit when price falls)" align="left" />
-                    <ColHeader label="Size" tooltip="Position size in base asset units" />
-                    <ColHeader label="Entry" tooltip="Average entry price of the position" />
-                    <ColHeader label="Mark" tooltip="Current mark price used for PnL and margin calculations. Updated in real-time from the oracle." />
-                    <ColHeader label="Collateral" tooltip="Capital backing this position. For isolated: allocated collateral. For cross: initial margin requirement. Formula: Notional ÷ Leverage" />
-                    <ColHeader label="Unreal. PnL" tooltip="Unrealized profit/loss. Formula: (Mark − Entry) × Size for longs, (Entry − Mark) × Size for shorts" />
-                    <ColHeader label="ROI%" tooltip="Return on invested collateral. Formula: Unrealized PnL ÷ Collateral × 100" />
-                    <ColHeader label="Liq. Price" tooltip="Price at which the position will be liquidated. Provided by the exchange based on your margin and maintenance requirements." />
-                    <ColHeader label="Liq. Dist" tooltip="Distance from current mark price to liquidation price as a percentage. Formula: |Mark − Liq. Price| ÷ Mark × 100. Red < 5%, Yellow < 10%, Green > 10%." />
-                    <ColHeader label="Leverage" tooltip="Effective leverage of the position. Formula: Notional Value ÷ Collateral. Higher leverage = higher risk and reward." />
-                    <ColHeader label="Mode" tooltip="Margin mode. Cross: shares collateral across positions. Isolated: dedicated collateral per position." align="center" />
-                    <ColHeader label="TP" tooltip="Take profit price. Position auto-closes at this price to lock in gains." />
-                    <ColHeader label="SL" tooltip="Stop loss price. Position auto-closes at this price to limit losses." />
+                    <ColHeader label="Symbol" tooltipTitle="Symbol" tooltip="Perpetual contract market symbol" align="left" />
+                    <ColHeader label="Side" tooltipTitle="Side" tooltip="Position direction: Long (profit when price rises) or Short (profit when price falls)" align="left" />
+                    <ColHeader label="Size" tooltipTitle="Size" tooltip="Position size in base asset units" />
+                    <ColHeader label="Entry" tooltipTitle="Entry Price" tooltip="Average entry price of the position" />
+                    <ColHeader label="Mark" tooltipTitle="Mark Price" tooltip="Current mark price used for PnL and margin calculations. Updated in real-time from the oracle." />
+                    <ColHeader label="Collateral" tooltipTitle="Collateral" tooltip="Capital backing this position. For isolated: allocated collateral. For cross: initial margin requirement. Formula: Notional ÷ Leverage" />
+                    <ColHeader label="Unreal. PnL" tooltipTitle="Unrealized PnL" tooltip="Unrealized profit/loss. Formula: (Mark − Entry) × Size for longs, (Entry − Mark) × Size for shorts" />
+                    <ColHeader label="ROI%" tooltipTitle="Return on Investment" tooltip="Return on invested collateral. Formula: Unrealized PnL ÷ Collateral × 100" />
+                    <ColHeader label="Liq. Price" tooltipTitle="Liquidation Price" tooltip="Price at which the position will be liquidated. Provided by the exchange based on your margin and maintenance requirements." />
+                    <ColHeader label="Liq. Dist" tooltipTitle="Liquidation Distance" tooltip="Distance from current mark price to liquidation price as a percentage. Formula: |Mark − Liq. Price| ÷ Mark × 100. Red < 5%, Yellow < 10%, Green > 10%." />
+                    <ColHeader label="Leverage" tooltipTitle="Leverage" tooltip="Effective leverage of the position. Formula: Notional Value ÷ Collateral. Higher leverage = higher risk and reward." />
+                    <ColHeader label="Mode" tooltipTitle="Margin Mode" tooltip="Cross: shares collateral across positions. Isolated: dedicated collateral per position." align="center" />
+                    <ColHeader label="TP" tooltipTitle="Take Profit" tooltip="Take profit price. Position auto-closes at this price to lock in gains." />
+                    <ColHeader label="SL" tooltipTitle="Stop Loss" tooltip="Stop loss price. Position auto-closes at this price to limit losses." />
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">
                       <button
                         onClick={handleCloseAll}
