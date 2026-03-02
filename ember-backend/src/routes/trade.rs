@@ -719,6 +719,17 @@ async fn close_all_positions(
         ));
     }
 
+    // Enforce position count limit before building instructions.
+    // Each market order needs ~4 instructions; Solana TX has a hard size limit.
+    const MAX_POSITIONS: usize = 8;
+    if req.positions.len() > MAX_POSITIONS {
+        return Err(AppError::BadRequest(format!(
+            "Too many positions to close in one TX ({} requested, max {}). Close individually.",
+            req.positions.len(),
+            MAX_POSITIONS
+        )));
+    }
+
     let authority = parse_authority(&req.authority)?;
 
     // Separate positions by margin mode

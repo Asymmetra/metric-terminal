@@ -15,6 +15,9 @@ pub enum AppError {
     #[error("Phoenix SDK error: {0}")]
     Phoenix(String),
 
+    #[error("Not found: {0}")]
+    NotFound(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -25,6 +28,7 @@ impl IntoResponse for AppError {
             AppError::MarketNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Phoenix(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 

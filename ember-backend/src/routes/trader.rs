@@ -3,7 +3,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use phoenix_sdk::{
     CollateralHistoryQueryParams, FundingHistoryQueryParams, OrderHistoryQueryParams,
-    PnlQueryParams, PnlResolution, TradeHistoryQueryParams,
+    PhoenixHttpError, PnlQueryParams, PnlResolution, TradeHistoryQueryParams,
 };
 use serde::Deserialize;
 use solana_pubkey::Pubkey;
@@ -25,7 +25,12 @@ async fn get_trader(
         .http_client
         .get_traders(&authority)
         .await
-        .map_err(|e| AppError::Phoenix(format!("Failed to fetch trader: {}", e)))?;
+        .map_err(|e| match e {
+            PhoenixHttpError::ApiError { status: 404, .. } => {
+                AppError::NotFound(format!("No Phoenix account found for {}", pubkey))
+            }
+            _ => AppError::Phoenix(format!("Failed to fetch trader: {}", e)),
+        })?;
 
     Ok(Json(serde_json::json!({
         "authority": pubkey,
