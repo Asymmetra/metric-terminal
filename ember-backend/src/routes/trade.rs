@@ -145,6 +145,26 @@ pub struct RegisterSubaccountRequest {
     pub subaccount_index: u8,
 }
 
+/// Position to close in a batch close-all operation.
+#[derive(Deserialize)]
+pub struct ClosePositionItem {
+    pub symbol: String,
+    /// "long" or "short" - the side of the position to close
+    pub side: String,
+    /// Size in base lots
+    pub size_lots: u64,
+    /// "cross" or "isolated"
+    pub margin_mode: String,
+    /// Subaccount index (0 for cross, 1-100 for isolated)
+    pub subaccount_index: u8,
+}
+
+#[derive(Deserialize)]
+pub struct CloseAllPositionsRequest {
+    pub authority: String,
+    pub positions: Vec<ClosePositionItem>,
+}
+
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
@@ -681,6 +701,146 @@ async fn isolated_limit_order(
 }
 
 // ---------------------------------------------------------------------------
+// Batch close-all positions handler
+// ---------------------------------------------------------------------------
+
+async fn close_all_positions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CloseAllPositionsRequest>,
+) -> Result<Json<TxResponse>, AppError> {
+    tracing::info!(
+        "Building close-all for {} positions",
+        req.positions.len()
+    );
+
+    if req.positions.is_empty() {
+        return Err(AppError::BadRequest(
+            "positions cannot be empty".to_string(),
+        ));
+    }
+
+    let authority = parse_authority(&req.authority)?;
+
+    // Separate positions by margin mode
+    let mut cross_positions: Vec<&ClosePositionItem> = Vec::new();
+    let mut isolated_positions: Vec<&ClosePositionItem> = Vec::new();
+
+    for pos in &req.positions {
+        if pos.margin_mode.to_lowercase() == "isolated" {
+            isolated_positions.push(pos);
+        } else {
+            cross_positions.push(pos);
+        }
+    }
+
+    let mut all_instructions: Vec<Instruction> = Vec::new();
+
+    // Process cross-margin positions synchronously
+    if !cross_positions.is_empty() {
+        let metadata = state.metadata.read().await;
+        let builder = PhoenixTxBuilder::new(&metadata);
+
+        for pos in cross_positions {
+            validate_size_lots(pos.size_lots)?;
+
+            // Parse side and determine close side (opposite of position)
+            let position_side = match pos.side.to_lowercase().as_str() {
+                "long" => Side::Bid,
+                "short" => Side::Ask,
+                _ => return Err(AppError::BadRequest(
+                    format!("Invalid position side: {}. Use 'long' or 'short'", pos.side)
+                )),
+            };
+
+            // Close on opposite side
+            let close_side = match position_side {
+                Side::Bid => Side::Ask,
+                Side::Ask => Side::Bid,
+            };
+
+            let trader_pda = TraderKey::derive_pda(&authority, 0, pos.subaccount_index);
+
+            let instructions = builder
+                .build_market_order(
+                    authority,
+                    trader_pda,
+                    &pos.symbol,
+                    close_side,
+                    pos.size_lots,
+                    None, // No bracket orders for closes
+                )
+                .map_err(|e| {
+                    AppError::Phoenix(format!(
+                        "Failed to build cross-margin close for {}: {}",
+                        pos.symbol, e
+                    ))
+                })?;
+
+            all_instructions.extend(instructions);
+        }
+    }
+
+    // Process isolated positions asynchronously
+    // Note: Each isolated order requires an async HTTP call to build
+    // This is a limitation of the current SDK design
+    for pos in isolated_positions {
+        validate_size_lots(pos.size_lots)?;
+
+        let position_side = match pos.side.to_lowercase().as_str() {
+            "long" => Side::Bid,
+            "short" => Side::Ask,
+            _ => return Err(AppError::BadRequest(
+                format!("Invalid position side: {}. Use 'long' or 'short'", pos.side)
+            )),
+        };
+
+        let close_side = match position_side {
+            Side::Bid => Side::Ask,
+            Side::Ask => Side::Bid,
+        };
+
+        let instructions = state
+            .http_client
+            .build_isolated_market_order_tx(
+                &authority,
+                &pos.symbol,
+                close_side,
+                pos.size_lots,
+                None, // No collateral flow needed for closing
+                false, // Don't allow cross-and-isolated for closes
+                None, // No bracket orders for closes
+            )
+            .await
+            .map_err(|e| {
+                AppError::Phoenix(format!(
+                    "Failed to build isolated close for {}: {}",
+                    pos.symbol, e
+                ))
+            })?;
+
+        all_instructions.extend(instructions);
+    }
+
+    // Check instruction count limits
+    // Solana has a ~1232 byte transaction size limit
+    // Each market order instruction takes ~3-4 accounts (~100-150 bytes)
+    // Conservative limit: 6 market orders per transaction
+    const MAX_INSTRUCTIONS: usize = 24; // ~6 market orders (4 ix each)
+    if all_instructions.len() > MAX_INSTRUCTIONS {
+        return Err(AppError::BadRequest(format!(
+            "Too many instructions ({}). Max {} per transaction. Close positions individually.",
+            all_instructions.len(),
+            MAX_INSTRUCTIONS
+        )));
+    }
+
+    Ok(Json(serialize_instructions(
+        all_instructions,
+        format!("Close {} positions", req.positions.len()),
+    )))
+}
+
+// ---------------------------------------------------------------------------
 // Collateral & subaccount handlers (new)
 // ---------------------------------------------------------------------------
 
@@ -801,4 +961,6 @@ pub fn router() -> Router<Arc<AppState>> {
         // Collateral & subaccounts
         .route("/transfer-collateral", post(transfer_collateral))
         .route("/register-subaccount", post(register_subaccount))
+        // Batch operations
+        .route("/close-all-positions", post(close_all_positions))
 }

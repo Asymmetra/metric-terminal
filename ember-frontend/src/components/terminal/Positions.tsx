@@ -68,7 +68,7 @@ export function Positions() {
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
-  const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, connected } = useTransactionBuilder();
+  const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, closeAllPositions, connected } = useTransactionBuilder();
   const { publicKey } = useWallet();
   const openPosition = useTradeDetailStore((s) => s.openPosition);
   const openTradeHistoryDetail = useTradeDetailStore((s) => s.openTradeHistory);
@@ -187,27 +187,33 @@ export function Positions() {
     }
   };
 
-  // Close all positions sequentially
+  // Close all positions in a single batched transaction
   const handleCloseAll = async () => {
-    if (closingAll) return;
+    if (closingAll || positions.length === 0) return;
     setClosingAll(true);
-    for (const pos of positions) {
-      try {
-        const market = await api.getMarket(pos.symbol);
-        const lotSize = 10 ** -(market.baseLotsDecimals || 2);
-        const sizeLots = Math.round(pos.size / lotSize);
-        const closeSide = pos.side.toLowerCase() === "long" ? "ask" : "bid";
-        const closeParams = { symbol: pos.symbol, side: closeSide, size_lots: sizeLots };
-        if (pos.margin_mode === "isolated") {
-          await submitIsolatedOrder("market", closeParams);
-        } else {
-          await submitOrder("market", closeParams);
-        }
-      } catch (e: any) {
-        console.error(`Failed to close ${pos.symbol}:`, e);
-      }
+    try {
+      // Fetch market data for all positions to calculate lot sizes
+      const positionData = await Promise.all(
+        positions.map(async (pos) => {
+          const market = await api.getMarket(pos.symbol);
+          const lotSize = 10 ** -(market.baseLotsDecimals || 2);
+          const sizeLots = Math.round(pos.size / lotSize);
+          return {
+            symbol: pos.symbol,
+            side: pos.side.toLowerCase(),
+            size_lots: sizeLots,
+            margin_mode: pos.margin_mode,
+            subaccount_index: pos.subaccount_index ?? (pos.margin_mode === "isolated" ? 1 : 0),
+          };
+        })
+      );
+
+      await closeAllPositions(positionData);
+    } catch (e: any) {
+      console.error("Close all failed:", e);
+    } finally {
+      setClosingAll(false);
     }
-    setClosingAll(false);
   };
 
   return (

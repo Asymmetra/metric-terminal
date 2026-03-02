@@ -274,5 +274,39 @@ export function useTransactionBuilder() {
     [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
-  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, connected: !!publicKey };
+  const closeAllPositions = useCallback(
+    async (positions: Array<{ symbol: string; side: string; size_lots: number; margin_mode: string; subaccount_index: number }>): Promise<TxResult> => {
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      const toastId = addToast("loading", "Building Close All", `${positions.length} position${positions.length !== 1 ? "s" : ""}`);
+
+      try {
+        const response = await api.buildCloseAllPositions({
+          authority: publicKey.toBase58(),
+          positions,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, sendTransaction, connection,
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", title: "Close All Confirmed", detail: `${positions.length} position${positions.length !== 1 ? "s" : ""} closed`, txid: result.txid });
+        } else {
+          updateToast(toastId, { type: "error", title: "Close All Expired", detail: "Transaction timed out. Some positions may still be open — please check.", txid: result.txid });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", title: "Close All Failed", detail: e?.message });
+        throw e;
+      }
+    },
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+  );
+
+  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, connected: !!publicKey };
 }
