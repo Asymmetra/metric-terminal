@@ -212,7 +212,7 @@ export function Toasts() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-3 right-3 z-[200] flex flex-col gap-2 w-[440px]">
+    <div className="fixed bottom-3 right-3 z-[200] flex flex-col-reverse gap-2 w-[440px]">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} />
       ))}

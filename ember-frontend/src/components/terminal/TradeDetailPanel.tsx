@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTradeDetailStore } from "@/stores/tradeDetailStore";
+import { useStatsStore } from "@/stores/statsStore";
 import { formatPrice, formatSize, formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -11,6 +12,14 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
     <div className="flex items-center justify-between py-1.5">
       <span className="text-[10px] uppercase tracking-wider text-text-secondary/70">{label}</span>
       <span className="font-mono text-[11px] text-text-primary">{children}</span>
+    </div>
+  );
+}
+
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <div className="pt-3 pb-1 mt-2 border-t border-ember-border/30">
+      <span className="font-mono text-[9px] uppercase tracking-wider text-text-secondary/40">{title}</span>
     </div>
   );
 }
@@ -83,23 +92,34 @@ export function TradeDetailPanel() {
 
 function PositionDetail({ data }: { data: import("@/types/trader").TraderPosition }) {
   const isLong = data.side.toLowerCase() === "long";
+  const markPrices = useStatsStore((s) => s.markPrices);
+  const liveMarkPrice = markPrices[data.symbol] ?? data.mark_price;
+
+  // Derived values
+  const collateral = data.allocated_collateral > 0
+    ? data.allocated_collateral
+    : data.initial_margin > 0 ? data.initial_margin : 0;
+  const notional = data.position_value > 0 ? data.position_value : data.size * liveMarkPrice;
+  const effLeverage = collateral > 0 ? notional / collateral : 0;
+  const roi = collateral > 0 ? (data.unrealized_pnl / collateral) * 100 : 0;
+  const liqDistPct = data.liquidation_price != null && liveMarkPrice > 0
+    ? Math.abs((liveMarkPrice - data.liquidation_price) / liveMarkPrice) * 100
+    : null;
+  const pnlPct = data.entry_price > 0
+    ? ((liveMarkPrice - data.entry_price) / data.entry_price) * 100 * (isLong ? 1 : -1)
+    : 0;
 
   return (
     <>
+      {/* Core position info */}
       <DetailRow label="Symbol">{data.symbol}-PERP</DetailRow>
       <DetailRow label="Side">
         <span className={isLong ? "text-ember-green" : "text-ember-red"}>
           {data.side.toUpperCase()}
         </span>
       </DetailRow>
-      <DetailRow label="Size">{formatSize(data.size, 2)}</DetailRow>
-      <DetailRow label="Entry Price">${formatPrice(data.entry_price)}</DetailRow>
-      <DetailRow label="Mark Price">${formatPrice(data.mark_price)}</DetailRow>
-      <DetailRow label="Unrealized PnL">
-        <span className={clsx(data.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red")}>
-          {data.unrealized_pnl >= 0 ? "+" : ""}{formatUsd(data.unrealized_pnl)}
-        </span>
-      </DetailRow>
+      <DetailRow label="Size">{formatSize(data.size, 4)} {data.symbol}</DetailRow>
+      <DetailRow label="Notional Value">${formatPrice(notional)}</DetailRow>
       <DetailRow label="Margin Mode">
         <span className={clsx(
           "inline-block px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider",
@@ -110,43 +130,146 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
           {data.margin_mode === "isolated" ? "ISOLATED" : "CROSS"}
         </span>
       </DetailRow>
-      {data.margin_mode === "isolated" && (
-        <DetailRow label="Collateral">${formatPrice(data.allocated_collateral)}</DetailRow>
+      <DetailRow label="Subaccount">
+        {data.subaccount_index === 0 ? "Cross (0)" : `Isolated #${data.subaccount_index}`}
+      </DetailRow>
+
+      {/* Pricing */}
+      <SectionHeader title="Pricing" />
+      <DetailRow label="Entry Price">${formatPrice(data.entry_price)}</DetailRow>
+      <DetailRow label="Mark Price">${formatPrice(liveMarkPrice)}</DetailRow>
+      <DetailRow label="Price Change">
+        <span className={pnlPct >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
+        </span>
+      </DetailRow>
+
+      {/* PnL & Returns */}
+      <SectionHeader title="PnL & Returns" />
+      <DetailRow label="Unrealized PnL">
+        <span className={data.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {data.unrealized_pnl >= 0 ? "+" : ""}{formatUsd(data.unrealized_pnl)}
+        </span>
+      </DetailRow>
+      <DetailRow label="Discounted PnL">
+        <span className={data.discounted_unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {data.discounted_unrealized_pnl >= 0 ? "+" : ""}{formatUsd(data.discounted_unrealized_pnl)}
+        </span>
+      </DetailRow>
+      <DetailRow label="ROI">
+        <span className={roi >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {roi >= 0 ? "+" : ""}{roi.toFixed(2)}%
+        </span>
+      </DetailRow>
+
+      {/* Margin & Risk */}
+      <SectionHeader title="Margin & Risk" />
+      <DetailRow label="Collateral">${formatPrice(collateral)}</DetailRow>
+      {data.allocated_collateral > 0 && data.allocated_collateral !== collateral && (
+        <DetailRow label="Allocated Collateral">${formatPrice(data.allocated_collateral)}</DetailRow>
       )}
-      <DetailRow label="Subaccount">{data.subaccount_index}</DetailRow>
+      <DetailRow label="Initial Margin">${formatPrice(data.initial_margin)}</DetailRow>
+      <DetailRow label="Eff. Leverage">
+        <span className="text-ember-orange">
+          {effLeverage > 0 ? `${effLeverage.toFixed(2)}x` : "—"}
+        </span>
+      </DetailRow>
+      <DetailRow label="Liquidation Price">
+        {data.liquidation_price != null
+          ? <span className="text-ember-red">${formatPrice(data.liquidation_price)}</span>
+          : <span className="text-text-secondary/30">—</span>}
+      </DetailRow>
+      <DetailRow label="Liq. Distance">
+        {liqDistPct != null
+          ? <span className={liqDistPct < 5 ? "text-ember-red" : liqDistPct < 10 ? "text-yellow-500" : "text-ember-green"}>
+              {liqDistPct.toFixed(2)}%
+            </span>
+          : <span className="text-text-secondary/30">—</span>}
+      </DetailRow>
+
+      {/* TP/SL */}
+      <SectionHeader title="Take Profit / Stop Loss" />
       <DetailRow label="Take Profit">
         {data.tp_price != null
           ? <span className="text-ember-green">${formatPrice(data.tp_price)}</span>
-          : <span className="text-text-secondary/30">—</span>}
+          : <span className="text-text-secondary/30">Not set</span>}
       </DetailRow>
       <DetailRow label="Stop Loss">
         {data.sl_price != null
           ? <span className="text-ember-red">${formatPrice(data.sl_price)}</span>
-          : <span className="text-text-secondary/30">—</span>}
+          : <span className="text-text-secondary/30">Not set</span>}
       </DetailRow>
+      {data.tp_price != null && (
+        <DetailRow label="TP Distance">
+          <span className="text-ember-green">
+            {liveMarkPrice > 0 ? `${(Math.abs((data.tp_price - liveMarkPrice) / liveMarkPrice) * 100).toFixed(2)}%` : "—"}
+          </span>
+        </DetailRow>
+      )}
+      {data.sl_price != null && (
+        <DetailRow label="SL Distance">
+          <span className="text-ember-red">
+            {liveMarkPrice > 0 ? `${(Math.abs((data.sl_price - liveMarkPrice) / liveMarkPrice) * 100).toFixed(2)}%` : "—"}
+          </span>
+        </DetailRow>
+      )}
+      {data.tp_price != null && data.sl_price != null && (
+        <DetailRow label="Risk/Reward">
+          {(() => {
+            const risk = Math.abs(liveMarkPrice - data.sl_price);
+            const reward = Math.abs(data.tp_price - liveMarkPrice);
+            const rr = risk > 0 ? reward / risk : 0;
+            return <span className="text-text-primary">1:{rr.toFixed(2)}</span>;
+          })()}
+        </DetailRow>
+      )}
     </>
   );
 }
 
 function TradeHistoryDetail({ data }: { data: import("@/types/trader").TradeHistoryItem }) {
+  const price = parseFloat(data.price);
+  const baseQty = parseFloat(data.baseQty);
+  const quoteQty = parseFloat(data.quoteQty);
+  const notional = price * baseQty;
+  const typeLabel = data.instructionType
+    ?.replace(/([A-Z])/g, " $1")
+    .replace(/^./, (s) => s.toUpperCase())
+    .trim() || "Trade";
+
   return (
     <>
       <DetailRow label="Symbol">{data.marketSymbol}-PERP</DetailRow>
-      <DetailRow label="Price">${formatPrice(parseFloat(data.price))}</DetailRow>
-      <DetailRow label="Base Qty">{formatSize(parseFloat(data.baseQty), 4)}</DetailRow>
-      <DetailRow label="Quote Qty">${formatPrice(parseFloat(data.quoteQty))}</DetailRow>
-      <DetailRow label="Type">{data.instructionType}</DetailRow>
-      <DetailRow label="Time">
-        {new Date(data.timestamp).toLocaleString()}
+      <DetailRow label="Type">{typeLabel}</DetailRow>
+
+      <SectionHeader title="Execution" />
+      <DetailRow label="Price">${formatPrice(price)}</DetailRow>
+      <DetailRow label="Base Quantity">{formatSize(baseQty, 4)} {data.marketSymbol}</DetailRow>
+      <DetailRow label="Quote Quantity">${formatPrice(quoteQty)}</DetailRow>
+      <DetailRow label="Notional Value">${formatPrice(notional)}</DetailRow>
+
+      <SectionHeader title="Timing" />
+      <DetailRow label="Executed At">
+        {new Date(data.timestamp).toLocaleString("en-US", {
+          year: "numeric", month: "short", day: "numeric",
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        })}
       </DetailRow>
-      <DetailRow label="TX Signature">
+
+      <SectionHeader title="On-Chain" />
+      <DetailRow label="Transaction">
         <a
-          href={`https://solscan.io/tx/${data.transactionSignature}`}
+          href={`https://orbmarkets.io/tx/${data.transactionSignature}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-ember-orange hover:underline truncate max-w-[200px] inline-block"
+          className="inline-flex items-center gap-1 text-ember-orange hover:underline"
         >
-          {data.transactionSignature.slice(0, 8)}...{data.transactionSignature.slice(-8)}
+          {data.transactionSignature.slice(0, 8)}...{data.transactionSignature.slice(-6)}
+          <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M6 3H3v10h10v-3" />
+            <path d="M9 2h5v5" />
+            <path d="M14 2L7 9" />
+          </svg>
         </a>
       </DetailRow>
     </>
@@ -157,17 +280,25 @@ function RecentTradeDetail({ data }: { data: import("@/types/market").Trade }) {
   const ts = typeof data.timestamp === "string"
     ? new Date(data.timestamp)
     : new Date(data.timestamp * 1000);
+  const isBuy = data.side === "bid";
+  const notional = data.price * data.size;
 
   return (
     <>
-      <DetailRow label="Price">${formatPrice(data.price)}</DetailRow>
-      <DetailRow label="Size">{formatSize(data.size)}</DetailRow>
       <DetailRow label="Side">
-        <span className={data.side === "bid" ? "text-ember-green" : "text-ember-red"}>
-          {data.side === "bid" ? "BUY" : "SELL"}
+        <span className={isBuy ? "text-ember-green" : "text-ember-red"}>
+          {isBuy ? "BUY" : "SELL"}
         </span>
       </DetailRow>
-      <DetailRow label="Time">{ts.toLocaleString()}</DetailRow>
+      <DetailRow label="Price">${formatPrice(data.price)}</DetailRow>
+      <DetailRow label="Size">{formatSize(data.size, 4)}</DetailRow>
+      <DetailRow label="Notional Value">${formatPrice(notional)}</DetailRow>
+      <DetailRow label="Time">
+        {ts.toLocaleString("en-US", {
+          month: "short", day: "numeric",
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        })}
+      </DetailRow>
     </>
   );
 }

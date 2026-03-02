@@ -13,6 +13,19 @@ import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
 
+function ColHeader({ label, tooltip, align = "right" }: { label: string; tooltip: string; align?: "left" | "right" | "center" }) {
+  return (
+    <th className={clsx("px-3 py-1.5 font-normal uppercase tracking-wider", `text-${align}`)}>
+      <span className="group relative cursor-help">
+        {label}
+        <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-normal w-52 rounded border border-ember-border bg-surface-l2 px-3 py-2 text-[10px] normal-case tracking-normal text-text-secondary/90 leading-relaxed shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
+          {tooltip}
+        </span>
+      </span>
+    </th>
+  );
+}
+
 type Tab = "positions" | "orders" | "trades";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -207,20 +220,20 @@ export function Positions() {
               <table className="w-full min-w-[1000px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
-                    <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
-                    <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Side</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Size</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Entry</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Mark</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Collateral</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Unreal. PnL</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">ROI%</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Liq. Price</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Liq. Dist</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Leverage</th>
-                    <th className="px-3 py-1.5 text-center font-normal uppercase tracking-wider">Mode</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">TP</th>
-                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">SL</th>
+                    <ColHeader label="Symbol" tooltip="Perpetual contract market symbol" align="left" />
+                    <ColHeader label="Side" tooltip="Position direction: Long (profit when price rises) or Short (profit when price falls)" align="left" />
+                    <ColHeader label="Size" tooltip="Position size in base asset units" />
+                    <ColHeader label="Entry" tooltip="Average entry price of the position" />
+                    <ColHeader label="Mark" tooltip="Current mark price used for PnL and margin calculations. Updated in real-time from the oracle." />
+                    <ColHeader label="Collateral" tooltip="Capital backing this position. For isolated: allocated collateral. For cross: initial margin requirement. Formula: Notional ÷ Leverage" />
+                    <ColHeader label="Unreal. PnL" tooltip="Unrealized profit/loss. Formula: (Mark − Entry) × Size for longs, (Entry − Mark) × Size for shorts" />
+                    <ColHeader label="ROI%" tooltip="Return on invested collateral. Formula: Unrealized PnL ÷ Collateral × 100" />
+                    <ColHeader label="Liq. Price" tooltip="Price at which the position will be liquidated. Provided by the exchange based on your margin and maintenance requirements." />
+                    <ColHeader label="Liq. Dist" tooltip="Distance from current mark price to liquidation price as a percentage. Formula: |Mark − Liq. Price| ÷ Mark × 100. Red < 5%, Yellow < 10%, Green > 10%." />
+                    <ColHeader label="Leverage" tooltip="Effective leverage of the position. Formula: Notional Value ÷ Collateral. Higher leverage = higher risk and reward." />
+                    <ColHeader label="Mode" tooltip="Margin mode. Cross: shares collateral across positions. Isolated: dedicated collateral per position." align="center" />
+                    <ColHeader label="TP" tooltip="Take profit price. Position auto-closes at this price to lock in gains." />
+                    <ColHeader label="SL" tooltip="Stop loss price. Position auto-closes at this price to limit losses." />
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">
                       <button
                         onClick={handleCloseAll}
