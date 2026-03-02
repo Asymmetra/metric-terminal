@@ -15,6 +15,8 @@ export function useTraderSync() {
   const { publicKey, connected } = useWallet();
   const setAccounts = useTraderStore((s) => s.setAccounts);
   const setConnected = useTraderStore((s) => s.setConnected);
+  const setFetchingAccount = useTraderStore((s) => s.setFetchingAccount);
+  const setNoAccount = useTraderStore((s) => s.setNoAccount);
   const reset = useTraderStore((s) => s.reset);
   const prevPubkey = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -41,14 +43,27 @@ export function useTraderSync() {
 
     // Fetch initial trader state from REST
     async function fetchTraderData() {
+      setFetchingAccount(true);
       try {
         const data = await api.getTrader(pubkeyStr!);
         if (data?.accounts?.length > 0) {
           setAccounts(data.accounts);
+          setNoAccount(false);
+        } else {
+          // Empty accounts array — backend has no account for this wallet
+          setNoAccount(true);
         }
-      } catch (e) {
-        // If trader has no account, that's fine — just log it
-        console.debug("Trader data fetch:", e);
+      } catch (e: any) {
+        const status = (e as any)?.status as number | undefined;
+        if (status === 404 || status === 502) {
+          // Backend confirmed: no Phoenix account for this wallet
+          setNoAccount(true);
+        } else {
+          // Network/server error — don't show the Phoenix warning; leave state unchanged
+          console.warn("Trader data fetch failed:", e);
+        }
+      } finally {
+        setFetchingAccount(false);
       }
     }
 
@@ -70,5 +85,5 @@ export function useTraderSync() {
       unsubRef.current?.();
       unsubRef.current = null;
     };
-  }, [connected, publicKey, setAccounts, setConnected, reset]);
+  }, [connected, publicKey, setAccounts, setConnected, setFetchingAccount, setNoAccount, reset]);
 }

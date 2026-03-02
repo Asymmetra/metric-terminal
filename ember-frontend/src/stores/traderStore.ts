@@ -64,6 +64,8 @@ interface TraderStore {
   connected: boolean;
   authority: string | null;
   account: TraderAccount | null;
+  fetchingAccount: boolean; // true while REST fetch is in-flight; gates no-account warning
+  noAccount: boolean; // true only when backend confirmed 502/404 (no Phoenix account)
   collateral: number;
   portfolioValue: number;
   unrealizedPnl: number;
@@ -75,6 +77,8 @@ interface TraderStore {
   lastRefresh: number; // increments on every setAccounts — used to trigger dependent refreshes
   setAccounts: (accounts: TraderAccount[]) => void;
   setConnected: (connected: boolean, authority?: string) => void;
+  setFetchingAccount: (fetching: boolean) => void;
+  setNoAccount: (noAccount: boolean) => void;
   reset: () => void;
 }
 
@@ -82,6 +86,8 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   connected: false,
   authority: null,
   account: null,
+  fetchingAccount: false,
+  noAccount: false,
   collateral: 0,
   portfolioValue: 0,
   unrealizedPnl: 0,
@@ -112,6 +118,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
 
     set({
       account: primary,
+      noAccount: false,
       collateral: sdkNum(primary.effectiveCollateral),
       portfolioValue: sdkNum(primary.portfolioValue),
       unrealizedPnl: sdkNum(primary.unrealizedPnl),
@@ -125,11 +132,15 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   },
   setConnected: (connected, authority) =>
     set({ connected, authority: authority || null }),
+  setFetchingAccount: (fetching) => set({ fetchingAccount: fetching }),
+  setNoAccount: (noAccount) => set({ noAccount }),
   reset: () =>
     set({
       connected: false,
       authority: null,
       account: null,
+      fetchingAccount: false,
+      noAccount: false,
       collateral: 0,
       portfolioValue: 0,
       unrealizedPnl: 0,
