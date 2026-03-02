@@ -3,7 +3,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use phoenix_ix::{create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
-use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, Side, TraderKey};
+use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, PlaceIsolatedLimitOrderRequest, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
@@ -122,6 +122,11 @@ pub struct IsolatedLimitOrderRequest {
     pub collateral_usdc: Option<f64>,
     #[serde(default)]
     pub allow_cross_and_isolated: Option<bool>,
+    /// Isolated subaccount index (1–100). Required when stop_loss_price or
+    /// take_profit_price is set — used to bind bracket orders to the correct
+    /// subaccount PDA.
+    #[serde(default)]
+    pub subaccount_index: Option<u8>,
     #[serde(default)]
     pub stop_loss_price: Option<f64>,
     #[serde(default)]
@@ -666,28 +671,68 @@ async fn isolated_limit_order(
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
     let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
+    // Validate subaccount_index is provided when bracket orders are requested.
+    // Bracket ixs must reference the exact isolated subaccount PDA — without
+    // knowing the subaccount index we'd bind them to the wrong account.
+    let bracket_subaccount_index: Option<u8> = if bracket.is_some() {
+        let idx = req.subaccount_index.ok_or_else(|| {
+            AppError::BadRequest(
+                "subaccount_index (1–100) is required when stop_loss_price or \
+                 take_profit_price is set for isolated limit orders"
+                    .to_string(),
+            )
+        })?;
+        if idx == 0 || idx > 100 {
+            return Err(AppError::BadRequest(
+                "subaccount_index must be between 1 and 100 for isolated orders".to_string(),
+            ));
+        }
+        Some(idx)
+    } else {
+        None
+    };
+
+    // Extract the raw transfer_amount (micro-USDC) for the Phoenix API request.
+    let transfer_amount = match &collateral {
+        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => *collateral,
+        _ => 0,
+    };
+
+    // Use the with_request variant so we can pass pda_index, which tells the
+    // Phoenix API which isolated subaccount slot to use for this order.
     let mut instructions = state
         .http_client
-        .build_isolated_limit_order_tx(
-            &authority,
-            &req.symbol,
-            side,
-            req.price,
-            req.size_lots,
-            collateral,
-            allow_cross_and_isolated,
-        )
+        .build_isolated_limit_order_tx_with_request(PlaceIsolatedLimitOrderRequest {
+            authority: req.authority.clone(),
+            symbol: req.symbol.clone(),
+            side: match side {
+                Side::Bid => "bid".to_string(),
+                Side::Ask => "ask".to_string(),
+            },
+            price: Some(req.price),
+            num_base_lots: Some(req.size_lots),
+            transfer_amount,
+            pda_index: req.subaccount_index,
+            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
+            ..Default::default()
+        })
         .await
         .map_err(|e| {
             AppError::Phoenix(format!("Failed to build isolated limit order: {}", e))
         })?;
 
-    // Append bracket leg (TP/SL) instructions if requested
-    if let Some(ref bracket_legs) = bracket {
+    // Append bracket leg (TP/SL) instructions bound to the correct subaccount PDA.
+    if let (Some(ref bracket_legs), Some(sub_idx)) = (&bracket, bracket_subaccount_index) {
         let metadata = state.metadata.read().await;
-        // For isolated, derive the subaccount PDA (the SDK auto-finds next available)
-        let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
-        let bracket_ixs = build_bracket_leg_ixs(&metadata, &req.symbol, authority, trader_pda, side, bracket_legs)?;
+        let trader_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+        let bracket_ixs = build_bracket_leg_ixs(
+            &metadata,
+            &req.symbol,
+            authority,
+            trader_pda,
+            side,
+            bracket_legs,
+        )?;
         instructions.extend(bracket_ixs);
     }
 
