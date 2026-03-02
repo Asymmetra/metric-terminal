@@ -21,6 +21,10 @@ function transformPosition(sdkPos: any, subaccountIndex: number): TraderPosition
     ? "isolated"
     : (sdkPos.marginMode || sdkPos.margin_mode || "cross") as MarginMode;
 
+  // Extract liquidation price from SDK (may be camelCase or snake_case)
+  const liqRaw = sdkPos.liquidationPrice ?? sdkPos.liquidation_price;
+  const liqPrice = liqRaw != null ? sdkNum(liqRaw) : null;
+
   return {
     symbol: sdkPos.marketSymbol || sdkPos.symbol || "",
     side,
@@ -31,6 +35,9 @@ function transformPosition(sdkPos: any, subaccountIndex: number): TraderPosition
     discounted_unrealized_pnl: sdkNum(sdkPos.discountedUnrealizedPnl),
     margin_mode: marginMode,
     allocated_collateral: sdkNum(sdkPos.allocatedCollateral || sdkPos.allocated_collateral),
+    liquidation_price: liqPrice && liqPrice > 0 ? liqPrice : null,
+    position_value: sdkNum(sdkPos.positionValue),
+    initial_margin: sdkNum(sdkPos.initialMargin || sdkPos.positionInitialMargin),
     tp_price: sdkPos.tpPrice != null ? sdkNum(sdkPos.tpPrice) : (sdkPos.tp_price != null ? sdkNum(sdkPos.tp_price) : null),
     sl_price: sdkPos.slPrice != null ? sdkNum(sdkPos.slPrice) : (sdkPos.sl_price != null ? sdkNum(sdkPos.sl_price) : null),
     subaccount_index: subaccountIndex,

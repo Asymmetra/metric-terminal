@@ -204,7 +204,7 @@ export function Positions() {
           <>
             {positions.length > 0 ? (
               <div className="scrollbar-hide overflow-x-auto">
-              <table className="w-full min-w-[800px]">
+              <table className="w-full min-w-[1000px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
@@ -215,7 +215,9 @@ export function Positions() {
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Collateral</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Unreal. PnL</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">ROI%</th>
+                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Liq. Price</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Liq. Dist</th>
+                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Leverage</th>
                     <th className="px-3 py-1.5 text-center font-normal uppercase tracking-wider">Mode</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">TP</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">SL</th>
@@ -238,22 +240,25 @@ export function Positions() {
                     const isLong = pos.side.toLowerCase() === "long";
                     const posKey = `${pos.symbol}-${pos.subaccount_index}`;
 
-                    // ROI%
-                    const notional = pos.size * pos.mark_price;
-                    const maxLev = 10; // fallback max leverage
-                    const roi = pos.margin_mode === "isolated" && pos.allocated_collateral > 0
-                      ? (pos.unrealized_pnl / pos.allocated_collateral) * 100
-                      : notional > 0 ? (pos.unrealized_pnl / (notional / maxLev)) * 100 : 0;
+                    // Collateral: use initial_margin (available for all positions from SDK)
+                    const collateral = pos.allocated_collateral > 0
+                      ? pos.allocated_collateral
+                      : pos.initial_margin > 0 ? pos.initial_margin : 0;
 
-                    // Liquidation distance
-                    const effLeverage = pos.margin_mode === "isolated" && pos.allocated_collateral > 0
-                      ? notional / pos.allocated_collateral : 1;
-                    const mmr = 0.025;
-                    const liqPrice = isLong
-                      ? pos.entry_price * (1 - 1 / effLeverage + mmr)
-                      : pos.entry_price * (1 + 1 / effLeverage - mmr);
-                    const liqDistPct = pos.mark_price > 0
-                      ? Math.abs((pos.mark_price - liqPrice) / pos.mark_price) * 100 : 999;
+                    // ROI%: PnL / collateral backing this position
+                    const roi = collateral > 0
+                      ? (pos.unrealized_pnl / collateral) * 100
+                      : 0;
+
+                    // Liquidation distance: use real liq price from SDK
+                    const liqPrice = pos.liquidation_price;
+                    const liqDistPct = liqPrice != null && pos.mark_price > 0
+                      ? Math.abs((pos.mark_price - liqPrice) / pos.mark_price) * 100
+                      : null;
+
+                    // Effective leverage
+                    const notional = pos.position_value > 0 ? pos.position_value : pos.size * pos.mark_price;
+                    const effLeverage = collateral > 0 ? notional / collateral : 0;
 
                     return (
                       <tr
@@ -270,8 +275,8 @@ export function Positions() {
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.entry_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.mark_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">
-                          {pos.margin_mode === "isolated"
-                            ? `$${formatPrice(pos.allocated_collateral)}`
+                          {collateral > 0
+                            ? `$${formatPrice(collateral)}`
                             : "—"}
                         </td>
                         <td className={clsx("px-3 text-right font-medium", pos.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red")}>
@@ -280,14 +285,20 @@ export function Positions() {
                         <td className={clsx("px-3 text-right font-mono text-[10px]", roi >= 0 ? "text-ember-green" : "text-ember-red")}>
                           {roi >= 0 ? "+" : ""}{roi.toFixed(1)}%
                         </td>
+                        <td className="px-3 text-right font-mono text-[10px] text-ember-red/80">
+                          {liqPrice != null ? `$${formatPrice(liqPrice)}` : "—"}
+                        </td>
                         <td className={clsx(
                           "px-3 text-right font-mono text-[10px]",
-                          effLeverage <= 1 ? "text-text-secondary/50"
+                          liqDistPct == null ? "text-text-secondary/50"
                             : liqDistPct < 5 ? "text-ember-red"
-                            : liqDistPct < 10 ? "text-ember-orange"
+                            : liqDistPct < 10 ? "text-yellow-500"
                             : "text-ember-green"
                         )}>
-                          {effLeverage <= 1 ? "—" : `${liqDistPct.toFixed(1)}%`}
+                          {liqDistPct != null ? `${liqDistPct.toFixed(1)}%` : "—"}
+                        </td>
+                        <td className="px-3 text-right font-mono text-[10px] text-ember-orange">
+                          {effLeverage > 0 ? `${effLeverage.toFixed(1)}x` : "—"}
                         </td>
                         <td className="px-3 text-center">
                           <span className={clsx(
@@ -411,31 +422,66 @@ export function Positions() {
               <EmptyState message="No trade history" />
             ) : (
               <div className="scrollbar-hide overflow-x-auto">
-              <table className="w-full min-w-[500px]">
+              <table className="w-full min-w-[700px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Symbol</th>
+                    <th className="px-3 py-1.5 text-left font-normal uppercase tracking-wider">Type</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Price</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Size</th>
+                    <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Notional</th>
                     <th className="px-3 py-1.5 text-right font-normal uppercase tracking-wider">Time</th>
+                    <th className="px-3 py-1.5 text-center font-normal uppercase tracking-wider">Tx</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {tradeHistory.map((trade) => (
-                    <tr
-                      key={`${trade.transactionSignature}-${trade.timestamp}`}
-                      onClick={() => openTradeHistoryDetail(trade)}
-                      className="cursor-pointer font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
-                      style={{ height: "28px" }}
-                    >
-                      <td className="px-3 text-text-primary">{trade.marketSymbol}-PERP</td>
-                      <td className="px-3 text-right text-text-primary/90">${formatPrice(parseFloat(trade.price))}</td>
-                      <td className="px-3 text-right text-text-secondary/60">{formatSize(parseFloat(trade.baseQty), 2)}</td>
-                      <td className="px-3 text-right text-text-secondary/60">
-                        {new Date(trade.timestamp).toLocaleTimeString()}
-                      </td>
-                    </tr>
-                  ))}
+                  {tradeHistory.map((trade) => {
+                    const price = parseFloat(trade.price);
+                    const size = parseFloat(trade.baseQty);
+                    const notional = price * size;
+                    const isBuy = /market.*order|place.*order/i.test(trade.instructionType)
+                      ? parseFloat(trade.baseQty) > 0
+                      : true;
+                    const typeLabel = trade.instructionType
+                      ?.replace(/([A-Z])/g, " $1")
+                      .replace(/^./, (s) => s.toUpperCase())
+                      .trim() || "Trade";
+
+                    return (
+                      <tr
+                        key={`${trade.transactionSignature}-${trade.timestamp}`}
+                        onClick={() => openTradeHistoryDetail(trade)}
+                        className="cursor-pointer font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
+                        style={{ height: "28px" }}
+                      >
+                        <td className="px-3 text-text-primary">{trade.marketSymbol}-PERP</td>
+                        <td className="px-3 text-text-secondary/60 text-[10px]">{typeLabel}</td>
+                        <td className="px-3 text-right text-text-primary/90">${formatPrice(price)}</td>
+                        <td className="px-3 text-right text-text-secondary/60">{formatSize(size, 4)}</td>
+                        <td className="px-3 text-right text-text-secondary/60">${formatPrice(notional)}</td>
+                        <td className="px-3 text-right text-text-secondary/60">
+                          {new Date(trade.timestamp).toLocaleString("en-US", {
+                            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+                          })}
+                        </td>
+                        <td className="px-3 text-center">
+                          <a
+                            href={`https://orbmarkets.io/tx/${trade.transactionSignature}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-ember-orange/60 hover:text-ember-orange transition-colors"
+                          >
+                            <svg className="inline h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                              <path d="M6 3H3v10h10v-3" />
+                              <path d="M9 2h5v5" />
+                              <path d="M14 2L7 9" />
+                            </svg>
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               </div>

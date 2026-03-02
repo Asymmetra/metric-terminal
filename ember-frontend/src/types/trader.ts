@@ -21,6 +21,9 @@ export interface TraderPosition {
   discounted_unrealized_pnl: number;
   margin_mode: MarginMode;
   allocated_collateral: number;
+  liquidation_price: number | null;
+  position_value: number;
+  initial_margin: number;
   tp_price: number | null;
   sl_price: number | null;
   subaccount_index: number; // 0 = cross-margin, 1-100 = isolated
