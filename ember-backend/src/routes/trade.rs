@@ -3,7 +3,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use phoenix_ix::{create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
-use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, PlaceIsolatedLimitOrderRequest, Side, TraderKey};
+use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, PlaceIsolatedLimitOrderRequest, PlaceIsolatedMarketOrderRequest, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
@@ -105,6 +105,10 @@ pub struct IsolatedMarketOrderRequest {
     pub collateral_usdc: Option<f64>,
     #[serde(default)]
     pub allow_cross_and_isolated: Option<bool>,
+    /// Isolated subaccount index (1–100). When provided, targets that specific
+    /// isolated subaccount slot. Defaults to None (Phoenix API picks the slot).
+    #[serde(default)]
+    pub subaccount_index: Option<u8>,
     #[serde(default)]
     pub stop_loss_price: Option<f64>,
     #[serde(default)]
@@ -620,23 +624,31 @@ async fn isolated_market_order(
     );
 
     validate_size_lots(req.size_lots)?;
-    let authority = parse_authority(&req.authority)?;
+    parse_authority(&req.authority)?; // validate pubkey format
     let side = parse_side(&req.side)?;
     let collateral = build_collateral(req.collateral_usdc)?;
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
     let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
+    let transfer_amount = match &collateral {
+        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => *collateral,
+        _ => 0,
+    };
+    let tp_sl = bracket.as_ref().map(BracketLegOrders::to_tp_sl_config);
+
     let instructions = state
         .http_client
-        .build_isolated_market_order_tx(
-            &authority,
-            &req.symbol,
-            side,
-            req.size_lots,
-            collateral,
-            allow_cross_and_isolated,
-            bracket.as_ref(),
-        )
+        .build_isolated_market_order_tx_with_request(PlaceIsolatedMarketOrderRequest {
+            authority: req.authority.clone(),
+            symbol: req.symbol.clone(),
+            side: side.to_api_string().to_string(),
+            num_base_lots: Some(req.size_lots),
+            transfer_amount,
+            pda_index: req.subaccount_index,
+            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
+            tp_sl,
+            ..Default::default()
+        })
         .await
         .map_err(|e| {
             AppError::Phoenix(format!("Failed to build isolated market order: {}", e))
@@ -854,15 +866,15 @@ async fn close_all_positions(
 
         let instructions = state
             .http_client
-            .build_isolated_market_order_tx(
-                &authority,
-                &pos.symbol,
-                close_side,
-                pos.size_lots,
-                None, // No collateral flow needed for closing
-                false, // Don't allow cross-and-isolated for closes
-                None, // No bracket orders for closes
-            )
+            .build_isolated_market_order_tx_with_request(PlaceIsolatedMarketOrderRequest {
+                authority: req.authority.clone(),
+                symbol: pos.symbol.clone(),
+                side: close_side.to_api_string().to_string(),
+                num_base_lots: Some(pos.size_lots),
+                pda_index: Some(pos.subaccount_index),
+                is_reduce_only: Some(true),
+                ..Default::default()
+            })
             .await
             .map_err(|e| {
                 AppError::Phoenix(format!(
