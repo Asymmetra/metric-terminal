@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// DEPRECATED — does not verify on-chain confirmation (confirmation.value.err not checked).
+// This script produced false PASS results — TXs appeared confirmed but failed on-chain.
+// Use e2e-full.mjs instead.
 /**
  * Ember Terminal — E2E Live Test Script
  *
