@@ -10,6 +10,7 @@ import { useToastStore } from "@/stores/toastStore";
 import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatPrice } from "@/lib/format";
 import { MarginMode } from "@/types/trader";
+import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import clsx from "clsx";
 
 export function OrderEntry() {
@@ -23,6 +24,7 @@ export function OrderEntry() {
   const [tpPrice, setTpPrice] = useState("");
   const [slPrice, setSlPrice] = useState("");
   const [txPhase, setTxPhase] = useState<"idle" | "building" | "simulating" | "signing" | "submitting">("idle");
+  const [showDepositModal, setShowDepositModal] = useState(false);
   const submittingRef = useRef(false);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const marketConfig = useMarketStore((s) => s.marketConfig);
@@ -55,6 +57,7 @@ export function OrderEntry() {
 
   // Reset when market changes
   useEffect(() => {
+    setPrice("");
     setLeverage(1);
     setMarginMode("cross");
     setCollateralInput("");
@@ -62,6 +65,15 @@ export function OrderEntry() {
     setTpPrice("");
     setSlPrice("");
   }, [selectedSymbol]);
+
+  // Hide TP/SL when switching to limit orders (architecturally unsupported)
+  useEffect(() => {
+    if (orderType === "limit") {
+      setShowTpSl(false);
+      setTpPrice("");
+      setSlPrice("");
+    }
+  }, [orderType]);
 
   // Trader account info
   const collateral = useTraderStore((s) => s.collateral);
@@ -214,6 +226,9 @@ export function OrderEntry() {
   // ── Validation ──
   const collateralVal = parseFloat(collateralInput || "0");
   const priceVal = parseFloat(price || "0");
+  const needsCollateral = connected && collateralVal <= 0;
+  const needsPrice = connected && orderType === "limit" && collateralVal > 0 && (!price || priceVal <= 0);
+  const isolatedCollateralExceeded = marginMode === "isolated" && collateralVal > 0 && collateralVal > freeCollateral;
 
   const validation = useMemo(() => {
     const issues: string[] = [];
@@ -222,6 +237,7 @@ export function OrderEntry() {
     if (orderType === "limit" && (!price || priceVal <= 0)) issues.push("Enter limit price");
     if (collateral <= 0 && collateralVal > 0) issues.push("No deposited collateral");
     if (derivedOrder && derivedOrder.collateral > freeCollateral) issues.push("Insufficient margin");
+    if (isolatedCollateralExceeded) issues.push("Collateral exceeds available");
     if (showTpSl && !tpValid) issues.push(`TP must be ${side === "buy" ? "above" : "below"} mark`);
     if (showTpSl && !slValid) issues.push(`SL must be ${side === "buy" ? "below" : "above"} mark`);
     if (!markPrice) issues.push("Waiting for market data");
@@ -238,10 +254,7 @@ export function OrderEntry() {
       buttonLabel = side === "buy" ? `BUY ${selectedSymbol}` : `SELL ${selectedSymbol}`;
     }
     return { ready, issues, buttonLabel };
-  }, [connected, collateralVal, priceVal, price, orderType, collateral, freeCollateral, derivedOrder, showTpSl, tpValid, slValid, side, markPrice, txPhase, baseDecimals, selectedSymbol]);
-
-  const needsCollateral = connected && collateralVal <= 0;
-  const needsPrice = connected && orderType === "limit" && collateralVal > 0 && (!price || priceVal <= 0);
+  }, [connected, collateralVal, priceVal, price, orderType, collateral, freeCollateral, derivedOrder, showTpSl, tpValid, slValid, side, markPrice, txPhase, baseDecimals, selectedSymbol, isolatedCollateralExceeded]);
 
   return (
     <>
@@ -324,6 +337,7 @@ export function OrderEntry() {
                 step="0.01"
                 className={clsx(
                   "w-full border bg-surface-l2 py-2 pl-3 pr-12 font-mono text-[11px] text-text-primary placeholder:text-text-secondary/40 focus:outline-none transition-colors",
+                  isolatedCollateralExceeded ? "border-ember-red ring-1 ring-ember-red/50 focus:border-ember-red" :
                   needsCollateral ? "border-ember-orange/50 focus:border-ember-orange" : "border-ember-border focus:border-ember-orange/60"
                 )}
               />
@@ -346,6 +360,11 @@ export function OrderEntry() {
                 </button>
               ))}
             </div>
+            {isolatedCollateralExceeded && (
+              <span className="mt-0.5 block text-[9px] text-ember-red">
+                Exceeds available collateral ({formatUsd(freeCollateral)})
+              </span>
+            )}
           </div>
 
           {/* Price input (limit only) */}
@@ -424,8 +443,8 @@ export function OrderEntry() {
             </div>
           </div>
 
-          {/* TP/SL toggle + inputs */}
-          <div>
+          {/* TP/SL toggle + inputs — market orders only (limit+TP/SL unsupported by Phoenix) */}
+          {orderType === "market" && <div>
             <button
               onClick={() => setShowTpSl(!showTpSl)}
               className="flex w-full items-center justify-between py-1"
@@ -553,7 +572,7 @@ export function OrderEntry() {
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Order summary */}
           {derivedOrder && (
@@ -627,27 +646,36 @@ export function OrderEntry() {
           )}
 
           {/* Submit button */}
-          <button
-            onClick={handleSubmit}
-            disabled={!validation.ready || txPhase !== "idle"}
-            className={clsx(
-              "flex w-full items-center justify-center gap-2 py-2.5 font-mono text-[11px] font-medium tracking-wider transition-all duration-150",
-              !validation.ready
-                ? "bg-surface-l2 text-text-secondary/50 cursor-not-allowed"
-                : side === "buy"
-                  ? "bg-ember-green text-ember-black hover:brightness-110 active:brightness-95"
-                  : "bg-ember-red text-white hover:brightness-110 active:brightness-95",
-              txPhase !== "idle" && "opacity-70 pointer-events-none"
-            )}
-          >
-            {txPhase !== "idle" && (
-              <svg className="h-3 w-3 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="8" cy="8" r="6" strokeOpacity="0.3" />
-                <path d="M8 2a6 6 0 014.9 9.4" />
-              </svg>
-            )}
-            {validation.buttonLabel}
-          </button>
+          {(noAccount && !fetchingAccount) ? (
+            <button
+              onClick={() => setShowDepositModal(true)}
+              className="flex w-full items-center justify-center py-2.5 font-mono text-[11px] font-medium tracking-wider bg-ember-orange text-white hover:brightness-110 active:brightness-95 transition-all duration-150"
+            >
+              DEPOSIT TO START TRADING
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={!validation.ready || txPhase !== "idle"}
+              className={clsx(
+                "flex w-full items-center justify-center gap-2 py-2.5 font-mono text-[11px] font-medium tracking-wider transition-all duration-150",
+                !validation.ready
+                  ? "bg-surface-l2 text-text-secondary/50 cursor-not-allowed"
+                  : side === "buy"
+                    ? "bg-ember-green text-ember-black hover:brightness-110 active:brightness-95"
+                    : "bg-ember-red text-white hover:brightness-110 active:brightness-95",
+                txPhase !== "idle" && "opacity-70 pointer-events-none"
+              )}
+            >
+              {txPhase !== "idle" && (
+                <svg className="h-3 w-3 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="8" cy="8" r="6" strokeOpacity="0.3" />
+                  <path d="M8 2a6 6 0 014.9 9.4" />
+                </svg>
+              )}
+              {validation.buttonLabel}
+            </button>
+          )}
         </div>
 
         {/* Account info — shown when wallet connected */}
@@ -732,6 +760,7 @@ export function OrderEntry() {
           </div>
         )}
       </div>
+      {showDepositModal && <DepositWithdraw onClose={() => setShowDepositModal(false)} />}
     </>
   );
 }

@@ -45,7 +45,7 @@ function transformPosition(sdkPos: any, subaccountIndex: number): TraderPosition
 }
 
 // Transform SDK limit order (camelCase + Decimal/string) → display-ready LimitOrder
-function transformLimitOrder(sdkOrder: any): LimitOrder {
+function transformLimitOrder(sdkOrder: any, subaccountIndex: number): LimitOrder {
   return {
     price_in_ticks: typeof sdkOrder.priceTicks === "string"
       ? parseInt(sdkOrder.priceTicks, 10) || 0
@@ -57,6 +57,7 @@ function transformLimitOrder(sdkOrder: any): LimitOrder {
     price: sdkNum(sdkOrder.price || sdkOrder.limitPrice),
     size: sdkNum(sdkOrder.initialTradeSize || sdkOrder.size),
     remaining_size: sdkNum(sdkOrder.tradeSizeRemaining || sdkOrder.remaining_size),
+    subaccount_index: subaccountIndex,
   };
 }
 
@@ -111,7 +112,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
         positions.push(transformPosition(pos, subIdx));
       }
       for (const [symbol, orders] of Object.entries(account.limitOrders || {})) {
-        const transformed = (orders as any[]).map(transformLimitOrder);
+        const transformed = (orders as any[]).map((o) => transformLimitOrder(o, subIdx));
         limitOrders[symbol] = [...(limitOrders[symbol] || []), ...transformed];
       }
     }

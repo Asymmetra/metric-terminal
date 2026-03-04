@@ -157,7 +157,7 @@ export function Positions() {
     try {
       await cancelOrders(order.symbol, [
         { price: order.price, order_sequence_number: order.order_sequence_number },
-      ]);
+      ], order.subaccount_index);
     } catch (e: any) {
       console.error("Cancel failed:", e);
     } finally {

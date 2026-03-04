@@ -40,6 +40,7 @@ export interface LimitOrder {
   price: number;
   size: number;
   remaining_size: number;
+  subaccount_index: number; // 0 = cross-margin, 1-100 = isolated
 }
 
 // SDK TraderView account — matches actual API response (camelCase)

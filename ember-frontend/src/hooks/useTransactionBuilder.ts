@@ -96,7 +96,7 @@ export function useTransactionBuilder() {
   );
 
   const cancelOrders = useCallback(
-    async (symbol: string, orderIds: { price: number; order_sequence_number: number }[]): Promise<TxResult> => {
+    async (symbol: string, orderIds: { price: number; order_sequence_number: number }[], subaccountIndex?: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Cancel", `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`);
@@ -106,6 +106,7 @@ export function useTransactionBuilder() {
           authority: publicKey.toBase58(),
           symbol,
           order_ids: orderIds,
+          ...(subaccountIndex !== undefined && { subaccount_index: subaccountIndex }),
         });
         const instructions = deserializeInstructions(response.instructions);
 
