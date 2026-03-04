@@ -439,20 +439,23 @@ async fn limit_order(
         req.symbol
     );
 
+    // TP/SL bracket orders are architecturally unsupported on limit orders:
+    // place_stop_loss requires an existing open position, but a resting limit
+    // order hasn't filled at TX time — Phoenix returns error 7002.
+    if req.take_profit_price.is_some() || req.stop_loss_price.is_some() {
+        return Err(AppError::BadRequest(
+            "Bracket orders (TP/SL) are not supported for limit orders. \
+             Use a market order for bracket functionality."
+                .to_string(),
+        ));
+    }
+
     validate_size_lots(req.size_lots)?;
     validate_price(req.price)?;
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
-
-    if bracket.is_some() {
-        tracing::info!(
-            "Limit order includes TP/SL bracket: SL={:?} TP={:?}",
-            req.stop_loss_price,
-            req.take_profit_price
-        );
-    }
 
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
@@ -719,7 +722,7 @@ async fn isolated_limit_order(
             symbol: req.symbol.clone(),
             side: side.to_api_string().to_string(),
             price: Some(req.price),
-            num_base_lots: Some(req.size_lots),
+            quantity: Some(req.size_lots as f64),
             transfer_amount,
             pda_index: req.subaccount_index,
             allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),

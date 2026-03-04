@@ -21,7 +21,7 @@ async fn get_trader(
     let authority = Pubkey::from_str(&pubkey)
         .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
 
-    let traders = state
+    let mut traders = state
         .http_client
         .get_traders(&authority)
         .await
@@ -31,6 +31,9 @@ async fn get_trader(
             }
             _ => AppError::Phoenix(format!("Failed to fetch trader: {}", e)),
         })?;
+
+    // Ensure cross-margin (subaccount 0) is always first; isolated follow in order.
+    traders.sort_by_key(|t| t.trader_subaccount_index);
 
     Ok(Json(serde_json::json!({
         "authority": pubkey,
