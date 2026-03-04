@@ -8,7 +8,8 @@ import clsx from "clsx";
 
 export function PortfolioSummaryBar() {
   const connected = useTraderStore((s) => s.connected);
-  const account = useTraderStore((s) => s.account);
+  const fetchingAccount = useTraderStore((s) => s.fetchingAccount);
+  const noAccount = useTraderStore((s) => s.noAccount);
   const collateral = useTraderStore((s) => s.collateral);
   const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
@@ -39,8 +40,7 @@ export function PortfolioSummaryBar() {
   if (!connected) return null;
 
   // Show warning if wallet is connected but no Phoenix account exists
-  const hasAccount = account != null;
-  if (!hasAccount) {
+  if (noAccount && !fetchingAccount) {
     return (
       <div className="flex items-center justify-center gap-2 border-b border-ember-orange/30 bg-ember-orange/10 px-3 py-1.5">
         <svg className="h-3.5 w-3.5 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">

@@ -7,7 +7,9 @@ async function fetchApi<T>(path: string, options?: RequestInit & { signal?: Abor
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(error.error || res.statusText);
+    const err = new Error(error.error || res.statusText) as Error & { status: number };
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
