@@ -82,7 +82,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: `${label} Confirmed`, detail: summary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -96,7 +96,7 @@ export function useTransactionBuilder() {
   );
 
   const cancelOrders = useCallback(
-    async (symbol: string, orderIds: { price_in_ticks: number; order_sequence_number: number }[]): Promise<TxResult> => {
+    async (symbol: string, orderIds: { price: number; order_sequence_number: number }[]): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
 
       const toastId = addToast("loading", "Building Cancel", `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`);
@@ -117,7 +117,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Order Cancelled", detail: `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction timed out. Your order was NOT cancelled — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Cancel Expired", detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -151,7 +151,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Deposit Confirmed", detail: `$${amountUsdc.toFixed(2)} USDC deposited`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Deposit Expired", detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -185,7 +185,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Withdrawal Confirmed", detail: `$${amountUsdc.toFixed(2)} USDC withdrawn`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Withdrawal Expired", detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -222,7 +222,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: `${label} Confirmed`, detail: summary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: `${label} Expired`, detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -261,7 +261,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Transfer Confirmed", detail: transferSummary, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction timed out. Your funds were NOT moved — please retry.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Transfer Expired", detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();
@@ -295,7 +295,7 @@ export function useTransactionBuilder() {
         if (result.confirmed) {
           updateToast(toastId, { type: "success", title: "Close All Confirmed", detail: `${positions.length} position${positions.length !== 1 ? "s" : ""} closed`, txid: result.txid });
         } else {
-          updateToast(toastId, { type: "error", title: "Close All Expired", detail: "Transaction timed out. Some positions may still be open — please check.", txid: result.txid });
+          updateToast(toastId, { type: "error", title: "Close All Expired", detail: "Transaction status unknown — check explorer and verify positions before retrying.", txid: result.txid });
         }
 
         await refreshTraderData();

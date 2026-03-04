@@ -123,7 +123,21 @@ export async function buildAndSignTransaction(
       if (err?.message?.includes("failed on-chain")) {
         throw err;
       }
-      console.warn("[solana] confirmTransaction timed out for", txid);
+      // confirmTransaction timed out — blockhash expired or RPC dropped the socket.
+      // The TX may have landed. Poll once to check before returning unknown status.
+      console.warn("[solana] confirmTransaction timed out for", txid, "— polling getTransaction");
+      try {
+        const txInfo = await connection.getTransaction(txid, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        });
+        if (txInfo && !txInfo.meta?.err) {
+          console.info("[solana] getTransaction confirmed:", txid);
+          return { txid, confirmed: true };
+        }
+      } catch {
+        // getTransaction itself failed — fall through to unknown
+      }
       return { txid, confirmed: false };
     }
   }

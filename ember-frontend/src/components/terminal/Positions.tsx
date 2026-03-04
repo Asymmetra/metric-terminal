@@ -150,13 +150,13 @@ export function Positions() {
     }
   }, [activeTab, publicKey, fetchTradeHistory, lastRefresh]);
 
-  // Cancel now requires price_in_ticks + order_sequence_number
+  // Cancel requires price (USD) + order_sequence_number — backend converts price to ticks server-side
   const handleCancel = async (order: LimitOrder & { symbol: string }) => {
     const key = `${order.price_in_ticks}:${order.order_sequence_number}`;
     setCancellingKey(key);
     try {
       await cancelOrders(order.symbol, [
-        { price_in_ticks: order.price_in_ticks, order_sequence_number: order.order_sequence_number },
+        { price: order.price, order_sequence_number: order.order_sequence_number },
       ]);
     } catch (e: any) {
       console.error("Cancel failed:", e);

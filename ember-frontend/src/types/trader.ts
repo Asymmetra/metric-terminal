@@ -69,9 +69,10 @@ export interface TraderResponse {
   accounts: TraderAccount[];
 }
 
-// Cancel order ID format for SDK
+// Cancel order ID format sent to backend.
+// NOTE: backend expects price as USD (e.g. 50.0) — it converts to ticks server-side.
 export interface CancelOrderId {
-  price_in_ticks: number;
+  price: number;
   order_sequence_number: number;
 }
 
