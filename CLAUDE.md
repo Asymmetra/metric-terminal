@@ -21,7 +21,7 @@ If your tooling or workflow attempts to create a worktree, override it. Work in-
 
 ## Production Endpoints
 
-- **Frontend**: https://ember-terminal-six.vercel.app
+- **Frontend**: https://ember-terminal-gamma.vercel.app
 - **Backend**: https://ember-backend-q4nf.onrender.com
 - **WebSocket**: wss://ember-backend-q4nf.onrender.com/ws
 
