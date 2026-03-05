@@ -572,6 +572,13 @@ function CollateralModal({
   const [error, setError] = useState<string | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const collateral = useTraderStore((s) => s.collateral);
+  const allAccounts = useTraderStore((s) => s.allAccounts);
+  const isoAccount = allAccounts.find(
+    (a) => (a.traderSubaccountIndex ?? 0) === position.subaccount_index
+  );
+  const isoAvailable = isoAccount
+    ? parseFloat(isoAccount.effectiveCollateral.ui) || 0
+    : position.allocated_collateral;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -668,9 +675,9 @@ function CollateralModal({
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[10px] text-text-secondary/70 uppercase tracking-wider">Current Collateral</span>
+              <span className="text-[10px] text-text-secondary/70 uppercase tracking-wider">Isolated Available</span>
               <span className="font-mono text-[11px] text-text-primary">
-                ${formatPrice(position.allocated_collateral)}
+                ${formatPrice(isoAvailable)}
               </span>
             </div>
             <div className="flex justify-between">

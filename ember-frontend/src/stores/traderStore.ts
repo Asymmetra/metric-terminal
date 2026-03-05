@@ -65,6 +65,7 @@ interface TraderStore {
   connected: boolean;
   authority: string | null;
   account: TraderAccount | null;
+  allAccounts: TraderAccount[]; // all registered subaccounts — preserved for per-subaccount balance queries
   fetchingAccount: boolean; // true while REST fetch is in-flight; gates no-account warning
   noAccount: boolean; // true only when backend confirmed 502/404 (no Phoenix account)
   collateral: number;
@@ -87,6 +88,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   connected: false,
   authority: null,
   account: null,
+  allAccounts: [],
   fetchingAccount: false,
   noAccount: false,
   collateral: 0,
@@ -119,6 +121,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
 
     set({
       account: primary,
+      allAccounts: accounts,
       noAccount: false,
       collateral: sdkNum(primary.effectiveCollateral),
       portfolioValue: sdkNum(primary.portfolioValue),
@@ -140,6 +143,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       connected: false,
       authority: null,
       account: null,
+      allAccounts: [],
       fetchingAccount: false,
       noAccount: false,
       collateral: 0,
