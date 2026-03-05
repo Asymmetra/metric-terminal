@@ -686,10 +686,10 @@ for (const subIdx of [1, 2]) {
   }
 }
 
-// --- TEST 23: Negative test — omit subaccount_index → expect HTTP 400 ---
+// --- TEST 22: Negative test — omit subaccount_index → expect HTTP 400 ---
 // Verifies Forge's required-field guard (039e09b) is live on Render.
 await sleep(1000);
-log(`\n--- TEST 23: Negative guard — isolated-limit-order without subaccount_index (expect 400) ---`);
+log(`\n--- TEST 22: Negative guard — isolated-limit-order without subaccount_index (expect 400) ---`);
 const noSubRes = await fetch(`${BACKEND}/api/tx/isolated-limit-order`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -710,7 +710,7 @@ if (noSubRes.status === 400) {
   fail("No-subaccount_index returns 400", `Expected HTTP 400, got ${noSubRes.status}: ${JSON.stringify(noSubData).slice(0, 200)}`);
 }
 
-// --- TEST 22: Final state verification ---
+// --- TEST 23: Final state verification ---
 await sleep(3000);
 const finalState = await getTraderState();
 const finalAcct = getCrossMarginAccount(finalState);
