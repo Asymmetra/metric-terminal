@@ -162,7 +162,7 @@ async function sleep(ms) {
 
 // ============================================================
 log("╔══════════════════════════════════════════════════════════╗");
-log("║   EMBER TERMINAL — EXPANDED E2E TEST (22 tests)        ║");
+log("║   EMBER TERMINAL — EXPANDED E2E TEST (24 tests)        ║");
 log("╚══════════════════════════════════════════════════════════╝");
 log(`Wallet: ${WALLET}`);
 log(`Backend: ${BACKEND}`);
@@ -710,10 +710,10 @@ if (noSubRes.status === 400) {
   fail("No-subaccount_index returns 400", `Expected HTTP 400, got ${noSubRes.status}: ${JSON.stringify(noSubData).slice(0, 200)}`);
 }
 
-// --- TEST 25: SKR cross-margin rejection (hard fail — isolatedOnly guard, eab543f) ---
+// --- TEST 23: SKR cross-margin rejection (hard fail — isolatedOnly guard, eab543f) ---
 // SKR is isolatedOnly=true. POST to market-order (cross-margin) must return HTTP 400.
 await sleep(500);
-log(`\n--- TEST 25: SKR cross-margin rejection (expect HTTP 400 — isolatedOnly guard) ---`);
+log(`\n--- TEST 23: SKR cross-margin rejection (expect HTTP 400 — isolatedOnly guard) ---`);
 const skrCrossRes = await fetch(`${BACKEND}/api/tx/market-order`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -727,12 +727,12 @@ if (skrCrossRes.status === 400) {
   fail("SKR cross-margin rejected (HTTP 400)", `Expected 400, got HTTP ${skrCrossRes.status}: ${JSON.stringify(skrCrossData).slice(0, 200)}`);
 }
 
-// --- TEST 23: Final state verification ---
+// --- TEST 24: Final state verification ---
 await sleep(3000);
 const finalState = await getTraderState();
 const finalAcct = getCrossMarginAccount(finalState);
 const finalCollateral = parseFloat(finalAcct?.collateralBalance?.ui || "0");
-log(`\n--- TEST 22: Final state verification ---`);
+log(`\n--- TEST 24: Final state verification ---`);
 log(`  State: ${finalAcct?.state}`);
 log(`  Flags: ${finalAcct?.flags}`);
 log(`  Collateral: ${finalCollateral}`);
