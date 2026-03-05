@@ -699,7 +699,7 @@ log(`  Open positions: ${positionSymbols.length > 0 ? positionSymbols.join(", ")
 // Check isolated subaccounts
 for (const sub of (finalState.accounts || []).filter(a => a.traderSubaccountIndex > 0)) {
   if (sub) {
-    log(`  Subaccount ${i}: collateral=${sub.collateralBalance?.ui || 0}`);
+    log(`  Subaccount ${sub.traderSubaccountIndex}: collateral=${sub.collateralBalance?.ui || 0}`);
   }
 }
 
