@@ -29,6 +29,9 @@ Ember Terminal connects directly to Phoenix's on-chain perpetuals markets and pr
 - **Market & limit orders** — transactions built server-side, signed via Phantom wallet
 - **TP/SL bracket orders** — take-profit and stop-loss levels auto-placed with each position
 - **Isolated margin trading** with subaccount management (subaccounts 1–100; index 0 = cross-margin)
+- **Isolated-only markets** — SKR and any future isolated-only markets force isolated mode; cross-margin attempts return 400
+- **Phoenix activation state** — detects unactivated wallets (flags < 63) and shows actionable onboarding UI instead of silently failing
+- **Dynamic subaccount collateral** — CollateralModal displays true effective collateral per subaccount (not per-position allocated margin)
 - **Position management** — view open positions, close individual or close all with confirmation
 - **Deposit/withdraw USDC** collateral directly from the terminal
 - **Portfolio summary bar** — collateral, unrealized PnL, portfolio value, margin usage
@@ -117,7 +120,7 @@ All transaction endpoints are under `/api/tx/`:
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 15, React 19, TypeScript, TailwindCSS 4 |
-| State | Zustand 5 (6 stores: market, orderbook, stats, trade, trader, toast) |
+| State | Zustand 5 (8 stores: market, orderbook, stats, trade, trader, tradeDetail, toast, ui) |
 | Charts | Lightweight Charts 4 (TradingView engine) |
 | Wallet | Phantom via @solana/wallet-adapter-react |
 | Backend | Rust, Axum 0.8, Tokio, Tower-HTTP |
@@ -279,6 +282,47 @@ After initial setup, both platforms auto-deploy on `git push origin main`. No ma
 8. Signed transaction is sent to Solana
 9. Frontend confirms the transaction on-chain, then refreshes trader state
 10. WebSocket streams deliver real-time updates for positions, orderbook, and trades
+
+## Testing
+
+The automated E2E suite (`tests/e2e-expanded.mjs`) runs 24 tests against the live production backend using a funded test wallet. It covers the full trade lifecycle with real on-chain transactions.
+
+```bash
+cd tests
+npm install
+node e2e-expanded.mjs
+```
+
+**What it tests:**
+- Section A (tests 1–8): Multi-market cross-margin orders (ETH, XRP, BTC, HYPE)
+- Section B (tests 9–14): Isolated subaccount registration and SOL trading
+- Section C (tests 15–18): Cross↔isolated collateral transfers and sweep
+- Section D (tests 19–24): Edge cases — subaccount re-registration, isolated limit/cancel, required-field guards (400), SKR isolated-only enforcement, final state verification
+
+Expected output: `24/24 PASS`, wallet returns to its starting collateral balance, zero open orders/positions.
+
+> **Note:** Tests use a pre-funded test wallet on Solana mainnet. Runs cost real gas. Do not run repeatedly in a tight loop.
+
+## Known Limitations
+
+| Area | Detail |
+|------|--------|
+| Activation state check | Uses `flags >= 63` rather than strict bitmask `(flags & 63) === 63`. Works correctly for Phoenix's current sequential activation lifecycle; would misclassify a wallet if Phoenix ever sets non-sequential high bits without first setting all lower bits. Low practical risk. |
+| Collateral state propagation | After a `transfer-collateral` transaction confirms, `/api/trader/` may return stale balances for ~5–10 seconds. The UI reflects the lag until the next WebSocket-triggered refresh. |
+| Frontend E2E coverage | The automated test suite (`tests/e2e-expanded.mjs`) covers the full backend/API layer with real on-chain transactions. UI-specific features (activation state display, CollateralModal balance) are verified by code review; no browser-driven test harness exists yet. |
+
+## Future Work
+
+Features planned but not yet implemented, roughly by priority:
+
+- **Activation onboarding flow** — guide unactivated users through the full Phoenix registration → invite code → deposit → active sequence in-product
+- **Testnet toggle** — switch between mainnet and Phoenix devnet without code changes
+- **Sub-account dashboard** — dedicated `/accounts` page showing per-subaccount collateral, positions, and transfer UI
+- **Advanced orders** — trailing stops, bracket orders with multiple TP levels, OCO
+- **Copy trading** — follow and mirror another trader's positions in real time
+- **Competitions** — time-boxed PnL leaderboards with opt-in entry
+- **PWA / mobile** — installable app with responsive layout for mobile trading
+- **WebSocket reconnection hardening** — exponential backoff with jitter; stale-data indicator on prolonged disconnect
 
 ## License
 
