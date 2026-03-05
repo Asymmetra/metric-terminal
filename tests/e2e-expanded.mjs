@@ -2,11 +2,11 @@
 /**
  * Expanded E2E test suite — multi-market + isolated/cross margin
  *
- * 23 tests covering:
+ * 24 tests covering:
  *   Section A (1–8):   Multi-market cross-margin (ETH, XRP, BTC, HYPE)
  *   Section B (9–14):  Isolated margin full flow (register, trade, close, sweep)
  *   Section C (15–18): Collateral management (cross↔isolated transfers)
- *   Section D (19–23): Edge cases (second subaccount, isolated limit, cancel, 400 guard)
+ *   Section D (19–24): Edge cases (second subaccount, isolated limit, cancel, 400 guard, SKR cross-margin rejection)
  *
  * Follows exact patterns from e2e-full.mjs (buildAndSend, pass/fail, raw JSON for BigInt).
  */
@@ -708,6 +708,23 @@ if (noSubRes.status === 400) {
   pass("No-subaccount_index returns 400", `HTTP 400 confirmed — required-field guard live`);
 } else {
   fail("No-subaccount_index returns 400", `Expected HTTP 400, got ${noSubRes.status}: ${JSON.stringify(noSubData).slice(0, 200)}`);
+}
+
+// --- TEST 25: SKR cross-margin rejection (hard fail — isolatedOnly guard, eab543f) ---
+// SKR is isolatedOnly=true. POST to market-order (cross-margin) must return HTTP 400.
+await sleep(500);
+log(`\n--- TEST 25: SKR cross-margin rejection (expect HTTP 400 — isolatedOnly guard) ---`);
+const skrCrossRes = await fetch(`${BACKEND}/api/tx/market-order`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ authority: WALLET, symbol: "SKR", side: "buy", size_lots: 1 }),
+});
+const skrCrossData = await skrCrossRes.json().catch(() => ({}));
+log(`  HTTP ${skrCrossRes.status}: ${skrCrossData.message || skrCrossData.error || "no message"}`);
+if (skrCrossRes.status === 400) {
+  pass("SKR cross-margin rejected (HTTP 400)", `guard live — ${(skrCrossData.message || skrCrossData.error || "").slice(0, 100)}`);
+} else {
+  fail("SKR cross-margin rejected (HTTP 400)", `Expected 400, got HTTP ${skrCrossRes.status}: ${JSON.stringify(skrCrossData).slice(0, 200)}`);
 }
 
 // --- TEST 23: Final state verification ---
