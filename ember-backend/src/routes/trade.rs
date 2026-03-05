@@ -682,7 +682,7 @@ async fn isolated_limit_order(
     validate_price(req.price)?;
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
-    let collateral = build_collateral(req.collateral_usdc)?;
+    let _collateral = build_collateral(req.collateral_usdc)?; // validate; transfer built locally below
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
     let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
@@ -707,15 +707,69 @@ async fn isolated_limit_order(
         None
     };
 
-    // Extract the raw transfer_amount (micro-USDC) for the Phoenix API request.
-    let transfer_amount = match &collateral {
-        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => *collateral,
-        _ => 0,
-    };
+    let metadata = state.metadata.read().await;
+    let builder = PhoenixTxBuilder::new(&metadata);
+    let mut all_instructions: Vec<Instruction> = Vec::new();
 
-    // Use the with_request variant so we can pass pda_index, which tells the
-    // Phoenix API which isolated subaccount slot to use for this order.
-    let mut instructions = state
+    // Auto-register isolated subaccount if it has not been registered yet.
+    // The Phoenix /ix/place-isolated-limit-order endpoint returns 502
+    // ("Source account not found") if the isolated subaccount PDA does not
+    // exist on-chain. Mirror the deposit handler's auto-registration pattern.
+    if let Some(sub_idx) = req.subaccount_index {
+        if sub_idx > 0 {
+            let is_registered = state
+                .http_client
+                .get_traders(&authority)
+                .await
+                .map(|traders| traders.iter().any(|t| t.trader_subaccount_index == sub_idx))
+                .unwrap_or(false);
+
+            if !is_registered {
+                tracing::info!(
+                    "Isolated sub={} not registered for {}, prepending registration",
+                    sub_idx,
+                    req.authority
+                );
+                let register_ixs = builder
+                    .build_register_trader(authority, 0, sub_idx)
+                    .map_err(|e| {
+                        AppError::Phoenix(format!("Failed to build register trader: {}", e))
+                    })?;
+                all_instructions.extend(register_ixs);
+
+                let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
+                let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+                let sync_ixs = builder
+                    .build_sync_parent_to_child(authority, parent_pda, child_pda)
+                    .map_err(|e| {
+                        AppError::Phoenix(format!("Failed to build sync parent to child: {}", e))
+                    })?;
+                all_instructions.extend(sync_ixs);
+            }
+        }
+    }
+
+    // Explicitly transfer collateral from cross-margin to the isolated
+    // subaccount. Unlike /ix/place-isolated-market-order, the limit order
+    // endpoint does NOT process transfer_amount into a collateral transfer
+    // instruction — the field is silently ignored. We build the transfer
+    // locally and pass transfer_amount=0 to avoid any double-transfer.
+    if let (Some(usdc), Some(sub_idx)) = (req.collateral_usdc, req.subaccount_index) {
+        if sub_idx > 0 {
+            let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
+            let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+            let transfer_ixs = builder
+                .build_transfer_collateral(authority, parent_pda, child_pda, usdc)
+                .map_err(|e| {
+                    AppError::Phoenix(format!("Failed to build collateral transfer: {}", e))
+                })?;
+            all_instructions.extend(transfer_ixs);
+        }
+    }
+
+    // Build the isolated limit order instructions via Phoenix HTTP API.
+    // transfer_amount=0 because we have already emitted the transfer above.
+    let limit_ixs = state
         .http_client
         .build_isolated_limit_order_tx_with_request(PlaceIsolatedLimitOrderRequest {
             authority: req.authority.clone(),
@@ -723,7 +777,7 @@ async fn isolated_limit_order(
             side: side.to_api_string().to_string(),
             price: Some(req.price),
             quantity: Some(req.size_lots as f64),
-            transfer_amount,
+            transfer_amount: 0,
             pda_index: req.subaccount_index,
             allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
             ..Default::default()
@@ -732,10 +786,10 @@ async fn isolated_limit_order(
         .map_err(|e| {
             AppError::Phoenix(format!("Failed to build isolated limit order: {}", e))
         })?;
+    all_instructions.extend(limit_ixs);
 
     // Append bracket leg (TP/SL) instructions bound to the correct subaccount PDA.
     if let (Some(ref bracket_legs), Some(sub_idx)) = (&bracket, bracket_subaccount_index) {
-        let metadata = state.metadata.read().await;
         let trader_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
         let bracket_ixs = build_bracket_leg_ixs(
             &metadata,
@@ -745,11 +799,11 @@ async fn isolated_limit_order(
             side,
             bracket_legs,
         )?;
-        instructions.extend(bracket_ixs);
+        all_instructions.extend(bracket_ixs);
     }
 
     Ok(Json(serialize_instructions(
-        instructions,
+        all_instructions,
         format!(
             "Isolated limit {} order: {} lots at ${} on {}",
             req.side, req.size_lots, req.price, req.symbol
