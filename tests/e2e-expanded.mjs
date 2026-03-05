@@ -574,41 +574,40 @@ if (regSub2.ok) {
   }
 }
 
-// --- TEST 20: Isolated limit buy SOL @ $50 (far below market, won't fill) ---
-// Use SOL with 10 USDC collateral (5 USDC is below Phoenix minimum margin requirement).
+// --- TEST 20: Isolated limit buy SOL @ $1 (far below market — guaranteed to stay on book) ---
+// Use $1 (not $50) to ensure the order cannot fill even at market extremes.
+// SOL@$50 filled in prior runs because the price was too close to market.
 // Do NOT pass subaccount_index — explicit sub routing returns 502 "Trader not found".
 await sleep(2000);
 const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   authority: WALLET,
   symbol: "SOL",
   side: "buy",
-  price: 50,
+  price: 1,
   size_lots: 1,
-  collateral_usdc: 10.0,
-}, "TEST 20: Isolated limit buy SOL @ $50 (1 lot, 10 USDC collateral)");
+  collateral_usdc: 8.0,
+}, "TEST 20: Isolated limit buy SOL @ $1 (1 lot, 8 USDC collateral)");
 
 if (isoLimitSol.ok) {
-  pass("Isolated limit buy SOL @ $50", `sig=${isoLimitSol.sig}`);
+  pass("Isolated limit buy SOL @ $1", `sig=${isoLimitSol.sig}`);
 } else {
   const errDetail = JSON.stringify(isoLimitSol.data || isoLimitSol.simError || isoLimitSol.onChainErr);
   if (errDetail.includes("price_in_ticks") || errDetail.includes("num_base_lots") || errDetail.includes("quantity")) {
-    skip("Isolated limit buy SOL @ $50",
+    skip("Isolated limit buy SOL @ $1",
       `KNOWN SDK ISSUE: Phoenix API expects price_in_ticks+num_base_lots or price+quantity, ` +
       `but backend sends price+size_lots. Needs backend fix.`);
   } else {
-    fail("Isolated limit buy SOL @ $50", errDetail);
+    fail("Isolated limit buy SOL @ $1", errDetail);
   }
 }
 
-// --- TEST 21: Attempt cancel isolated limit order + cleanup ---
+// --- TEST 21: Cancel isolated limit order + verify off-book ---
 await sleep(3000);
-log(`\n--- TEST 21: Cancel isolated limit order (known limitation) ---`);
-log(`  NOTE: cancel_orders hardcodes subaccount 0 (cross-margin).`);
-log(`  This test documents whether cancel works for isolated orders.`);
+log(`\n--- TEST 21: Cancel isolated limit order (verify order removed from book) ---`);
+log(`  TEST 20 placed SOL@$1 — guaranteed to remain on book. This test cancels it and verifies removal.`);
 
-// First check if the order appears in the trader state
+// Check if the order appears in the trader state
 const stateForIsoCancel = await getTraderState();
-// Check all accounts for SOL orders (isolated limit is now SOL)
 let isoSolOrders = [];
 let isoOrderAccountIdx = -1;
 for (let i = 0; i < (stateForIsoCancel.accounts?.length || 0); i++) {
@@ -621,9 +620,8 @@ for (let i = 0; i < (stateForIsoCancel.accounts?.length || 0); i++) {
 }
 
 if (isoSolOrders.length > 0) {
-  // Attempt cancel — may fail because cancel hardcodes subaccount 0
   const solCancelEntries = isoSolOrders.map((o) => {
-    const price = o.price?.ui ?? 50;
+    const price = o.price?.ui ?? 1;
     const seq = String(o.orderSequenceNumber ?? o.order_sequence_number);
     return `{"price":${price},"order_sequence_number":${seq}}`;
   });
@@ -634,20 +632,28 @@ if (isoSolOrders.length > 0) {
   const cancelIso = await buildAndSend("/api/tx/cancel-orders", rawBody, "Cancel isolated SOL order");
 
   if (cancelIso.ok) {
-    pass("Cancel isolated SOL order", `sig=${cancelIso.sig} — cancel works for isolated orders!`);
+    // Verify the order is actually gone from the book
+    await sleep(2000);
+    const stateAfterCancel = await getTraderState();
+    let remainingSolOrders = [];
+    for (let i = 0; i < (stateAfterCancel.accounts?.length || 0); i++) {
+      const remaining = stateAfterCancel.accounts[i]?.limitOrders?.SOL || [];
+      remainingSolOrders.push(...remaining);
+    }
+    if (remainingSolOrders.length === 0) {
+      pass("Cancel isolated SOL order", `sig=${cancelIso.sig}, 0 SOL orders remaining — order confirmed off book`);
+    } else {
+      fail("Cancel isolated SOL order", `TX confirmed but ${remainingSolOrders.length} SOL order(s) still on book — cancel was a no-op`);
+    }
   } else {
-    // Expected failure — document as SKIP (known limitation)
     const errDetail = JSON.stringify(cancelIso.data || cancelIso.simError || cancelIso.onChainErr);
-    skip("Cancel isolated SOL order",
-      `KNOWN LIMITATION: cancel_orders hardcodes subaccount 0. ` +
-      `Need backend fix to add subaccount_index param. Error: ${errDetail.slice(0, 150)}`);
+    fail("Cancel isolated SOL order", `Cancel TX failed: ${errDetail.slice(0, 200)}`);
   }
 } else {
-  // No orders found — the limit order may not have been placed
   if (!isoLimitSol.ok) {
     skip("Cancel isolated SOL order", "Skipped — isolated limit order was not placed");
   } else {
-    skip("Cancel isolated SOL order", "No SOL orders visible in any account — order may be in a different state");
+    fail("Cancel isolated SOL order", "No SOL orders visible in any account after TEST 20 PASS — order not on book (may have filled or routing mismatch)");
   }
 }
 
