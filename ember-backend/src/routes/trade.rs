@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
-use phoenix_ix::{create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
+use phoenix_ix::{LimitOrderParams, create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
 use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, PlaceIsolatedLimitOrderRequest, PlaceIsolatedMarketOrderRequest, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
@@ -767,25 +767,93 @@ async fn isolated_limit_order(
         }
     }
 
-    // Build the isolated limit order instructions via Phoenix HTTP API.
-    // transfer_amount=0 because we have already emitted the transfer above.
-    let limit_ixs = state
-        .http_client
-        .build_isolated_limit_order_tx_with_request(PlaceIsolatedLimitOrderRequest {
-            authority: req.authority.clone(),
-            symbol: req.symbol.clone(),
-            side: side.to_api_string().to_string(),
-            price: Some(req.price),
-            quantity: Some(req.size_lots as f64),
-            transfer_amount: 0,
-            pda_index: req.subaccount_index,
-            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| {
-            AppError::Phoenix(format!("Failed to build isolated limit order: {}", e))
-        })?;
+    // Build the isolated limit order instruction.
+    //
+    // When subaccount_index is explicitly provided we use the local SDK builder
+    // (Option B) to avoid the Phoenix HTTP pre-flight lookup. That endpoint
+    // validates the isolated PDA's existence on-chain at call time — before our
+    // register TX is signed or submitted — which causes a 502 "Source account
+    // not found" for any unregistered sub=N. The local builder constructs the
+    // instruction from metadata only, bypassing that check entirely.
+    //
+    // When subaccount_index is absent we fall back to the Phoenix HTTP endpoint
+    // which routes to the cross-margin account (always registered) and works.
+    let limit_ixs = if let Some(sub_idx) = req.subaccount_index.filter(|&i| i > 0) {
+        let market = metadata
+            .get_market(&req.symbol)
+            .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
+        let calc = metadata
+            .get_market_calculator(&req.symbol)
+            .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
+        let keys = metadata.keys();
+        let perp_asset_map = Pubkey::from_str(&keys.perp_asset_map)
+            .map_err(|e| AppError::Phoenix(format!("Bad perp_asset_map: {}", e)))?;
+        let global_trader_index = keys
+            .global_trader_index
+            .iter()
+            .map(|s| {
+                Pubkey::from_str(s)
+                    .map_err(|e| AppError::Phoenix(format!("Bad global_trader_index key: {}", e)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let active_trader_buffer = keys
+            .active_trader_buffer
+            .iter()
+            .map(|s| {
+                Pubkey::from_str(s).map_err(|e| {
+                    AppError::Phoenix(format!("Bad active_trader_buffer key: {}", e))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let orderbook = Pubkey::from_str(&market.market_pubkey)
+            .map_err(|e| AppError::Phoenix(format!("Bad market_pubkey: {}", e)))?;
+        let spline_collection = Pubkey::from_str(&market.spline_pubkey)
+            .map_err(|e| AppError::Phoenix(format!("Bad spline_pubkey: {}", e)))?;
+        let price_in_ticks = calc
+            .price_to_ticks(req.price)
+            .map_err(|e| AppError::Phoenix(format!("Failed to convert price to ticks: {}", e)))?
+            .as_inner();
+        let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+        let params = LimitOrderParams::builder()
+            .trader(authority)
+            .trader_account(child_pda)
+            .perp_asset_map(perp_asset_map)
+            .orderbook(orderbook)
+            .spline_collection(spline_collection)
+            .global_trader_index(global_trader_index)
+            .active_trader_buffer(active_trader_buffer)
+            .side(side)
+            .price_in_ticks(price_in_ticks)
+            .num_base_lots(req.size_lots)
+            .symbol(&req.symbol)
+            .subaccount_index(sub_idx)
+            .build()
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build limit order params: {}", e))
+            })?;
+        builder.build_limit_order_with_params(params).map_err(|e| {
+            AppError::Phoenix(format!("Failed to build isolated limit order locally: {}", e))
+        })?
+    } else {
+        // No explicit subaccount index: Phoenix HTTP handles routing correctly.
+        state
+            .http_client
+            .build_isolated_limit_order_tx_with_request(PlaceIsolatedLimitOrderRequest {
+                authority: req.authority.clone(),
+                symbol: req.symbol.clone(),
+                side: side.to_api_string().to_string(),
+                price: Some(req.price),
+                quantity: Some(req.size_lots as f64),
+                transfer_amount: 0,
+                pda_index: req.subaccount_index,
+                allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build isolated limit order: {}", e))
+            })?
+    };
     all_instructions.extend(limit_ixs);
 
     // Append bracket leg (TP/SL) instructions bound to the correct subaccount PDA.
