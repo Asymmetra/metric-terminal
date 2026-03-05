@@ -24,6 +24,7 @@ export function Chart() {
   const currentCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState("1m");
+  const [chartError, setChartError] = useState<string | null>(null);
 
   // WS candle handler — updates the last bar in real-time
   // Only process candles matching the active timeframe (WS only sends 1m)
@@ -55,6 +56,7 @@ export function Chart() {
   useEffect(() => {
     if (!chartAreaRef.current) return;
 
+    setChartError(null);
     let chart: any;
     let observer: ResizeObserver | null = null;
     let unsubCandles: (() => void) | null = null;
@@ -153,6 +155,7 @@ export function Chart() {
             time: c.time > 1e12 ? Math.floor(c.time / 1000) : c.time,
           }));
           candleSeries.setData(normalized);
+          setChartError(null);
 
           // Seed the current candle ref from the last historical candle
           if (normalized.length > 0) {
@@ -179,6 +182,7 @@ export function Chart() {
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         console.error("Failed to fetch candles:", e);
+        setChartError("Failed to load chart data");
       }
 
       // Subscribe to real-time candle updates via WebSocket
@@ -280,7 +284,21 @@ export function Chart() {
       </div>
 
       {/* Chart area */}
-      <div ref={chartAreaRef} className="flex-1" />
+      <div ref={chartAreaRef} className="relative flex-1">
+        {chartError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-l1/80">
+            <div className="flex flex-col items-center gap-2">
+              <span className="font-mono text-[11px] text-ember-red">{chartError}</span>
+              <button
+                onClick={() => setChartError(null)}
+                className="font-mono text-[10px] text-text-secondary/60 hover:text-text-secondary"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
