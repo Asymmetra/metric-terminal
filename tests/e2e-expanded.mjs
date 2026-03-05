@@ -418,13 +418,21 @@ if (isoAcct) {
 }
 
 // --- TEST 12: Close isolated SOL position ---
+// Use actual position size — prior runs may have accumulated more than 1 lot.
+// Phoenix idempotent guard on sweep requires positions:false; must close fully.
 await sleep(2000);
+const isoPositionsList12 = getSubaccount(stateAfterIsoBuy, 1)?.positions;
+const solPos12 = Array.isArray(isoPositionsList12)
+  ? isoPositionsList12.find(p => p.symbol === "SOL")
+  : isoPositionsList12?.SOL;
+const sizeLots12 = Math.abs(solPos12?.positionSize?.value || 1);
+log(`  Closing ${sizeLots12} lot(s) (actual position size from state)`);
 const isoMarketSell = await buildAndSend("/api/tx/isolated-market-order", {
   authority: WALLET,
   symbol: "SOL",
   side: "sell",
-  size_lots: 1,
-}, "TEST 12: Close isolated SOL position");
+  size_lots: sizeLots12,
+}, `TEST 12: Close isolated SOL position (${sizeLots12} lots)`);
 
 if (isoMarketSell.ok) {
   pass("Close isolated SOL position", `sig=${isoMarketSell.sig}`);
@@ -566,29 +574,29 @@ if (regSub2.ok) {
   }
 }
 
-// --- TEST 20: Isolated limit buy ETH @ $500 (subaccount — via isolated endpoint) ---
-// KNOWN ISSUE: Phoenix SDK API requires `price_in_ticks + num_base_lots` or `price + quantity`
-// but our backend passes `price + size_lots`. This may fail with a 400 from the SDK.
+// --- TEST 20: Isolated limit buy SOL @ $50 (far below market, won't fill) ---
+// Use SOL (well-tested in e2e-full) with sufficient collateral (5 USDC).
+// ETH at $500 with 2 USDC failed InsufficientFunds; SOL @ $50 is a safer target.
 await sleep(2000);
-const isoLimitEth = await buildAndSend("/api/tx/isolated-limit-order", {
+const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   authority: WALLET,
-  symbol: "ETH",
+  symbol: "SOL",
   side: "buy",
-  price: 500,
+  price: 50,
   size_lots: 1,
-  collateral_usdc: 2.0,
-}, "TEST 20: Isolated limit buy ETH @ $500 (1 lot, 2 USDC collateral)");
+  collateral_usdc: 5.0,
+}, "TEST 20: Isolated limit buy SOL @ $50 (1 lot, 5 USDC collateral)");
 
-if (isoLimitEth.ok) {
-  pass("Isolated limit buy ETH @ $500", `sig=${isoLimitEth.sig}`);
+if (isoLimitSol.ok) {
+  pass("Isolated limit buy SOL @ $50", `sig=${isoLimitSol.sig}`);
 } else {
-  const errDetail = JSON.stringify(isoLimitEth.data || isoLimitEth.simError || isoLimitEth.onChainErr);
+  const errDetail = JSON.stringify(isoLimitSol.data || isoLimitSol.simError || isoLimitSol.onChainErr);
   if (errDetail.includes("price_in_ticks") || errDetail.includes("num_base_lots") || errDetail.includes("quantity")) {
-    skip("Isolated limit buy ETH @ $500",
+    skip("Isolated limit buy SOL @ $50",
       `KNOWN SDK ISSUE: Phoenix API expects price_in_ticks+num_base_lots or price+quantity, ` +
       `but backend sends price+size_lots. Needs backend fix.`);
   } else {
-    fail("Isolated limit buy ETH @ $500", errDetail);
+    fail("Isolated limit buy SOL @ $50", errDetail);
   }
 }
 
@@ -600,46 +608,46 @@ log(`  This test documents whether cancel works for isolated orders.`);
 
 // First check if the order appears in the trader state
 const stateForIsoCancel = await getTraderState();
-// Check all accounts for ETH orders
-let isoEthOrders = [];
+// Check all accounts for SOL orders (isolated limit is now SOL)
+let isoSolOrders = [];
 let isoOrderAccountIdx = -1;
 for (let i = 0; i < (stateForIsoCancel.accounts?.length || 0); i++) {
-  const acctOrders = stateForIsoCancel.accounts[i]?.limitOrders?.ETH || [];
+  const acctOrders = stateForIsoCancel.accounts[i]?.limitOrders?.SOL || [];
   if (acctOrders.length > 0) {
-    isoEthOrders = acctOrders;
+    isoSolOrders = acctOrders;
     isoOrderAccountIdx = i;
-    log(`  Found ${acctOrders.length} ETH order(s) in account[${i}]`);
+    log(`  Found ${acctOrders.length} SOL order(s) in account[${i}]`);
   }
 }
 
-if (isoEthOrders.length > 0) {
+if (isoSolOrders.length > 0) {
   // Attempt cancel — may fail because cancel hardcodes subaccount 0
-  const ethCancelEntries = isoEthOrders.map((o) => {
-    const price = o.price?.ui ?? 500;
+  const solCancelEntries = isoSolOrders.map((o) => {
+    const price = o.price?.ui ?? 50;
     const seq = String(o.orderSequenceNumber ?? o.order_sequence_number);
     return `{"price":${price},"order_sequence_number":${seq}}`;
   });
 
-  const rawBody = `{"authority":"${WALLET}","symbol":"ETH","order_ids":[${ethCancelEntries.join(",")}]}`;
+  const rawBody = `{"authority":"${WALLET}","symbol":"SOL","order_ids":[${solCancelEntries.join(",")}]}`;
   log(`  Raw cancel body: ${rawBody}`);
 
-  const cancelIso = await buildAndSend("/api/tx/cancel-orders", rawBody, "Cancel isolated ETH order");
+  const cancelIso = await buildAndSend("/api/tx/cancel-orders", rawBody, "Cancel isolated SOL order");
 
   if (cancelIso.ok) {
-    pass("Cancel isolated ETH order", `sig=${cancelIso.sig} — cancel works for isolated orders!`);
+    pass("Cancel isolated SOL order", `sig=${cancelIso.sig} — cancel works for isolated orders!`);
   } else {
     // Expected failure — document as SKIP (known limitation)
     const errDetail = JSON.stringify(cancelIso.data || cancelIso.simError || cancelIso.onChainErr);
-    skip("Cancel isolated ETH order",
+    skip("Cancel isolated SOL order",
       `KNOWN LIMITATION: cancel_orders hardcodes subaccount 0. ` +
       `Need backend fix to add subaccount_index param. Error: ${errDetail.slice(0, 150)}`);
   }
 } else {
   // No orders found — the limit order may not have been placed
-  if (!isoLimitEth.ok) {
-    skip("Cancel isolated ETH order", "Skipped — isolated limit order was not placed");
+  if (!isoLimitSol.ok) {
+    skip("Cancel isolated SOL order", "Skipped — isolated limit order was not placed");
   } else {
-    skip("Cancel isolated ETH order", "No ETH orders visible in any account — order may be in a different state");
+    skip("Cancel isolated SOL order", "No SOL orders visible in any account — order may be in a different state");
   }
 }
 
