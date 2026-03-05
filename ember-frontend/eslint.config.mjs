@@ -8,6 +8,10 @@ const eslintConfig = defineConfig([
   {
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
+      // Zustand store setters called inside useEffect are safe — they update
+      // external (non-React) state. This React Compiler rule fires false
+      // positives on every Zustand pattern in this codebase.
+      "react-hooks/set-state-in-effect": "off",
     },
   },
   // Override default ignores of eslint-config-next.

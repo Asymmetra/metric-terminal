@@ -89,7 +89,7 @@ export function ExposureChart({ authority }: ExposureChartProps) {
   }
 
   // Build conic gradient for donut chart
-  let gradientParts: string[] = [];
+  const gradientParts: string[] = [];
   let cumPct = 0;
   exposures.forEach((e, i) => {
     const color = RING_COLORS[i % RING_COLORS.length];
