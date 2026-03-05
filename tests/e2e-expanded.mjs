@@ -626,7 +626,9 @@ if (isoSolOrders.length > 0) {
     return `{"price":${price},"order_sequence_number":${seq}}`;
   });
 
-  const rawBody = `{"authority":"${WALLET}","symbol":"SOL","order_ids":[${solCancelEntries.join(",")}]}`;
+  // Include subaccount_index so cancel routes to the isolated sub, not sub=0 (cross).
+  // Backend uses unwrap_or(0) — passing the correct index targets the right account.
+  const rawBody = `{"authority":"${WALLET}","symbol":"SOL","subaccount_index":${isoOrderAccountIdx},"order_ids":[${solCancelEntries.join(",")}]}`;
   log(`  Raw cancel body: ${rawBody}`);
 
   const cancelIso = await buildAndSend("/api/tx/cancel-orders", rawBody, "Cancel isolated SOL order");
