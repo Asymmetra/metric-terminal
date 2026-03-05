@@ -27,6 +27,16 @@ pub struct TxResponse {
     pub message: String,
 }
 
+/// Transaction response for isolated limit order — extends TxResponse with
+/// the subaccount index that was actually used, so callers can pass the
+/// correct `subaccount_index` when cancelling orders on that subaccount.
+#[derive(Debug, Clone, Serialize)]
+pub struct IsolatedLimitOrderResponse {
+    pub instructions: Vec<SerializedInstruction>,
+    pub message: String,
+    pub subaccount_index: u8,
+}
+
 /// Serialize SDK instructions into the frontend-friendly TxResponse format.
 pub fn serialize_instructions(instructions: Vec<Instruction>, message: String) -> TxResponse {
     let serialized = instructions

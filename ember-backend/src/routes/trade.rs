@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::error::AppError;
-use crate::services::tx_builder::{serialize_instructions, TxResponse};
+use crate::services::tx_builder::{serialize_instructions, IsolatedLimitOrderResponse, TxResponse};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -669,7 +669,7 @@ async fn isolated_market_order(
 async fn isolated_limit_order(
     State(state): State<Arc<AppState>>,
     Json(req): Json<IsolatedLimitOrderRequest>,
-) -> Result<Json<TxResponse>, AppError> {
+) -> Result<Json<IsolatedLimitOrderResponse>, AppError> {
     tracing::info!(
         "Building isolated limit order: {} {} lots at ${} on {}",
         req.side,
@@ -706,6 +706,11 @@ async fn isolated_limit_order(
     } else {
         None
     };
+
+    // Track the subaccount that will actually receive the order so we can
+    // include it in the response. Explicit sub=N uses that index; the Phoenix
+    // HTTP path routes to cross-margin (0) when no index or index=0 is given.
+    let used_subaccount_index: u8 = req.subaccount_index.filter(|&i| i > 0).unwrap_or(0);
 
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
@@ -870,13 +875,18 @@ async fn isolated_limit_order(
         all_instructions.extend(bracket_ixs);
     }
 
-    Ok(Json(serialize_instructions(
+    let tx = serialize_instructions(
         all_instructions,
         format!(
             "Isolated limit {} order: {} lots at ${} on {}",
             req.side, req.size_lots, req.price, req.symbol
         ),
-    )))
+    );
+    Ok(Json(IsolatedLimitOrderResponse {
+        instructions: tx.instructions,
+        message: tx.message,
+        subaccount_index: used_subaccount_index,
+    }))
 }
 
 // ---------------------------------------------------------------------------
