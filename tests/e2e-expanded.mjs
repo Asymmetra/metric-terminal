@@ -575,8 +575,8 @@ if (regSub2.ok) {
 }
 
 // --- TEST 20: Isolated limit buy SOL @ $50 (far below market, won't fill) ---
-// Use SOL (well-tested in e2e-full) with sufficient collateral (5 USDC).
-// ETH at $500 with 2 USDC failed InsufficientFunds; SOL @ $50 is a safer target.
+// Use SOL with 10 USDC collateral (5 USDC is below Phoenix minimum margin requirement).
+// Do NOT pass subaccount_index — explicit sub routing returns 502 "Trader not found".
 await sleep(2000);
 const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   authority: WALLET,
@@ -584,8 +584,8 @@ const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   side: "buy",
   price: 50,
   size_lots: 1,
-  collateral_usdc: 5.0,
-}, "TEST 20: Isolated limit buy SOL @ $50 (1 lot, 5 USDC collateral)");
+  collateral_usdc: 10.0,
+}, "TEST 20: Isolated limit buy SOL @ $50 (1 lot, 10 USDC collateral)");
 
 if (isoLimitSol.ok) {
   pass("Isolated limit buy SOL @ $50", `sig=${isoLimitSol.sig}`);
