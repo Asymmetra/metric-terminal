@@ -2,11 +2,11 @@
 /**
  * Expanded E2E test suite — multi-market + isolated/cross margin
  *
- * 22 tests covering:
+ * 23 tests covering:
  *   Section A (1–8):   Multi-market cross-margin (ETH, XRP, BTC, HYPE)
  *   Section B (9–14):  Isolated margin full flow (register, trade, close, sweep)
  *   Section C (15–18): Collateral management (cross↔isolated transfers)
- *   Section D (19–22): Edge cases (second subaccount, isolated limit, cancel limitation)
+ *   Section D (19–23): Edge cases (second subaccount, isolated limit, cancel, 400 guard)
  *
  * Follows exact patterns from e2e-full.mjs (buildAndSend, pass/fail, raw JSON for BigInt).
  */
@@ -574,10 +574,10 @@ if (regSub2.ok) {
   }
 }
 
-// --- TEST 20: Isolated limit buy SOL @ $1 (far below market — guaranteed to stay on book) ---
-// Use $1 (not $50) to ensure the order cannot fill even at market extremes.
-// SOL@$50 filled in prior runs because the price was too close to market.
-// Do NOT pass subaccount_index — explicit sub routing returns 502 "Trader not found".
+// --- TEST 20: Isolated limit buy SOL @ $1 with explicit subaccount_index=1 ---
+// subaccount_index is now required (1–100). Absent or 0 returns HTTP 400.
+// Use $1 to ensure the order stays on book (well below market).
+// Also verify response.subaccount_index === 1 (backend fix in 039e09b).
 await sleep(2000);
 const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   authority: WALLET,
@@ -586,19 +586,19 @@ const isoLimitSol = await buildAndSend("/api/tx/isolated-limit-order", {
   price: 1,
   size_lots: 1,
   collateral_usdc: 8.0,
-}, "TEST 20: Isolated limit buy SOL @ $1 (1 lot, 8 USDC collateral)");
+  subaccount_index: 1,
+}, "TEST 20: Isolated limit buy SOL @ $1 (explicit subaccount_index=1)");
 
 if (isoLimitSol.ok) {
-  pass("Isolated limit buy SOL @ $1", `sig=${isoLimitSol.sig}`);
+  const respSubIdx = isoLimitSol.data?.subaccount_index;
+  if (respSubIdx === 1) {
+    pass("Isolated limit buy SOL @ $1 (explicit sub=1)", `sig=${isoLimitSol.sig}, response.subaccount_index=${respSubIdx} ✓`);
+  } else {
+    fail("Isolated limit buy SOL @ $1 (explicit sub=1)", `TX OK but response.subaccount_index=${respSubIdx} (expected 1) — sig=${isoLimitSol.sig}`);
+  }
 } else {
   const errDetail = JSON.stringify(isoLimitSol.data || isoLimitSol.simError || isoLimitSol.onChainErr);
-  if (errDetail.includes("price_in_ticks") || errDetail.includes("num_base_lots") || errDetail.includes("quantity")) {
-    skip("Isolated limit buy SOL @ $1",
-      `KNOWN SDK ISSUE: Phoenix API expects price_in_ticks+num_base_lots or price+quantity, ` +
-      `but backend sends price+size_lots. Needs backend fix.`);
-  } else {
-    fail("Isolated limit buy SOL @ $1", errDetail);
-  }
+  fail("Isolated limit buy SOL @ $1 (explicit sub=1)", errDetail);
 }
 
 // --- TEST 21: Cancel isolated limit order + verify off-book ---
@@ -684,6 +684,30 @@ for (const subIdx of [1, 2]) {
   } else {
     log(`  Sub ${subIdx}: no collateral to sweep (${subBal})`);
   }
+}
+
+// --- TEST 23: Negative test — omit subaccount_index → expect HTTP 400 ---
+// Verifies Forge's required-field guard (039e09b) is live on Render.
+await sleep(1000);
+log(`\n--- TEST 23: Negative guard — isolated-limit-order without subaccount_index (expect 400) ---`);
+const noSubRes = await fetch(`${BACKEND}/api/tx/isolated-limit-order`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    authority: WALLET,
+    symbol: "SOL",
+    side: "buy",
+    price: 1,
+    size_lots: 1,
+    collateral_usdc: 8.0,
+  }),
+});
+const noSubData = await noSubRes.json().catch(() => ({}));
+log(`  HTTP ${noSubRes.status}: ${noSubData.message || noSubData.error || "no message"}`);
+if (noSubRes.status === 400) {
+  pass("No-subaccount_index returns 400", `HTTP 400 confirmed — required-field guard live`);
+} else {
+  fail("No-subaccount_index returns 400", `Expected HTTP 400, got ${noSubRes.status}: ${JSON.stringify(noSubData).slice(0, 200)}`);
 }
 
 // --- TEST 22: Final state verification ---
