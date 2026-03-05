@@ -2,19 +2,42 @@
 
 A high-performance perpetuals trading terminal for [Phoenix](https://phoenix.trade) on Solana. Built with a Rust/Axum backend and Next.js frontend, Ember brings a Bloomberg-grade trading experience to on-chain perpetual futures.
 
+## Live Deployment
+
+- **Frontend**: https://ember-terminal-gamma.vercel.app
+- **Backend**: https://ember-backend-q4nf.onrender.com
+- **WebSocket**: wss://ember-backend-q4nf.onrender.com/ws
+
+## Markets
+
+| Market | Asset ID | Max Leverage | Notes |
+|--------|----------|-------------|-------|
+| SOL-PERP | 0 | 15x | |
+| BTC-PERP | 1 | 20x | |
+| ETH-PERP | 2 | 20x | |
+| XRP-PERP | 3 | 15x | |
+| HYPE-PERP | 4 | 10x | |
+| SKR-PERP | 5 | 3x | **Isolated margin only** |
+
 ## What It Does
 
-Ember Terminal connects directly to Phoenix's on-chain perpetuals markets (SOL-PERP, ETH-PERP) and provides:
+Ember Terminal connects directly to Phoenix's on-chain perpetuals markets and provides:
 
 - **Live orderbook** with depth visualization and dynamic row scaling
 - **Real-time price chart** powered by Lightweight Charts (TradingView engine)
-- **Market & limit order placement** — transactions built server-side, signed via Phantom wallet
+- **Collateral-first order entry** (Jupiter-style) — enter USDC collateral + leverage, position size computed automatically
+- **Market & limit orders** — transactions built server-side, signed via Phantom wallet
+- **TP/SL bracket orders** — take-profit and stop-loss levels auto-placed with each position
+- **Isolated margin trading** with subaccount management (subaccounts 1–100; index 0 = cross-margin)
 - **Position management** — view open positions, close individual or close all with confirmation
 - **Deposit/withdraw USDC** collateral directly from the terminal
-- **Portfolio overview** — collateral, unrealized PnL, portfolio value, margin usage in the top bar
+- **Portfolio summary bar** — collateral, unrealized PnL, portfolio value, margin usage
+- **Leaderboard** — `/leaderboard` page with trader rankings
+- **Analytics** — `/analytics` page with account performance metrics
 - **Multi-market switching** with instant data refresh (no stale state)
 - **Resizable panels** — drag to resize any section, layout persists across sessions
 - **WebSocket streaming** — orderbook, trades, stats, and trader state update in real time
+- **Wallet connect** with Phantom
 
 ## Architecture
 
@@ -60,6 +83,35 @@ Ember Terminal connects directly to Phoenix's on-chain perpetuals markets (SOL-P
 - **No local database** — Phoenix on-chain state is the source of truth. REST fetches current state, WebSocket streams updates into Zustand stores.
 - **SDK WebSocket relay** — the backend maintains a persistent upstream WS connection to Phoenix and fans out updates to all connected browser clients.
 
+## API Surface
+
+### Data Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/markets` | All markets with `isolatedOnly` and `maxLeverage` fields per market |
+| `GET /api/orderbook/:symbol` | Live orderbook |
+| `GET /api/candles/:symbol` | OHLCV candlestick data |
+| `GET /api/trader/:pubkey` | Trader account state |
+
+### Transaction Endpoints
+
+All transaction endpoints are under `/api/tx/`:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/tx/market-order` | Cross-margin market order |
+| `POST /api/tx/limit-order` | Cross-margin limit order |
+| `POST /api/tx/isolated-market-order` | Isolated margin market order — **requires `subaccount_index` (1–100)** |
+| `POST /api/tx/isolated-limit-order` | Isolated margin limit order — **requires `subaccount_index` (1–100)** |
+| `POST /api/tx/cancel-orders` | Cancel open orders |
+| `POST /api/tx/deposit` | Deposit USDC collateral |
+| `POST /api/tx/withdraw` | Withdraw USDC collateral |
+| `POST /api/tx/transfer-collateral` | Transfer collateral between subaccounts |
+| `POST /api/tx/register-subaccount` | Register a new isolated margin subaccount |
+
+> **Note:** `/api/tx/isolated-limit-order` and `/api/tx/isolated-market-order` require an explicit `subaccount_index` field (integer 1–100). Omitting it returns `400 Bad Request`.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -99,17 +151,18 @@ ember-terminal/
 │
 ├── ember-frontend/             # Next.js trading terminal UI
 │   └── src/
-│       ├── app/                # Next.js app router (landing + terminal pages)
+│       ├── app/                # Next.js app router (landing + terminal + leaderboard + analytics)
 │       ├── components/
 │       │   ├── landing/        # Landing page (particle animation, hero)
 │       │   └── terminal/       # Trading terminal components
-│       │       ├── Chart.tsx           # Price chart (Lightweight Charts)
-│       │       ├── Orderbook.tsx       # Live orderbook with depth bars
-│       │       ├── OrderEntry.tsx      # Order form (market/limit, leverage)
-│       │       ├── Positions.tsx       # Open positions + orders, close buttons
-│       │       ├── TradeHistory.tsx    # Recent trades feed
-│       │       ├── MarketHeader.tsx    # Market selector, stats, portfolio bar
-│       │       └── DepositWithdraw.tsx # USDC deposit/withdraw modal
+│       │       ├── Chart.tsx              # Price chart (Lightweight Charts)
+│       │       ├── Orderbook.tsx          # Live orderbook with depth bars
+│       │       ├── OrderEntry.tsx         # Collateral-first order form
+│       │       ├── Positions.tsx          # Open positions + orders, close buttons
+│       │       ├── TradeHistory.tsx       # Recent trades feed
+│       │       ├── MarketHeader.tsx       # Market selector, stats
+│       │       ├── PortfolioSummaryBar.tsx # Portfolio metrics bar
+│       │       └── DepositWithdraw.tsx    # USDC deposit/withdraw modal
 │       ├── stores/             # Zustand state management
 │       ├── hooks/              # Custom hooks (WS, trader sync, tx builder)
 │       └── lib/                # Utilities (API client, WS client, formatting)
@@ -172,7 +225,7 @@ Ember is designed for **Vercel** (frontend) + **Render** (backend). The backend 
 1. Go to [render.com](https://render.com) → **New** → **Blueprint**
 2. Connect the `devli13/ember-terminal` GitHub repo
 3. Render auto-discovers `render.yaml` and provisions the service
-4. Set the `CORS_ORIGIN` environment variable to your Vercel domain (e.g. `https://ember-terminal.vercel.app`)
+4. Set the `CORS_ORIGIN` environment variable to your Vercel domain (e.g. `https://ember-terminal-gamma.vercel.app`)
 5. Deploy — Render builds the Docker image and starts the service
 
 Your backend URL will be something like `https://ember-backend-xxxx.onrender.com`.
@@ -218,13 +271,14 @@ After initial setup, both platforms auto-deploy on `git push origin main`. No ma
 
 1. User connects Phantom wallet
 2. Frontend fetches trader account data from backend (which queries Phoenix SDK)
-3. User submits an order (market or limit) via the order entry form
-4. Backend builds the transaction instructions using Phoenix SDK
-5. Frontend deserializes instructions, simulates the transaction via Solana RPC
-6. Phantom prompts the user to sign
-7. Signed transaction is sent to Solana
-8. Frontend confirms the transaction on-chain, then refreshes trader state
-9. WebSocket streams deliver real-time updates for positions, orderbook, and trades
+3. User enters USDC collateral amount and leverage multiplier — position size is computed automatically
+4. User selects order type (market or limit), side (long/short), and optionally sets TP/SL levels
+5. Backend builds the transaction instructions using Phoenix SDK
+6. Frontend deserializes instructions, simulates the transaction via Solana RPC
+7. Phantom prompts the user to sign
+8. Signed transaction is sent to Solana
+9. Frontend confirms the transaction on-chain, then refreshes trader state
+10. WebSocket streams deliver real-time updates for positions, orderbook, and trades
 
 ## License
 
