@@ -402,6 +402,14 @@ async fn market_order(
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
 
     let metadata = state.metadata.read().await;
+
+    if metadata.is_isolated_only(&req.symbol) {
+        return Err(AppError::BadRequest(format!(
+            "{} is an isolated-only market. Use /api/tx/isolated-market-order or /api/tx/isolated-limit-order",
+            req.symbol.to_uppercase()
+        )));
+    }
+
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder
@@ -455,6 +463,14 @@ async fn limit_order(
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
 
     let metadata = state.metadata.read().await;
+
+    if metadata.is_isolated_only(&req.symbol) {
+        return Err(AppError::BadRequest(format!(
+            "{} is an isolated-only market. Use /api/tx/isolated-market-order or /api/tx/isolated-limit-order",
+            req.symbol.to_uppercase()
+        )));
+    }
+
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let mut instructions = builder
