@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
+import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import { formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -16,6 +17,7 @@ export function PortfolioSummaryBar() {
   const maintenanceMargin = useTraderStore((s) => s.maintenanceMargin);
   const riskState = useTraderStore((s) => s.riskState);
   const markPrices = useStatsStore((s) => s.markPrices);
+  const [showDepositModal, setShowDepositModal] = useState(false);
 
   // Compute live unrealized PnL from current mark prices (not stale REST snapshot)
   const liveUnrealizedPnl = useMemo(() => {
@@ -42,14 +44,23 @@ export function PortfolioSummaryBar() {
   // Show warning if wallet is connected but no Phoenix account exists
   if (noAccount && !fetchingAccount) {
     return (
-      <div className="flex items-center justify-center gap-2 border-b border-ember-orange/30 bg-ember-orange/10 px-3 py-1.5">
-        <svg className="h-3.5 w-3.5 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
-        </svg>
-        <span className="text-[10px] text-ember-orange">
-          New Phoenix accounts must deposit first on app.phoenix.trade to enable trading.
-        </span>
-      </div>
+      <>
+        <div className="flex items-center justify-center gap-2 border-b border-ember-orange/30 bg-ember-orange/10 px-3 py-1.5">
+          <svg className="h-3.5 w-3.5 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
+          </svg>
+          <span className="text-[10px] text-ember-orange">
+            No trading account yet. Make your first deposit to activate trading.
+          </span>
+          <button
+            onClick={() => setShowDepositModal(true)}
+            className="ml-1 rounded border border-ember-orange/50 bg-ember-orange/20 px-2 py-0.5 font-mono text-[9px] text-ember-orange hover:bg-ember-orange/30 transition-colors"
+          >
+            Deposit
+          </button>
+        </div>
+        {showDepositModal && <DepositWithdraw onClose={() => setShowDepositModal(false)} />}
+      </>
     );
   }
 
