@@ -28,6 +28,8 @@ export function OrderEntry() {
   const submittingRef = useRef(false);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const marketConfig = useMarketStore((s) => s.marketConfig);
+  const selectedMarket = useMarketStore((s) => s.markets.find((m) => m.symbol === s.selectedSymbol));
+  const isIsolatedOnly = selectedMarket?.isolatedOnly ?? false;
   const markPrice = useStatsStore((s) => s.stats?.mark_price) ?? 0;
   const { submitOrder, submitIsolatedOrder, connected } = useTransactionBuilder();
   const addToast = useToastStore((s) => s.addToast);
@@ -65,6 +67,11 @@ export function OrderEntry() {
     setTpPrice("");
     setSlPrice("");
   }, [selectedSymbol]);
+
+  // Force isolated mode for isolatedOnly markets
+  useEffect(() => {
+    if (isIsolatedOnly) setMarginMode("isolated");
+  }, [selectedSymbol, isIsolatedOnly]);
 
   // Hide TP/SL when switching to limit orders (architecturally unsupported)
   useEffect(() => {
@@ -118,7 +125,7 @@ export function OrderEntry() {
   }, [slPrice, markPrice, side]);
 
   const lotSize = useMemo(() => 10 ** -(marketConfig?.baseLotsDecimals || 2), [marketConfig]);
-  const maxLeverage = marketConfig?.maxLeverage || 10;
+  const maxLeverage = selectedMarket?.maxLeverage ?? marketConfig?.maxLeverage ?? 20;
 
   const POSITION_SAFETY_BUFFER = 0.97;
 
@@ -304,9 +311,9 @@ export function OrderEntry() {
             </button>
           </div>
 
-          {/* Margin mode toggle */}
-          <div className="grid grid-cols-2 gap-px bg-ember-border">
-            {(["cross", "isolated"] as const).map((mode) => (
+          {/* Margin mode toggle — cross hidden for isolatedOnly markets */}
+          <div className={clsx("gap-px bg-ember-border", isIsolatedOnly ? "grid grid-cols-1" : "grid grid-cols-2")}>
+            {(["cross", "isolated"] as const).filter((mode) => !(mode === "cross" && isIsolatedOnly)).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setMarginMode(mode)}

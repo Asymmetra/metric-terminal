@@ -1,6 +1,8 @@
 export interface Market {
   symbol: string;
   status: string;
+  isolatedOnly?: boolean;
+  maxLeverage?: number;
 }
 
 export interface OrderbookLevel {
