@@ -89,6 +89,8 @@ export function OrderEntry() {
   const riskState = useTraderStore((s) => s.riskState);
   const fetchingAccount = useTraderStore((s) => s.fetchingAccount);
   const noAccount = useTraderStore((s) => s.noAccount);
+  const activationState = useTraderStore((s) => s.activationState);
+  const activationFlags = useTraderStore((s) => s.activationFlags);
   const markPricesForEntry = useStatsStore((s) => s.markPrices);
 
   const freeCollateral = Math.max(0, collateral - initialMargin);
@@ -653,13 +655,22 @@ export function OrderEntry() {
           )}
 
           {/* Submit button */}
-          {(noAccount && !fetchingAccount) ? (
-            <button
-              onClick={() => setShowDepositModal(true)}
-              className="flex w-full items-center justify-center py-2.5 font-mono text-[11px] font-medium tracking-wider bg-ember-orange text-white hover:brightness-110 active:brightness-95 transition-all duration-150"
-            >
-              DEPOSIT TO START TRADING
-            </button>
+          {connected && activationState !== "active" && !fetchingAccount ? (
+            activationState === "uninitialized" ? (
+              <button
+                onClick={() => setShowDepositModal(true)}
+                className="flex w-full items-center justify-center py-2.5 font-mono text-[11px] font-medium tracking-wider bg-ember-orange text-white hover:brightness-110 active:brightness-95 transition-all duration-150"
+              >
+                DEPOSIT TO ACTIVATE
+              </button>
+            ) : (
+              <button
+                disabled
+                className="flex w-full items-center justify-center py-2.5 font-mono text-[11px] font-medium tracking-wider bg-surface-l2 text-text-secondary/50 cursor-not-allowed"
+              >
+                ACCOUNT NOT ACTIVATED (flags={activationFlags})
+              </button>
+            )
           ) : (
             <button
               onClick={handleSubmit}
@@ -688,13 +699,15 @@ export function OrderEntry() {
         {/* Account info — shown when wallet connected */}
         {connected && (
           <div className="mt-auto border-t border-ember-border/50 p-3">
-            {(noAccount && !fetchingAccount) ? (
+            {activationState !== "active" && !fetchingAccount ? (
               <div className="flex items-center gap-2 rounded border border-ember-orange/30 bg-ember-orange/10 p-2">
                 <svg className="h-3.5 w-3.5 flex-shrink-0 text-ember-orange" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M8 4v4M8 12h.01M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z" />
                 </svg>
                 <span className="text-[10px] leading-tight text-ember-orange">
-                  New Phoenix accounts must deposit first on app.phoenix.trade to enable trading.
+                  {activationState === "uninitialized"
+                    ? "Connect wallet and deposit USDC to activate your Phoenix account."
+                    : `Your Phoenix account is not fully activated (flags=${activationFlags}). Contact support or try depositing USDC.`}
                 </span>
               </div>
             ) : (

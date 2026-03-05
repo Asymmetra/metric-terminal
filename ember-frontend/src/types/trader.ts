@@ -50,6 +50,7 @@ export interface TraderAccount {
   traderSubaccountIndex: number;
   authority: string;
   state: string;
+  flags: number; // Phoenix capability bitmask; 63 = fully activated
   collateralBalance: SdkDecimalValue;
   effectiveCollateral: SdkDecimalValue;
   portfolioValue: SdkDecimalValue;

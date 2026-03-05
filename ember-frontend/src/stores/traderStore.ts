@@ -61,6 +61,8 @@ function transformLimitOrder(sdkOrder: any, subaccountIndex: number): LimitOrder
   };
 }
 
+export type ActivationState = "uninitialized" | "inactive" | "active";
+
 interface TraderStore {
   connected: boolean;
   authority: string | null;
@@ -68,6 +70,8 @@ interface TraderStore {
   allAccounts: TraderAccount[]; // all registered subaccounts — preserved for per-subaccount balance queries
   fetchingAccount: boolean; // true while REST fetch is in-flight; gates no-account warning
   noAccount: boolean; // true only when backend confirmed 502/404 (no Phoenix account)
+  activationState: ActivationState; // derived from primary account flags: uninitialized | inactive | active
+  activationFlags: number; // raw flags value when activationState === "inactive"
   collateral: number;
   portfolioValue: number;
   unrealizedPnl: number;
@@ -84,6 +88,7 @@ interface TraderStore {
   reset: () => void;
 }
 
+
 export const useTraderStore = create<TraderStore>((set, get) => ({
   connected: false,
   authority: null,
@@ -91,6 +96,8 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   allAccounts: [],
   fetchingAccount: false,
   noAccount: false,
+  activationState: "uninitialized",
+  activationFlags: 0,
   collateral: 0,
   portfolioValue: 0,
   unrealizedPnl: 0,
@@ -119,10 +126,15 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       }
     }
 
+    const flags = typeof primary.flags === "number" ? primary.flags : 0;
+    const activationState: ActivationState = flags >= 63 ? "active" : "inactive";
+
     set({
       account: primary,
       allAccounts: accounts,
       noAccount: false,
+      activationState,
+      activationFlags: flags,
       collateral: sdkNum(primary.effectiveCollateral),
       portfolioValue: sdkNum(primary.portfolioValue),
       unrealizedPnl: sdkNum(primary.unrealizedPnl),
@@ -137,7 +149,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   setConnected: (connected, authority) =>
     set({ connected, authority: authority || null }),
   setFetchingAccount: (fetching) => set({ fetchingAccount: fetching }),
-  setNoAccount: (noAccount) => set({ noAccount }),
+  setNoAccount: (noAccount) => set({ noAccount, ...(noAccount && { activationState: "uninitialized" as ActivationState, activationFlags: 0 }) }),
   reset: () =>
     set({
       connected: false,
@@ -146,6 +158,8 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       allAccounts: [],
       fetchingAccount: false,
       noAccount: false,
+      activationState: "uninitialized",
+      activationFlags: 0,
       collateral: 0,
       portfolioValue: 0,
       unrealizedPnl: 0,
