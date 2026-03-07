@@ -104,7 +104,7 @@ export function Orderbook() {
   const setFillPrice = useOrderbookStore((s) => s.setFillPrice);
   const containerRef = useRef<HTMLDivElement>(null);
   const [maxRows, setMaxRows] = useState(15);
-  const [grouping, setGrouping] = useState(0.10);
+  const [grouping, setGrouping] = useState(0.01);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -187,15 +187,15 @@ export function Orderbook() {
     return padded;
   }, [displayBids, maxRows]);
 
-  // Spread calculation using grouped data
+  // Spread from raw (ungrouped) best bid/ask for accuracy at all grouping levels
   const spread = useMemo(() => {
-    if (groupedBids[0] && groupedAsks[0]) {
-      const spreadVal = groupedAsks[0].price - groupedBids[0].price;
-      const spreadPct = (spreadVal / groupedAsks[0].price) * 100;
+    if (bids[0] && asks[0]) {
+      const spreadVal = asks[0].price - bids[0].price;
+      const spreadPct = (spreadVal / asks[0].price) * 100;
       return { value: spreadVal, pct: spreadPct };
     }
     return null;
-  }, [groupedBids, groupedAsks]);
+  }, [bids, asks]);
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
@@ -247,7 +247,7 @@ export function Orderbook() {
         </span>
         <span className="font-mono text-[10px] text-text-secondary/70">
           {spread
-            ? `${formatPrice(spread.value, priceDecimals)} (${spread.pct.toFixed(2)}%)`
+            ? `${formatPrice(spread.value, 2)} (${spread.pct.toFixed(2)}%)`
             : "—"}
         </span>
       </div>
