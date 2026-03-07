@@ -5,6 +5,7 @@ use phoenix_sdk::{PhoenixWSClient, Timeframe};
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Start the relay that feeds data from Phoenix SDK WS into broadcast channels.
 /// Subscribes to real orderbook, trades, stats, and candles for each market.
@@ -31,6 +32,8 @@ pub async fn start_relay(
 }
 
 /// Subscribe to all channels for a single market and forward to broadcast.
+/// Each subscription runs in its own task with automatic reconnection on
+/// upstream disconnection — if Phoenix WS drops, the relay self-heals.
 async fn start_market_relay(
     ws_client: Arc<PhoenixWSClient>,
     cache: Arc<MarketCache>,
@@ -40,146 +43,248 @@ async fn start_market_relay(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Starting SDK WS relay for {}", symbol);
 
-    // Subscribe to orderbook — handle must live inside the spawned task
-    let (mut ob_rx, ob_handle) = ws_client.subscribe_to_orderbook(symbol.to_string())?;
-    let ob_bcast = broadcast.clone();
-    let ob_cache = cache.clone();
-    let ob_sym = symbol.to_string();
-    tokio::spawn(async move {
-        let _keep_alive = ob_handle; // prevent drop → unsubscribe
-        while let Some(update) = ob_rx.recv().await {
-            let bids: Vec<OrderbookLevel> = update
-                .orderbook
-                .bids
-                .iter()
-                .map(|&(price, size)| OrderbookLevel { price, size })
-                .collect();
-            let asks: Vec<OrderbookLevel> = update
-                .orderbook
-                .asks
-                .iter()
-                .map(|&(price, size)| OrderbookLevel { price, size })
-                .collect();
-
-            ob_cache.update_orderbook(&ob_sym, bids.clone(), asks.clone());
-
-            let msg = WsServerMessage {
-                channel: "orderbook".to_string(),
-                symbol: Some(ob_sym.clone()),
-                data: serde_json::json!({
-                    "bids": bids,
-                    "asks": asks,
-                }),
-            };
-            ob_bcast.send(&format!("orderbook:{}", ob_sym), msg);
-        }
-        tracing::warn!("Orderbook subscription ended for {}", ob_sym);
-    });
-
-    // Subscribe to trades — handle must live inside the spawned task
-    let (mut trades_rx, trades_handle) = ws_client.subscribe_to_trades(symbol.to_string())?;
-    let trades_bcast = broadcast.clone();
-    let trades_sym = symbol.to_string();
-    let trades_known = known_traders.clone();
-    tokio::spawn(async move {
-        let _keep_alive = trades_handle; // prevent drop → unsubscribe
-        while let Some(update) = trades_rx.recv().await {
-            let trades: Vec<serde_json::Value> = update
-                .trades
-                .iter()
-                .map(|t| {
-                    // Passive trader discovery: harvest taker pubkeys from trade stream
-                    if let Some(ref known) = trades_known {
-                        if !t.taker.is_empty()
-                            && Pubkey::from_str(&t.taker).is_ok()
-                            && known.insert(t.taker.clone())
-                        {
-                            tracing::debug!("Discovered new trader from trade stream: {}", t.taker);
-                            // Persist to disk
-                            let all: Vec<String> = known.iter().map(|r| r.clone()).collect();
-                            if let Ok(json) = serde_json::to_string_pretty(&all) {
-                                let _ = std::fs::write("known_traders.json", json);
-                            }
-                        }
+    // Orderbook relay with auto-reconnect
+    {
+        let ws = ws_client.clone();
+        let bcast = broadcast.clone();
+        let mcache = cache.clone();
+        let sym = symbol.to_string();
+        tokio::spawn(async move {
+            let mut backoff_secs = 1u64;
+            loop {
+                let (mut rx, _handle) = match ws.subscribe_to_orderbook(sym.clone()) {
+                    Ok(sub) => {
+                        backoff_secs = 1;
+                        tracing::info!("Orderbook subscription established for {}", sym);
+                        sub
                     }
-
-                    let price = if t.base_amount > 0.0 {
-                        t.quote_amount / t.base_amount
-                    } else {
-                        0.0
-                    };
-                    serde_json::json!({
-                        "price": price,
-                        "size": t.base_amount,
-                        "side": format!("{:?}", t.side).to_lowercase(),
-                        "timestamp": t.timestamp.timestamp(),
-                    })
-                })
-                .collect();
-
-            if !trades.is_empty() {
-                let msg = WsServerMessage {
-                    channel: "trades".to_string(),
-                    symbol: Some(trades_sym.clone()),
-                    data: serde_json::json!({ "trades": trades }),
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to subscribe to orderbook for {}: {:?}, retrying in {}s",
+                            sym, e, backoff_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(60);
+                        continue;
+                    }
                 };
-                trades_bcast.send(&format!("trades:{}", trades_sym), msg);
+                while let Some(update) = rx.recv().await {
+                    let bids: Vec<OrderbookLevel> = update
+                        .orderbook
+                        .bids
+                        .iter()
+                        .map(|&(price, size)| OrderbookLevel { price, size })
+                        .collect();
+                    let asks: Vec<OrderbookLevel> = update
+                        .orderbook
+                        .asks
+                        .iter()
+                        .map(|&(price, size)| OrderbookLevel { price, size })
+                        .collect();
+
+                    mcache.update_orderbook(&sym, bids.clone(), asks.clone());
+
+                    let msg = WsServerMessage {
+                        channel: "orderbook".to_string(),
+                        symbol: Some(sym.clone()),
+                        data: serde_json::json!({
+                            "bids": bids,
+                            "asks": asks,
+                        }),
+                    };
+                    bcast.send(&format!("orderbook:{}", sym), msg);
+                }
+                tracing::warn!(
+                    "Orderbook subscription ended for {}, reconnecting in {}s",
+                    sym, backoff_secs
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
             }
-        }
-        tracing::warn!("Trades subscription ended for {}", trades_sym);
-    });
+        });
+    }
 
-    // Subscribe to market stats — handle must live inside the spawned task
-    let (mut stats_rx, stats_handle) = ws_client.subscribe_to_market(symbol.to_string())?;
-    let stats_bcast = broadcast.clone();
-    let stats_sym = symbol.to_string();
-    tokio::spawn(async move {
-        let _keep_alive = stats_handle; // prevent drop → unsubscribe
-        while let Some(update) = stats_rx.recv().await {
-            let msg = WsServerMessage {
-                channel: "stats".to_string(),
-                symbol: Some(stats_sym.clone()),
-                data: serde_json::json!({
-                    "mark_price": update.mark_price,
-                    "index_price": update.oracle_price,
-                    "last_price": update.mid_price,
-                    "funding_rate": update.funding_rate,
-                    "open_interest": update.open_interest,
-                    "volume_24h": update.day_volume_usd,
-                }),
-            };
-            stats_bcast.send(&format!("stats:{}", stats_sym), msg);
-        }
-        tracing::warn!("Stats subscription ended for {}", stats_sym);
-    });
-
-    // Subscribe to candles (1m timeframe) — handle must live inside the spawned task
-    let (mut candles_rx, candles_handle) =
-        ws_client.subscribe_to_candles(symbol.to_string(), Timeframe::Minute1)?;
-    let candles_bcast = broadcast.clone();
-    let candles_sym = symbol.to_string();
-    tokio::spawn(async move {
-        let _keep_alive = candles_handle; // prevent drop → unsubscribe
-        while let Some(candle) = candles_rx.recv().await {
-            let msg = WsServerMessage {
-                channel: "candles".to_string(),
-                symbol: Some(candles_sym.clone()),
-                data: serde_json::json!({
-                    "timeframe": "1m",
-                    "candle": {
-                        "time": candle.candle.time,
-                        "open": candle.candle.open,
-                        "high": candle.candle.high,
-                        "low": candle.candle.low,
-                        "close": candle.candle.close,
-                        "volume": candle.candle.volume,
+    // Trades relay with auto-reconnect
+    {
+        let ws = ws_client.clone();
+        let bcast = broadcast.clone();
+        let sym = symbol.to_string();
+        let known = known_traders.clone();
+        tokio::spawn(async move {
+            let mut backoff_secs = 1u64;
+            loop {
+                let (mut rx, _handle) = match ws.subscribe_to_trades(sym.clone()) {
+                    Ok(sub) => {
+                        backoff_secs = 1;
+                        tracing::info!("Trades subscription established for {}", sym);
+                        sub
                     }
-                }),
-            };
-            candles_bcast.send(&format!("candles:{}", candles_sym), msg);
-        }
-        tracing::warn!("Candles subscription ended for {}", candles_sym);
-    });
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to subscribe to trades for {}: {:?}, retrying in {}s",
+                            sym, e, backoff_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(60);
+                        continue;
+                    }
+                };
+                while let Some(update) = rx.recv().await {
+                    let trades: Vec<serde_json::Value> = update
+                        .trades
+                        .iter()
+                        .map(|t| {
+                            if let Some(ref known) = known {
+                                if !t.taker.is_empty()
+                                    && Pubkey::from_str(&t.taker).is_ok()
+                                    && known.insert(t.taker.clone())
+                                {
+                                    tracing::debug!(
+                                        "Discovered new trader from trade stream: {}",
+                                        t.taker
+                                    );
+                                    let all: Vec<String> =
+                                        known.iter().map(|r| r.clone()).collect();
+                                    if let Ok(json) = serde_json::to_string_pretty(&all) {
+                                        let _ = std::fs::write("known_traders.json", json);
+                                    }
+                                }
+                            }
+
+                            let price = if t.base_amount > 0.0 {
+                                t.quote_amount / t.base_amount
+                            } else {
+                                0.0
+                            };
+                            serde_json::json!({
+                                "price": price,
+                                "size": t.base_amount,
+                                "side": format!("{:?}", t.side).to_lowercase(),
+                                "timestamp": t.timestamp.timestamp(),
+                            })
+                        })
+                        .collect();
+
+                    if !trades.is_empty() {
+                        let msg = WsServerMessage {
+                            channel: "trades".to_string(),
+                            symbol: Some(sym.clone()),
+                            data: serde_json::json!({ "trades": trades }),
+                        };
+                        bcast.send(&format!("trades:{}", sym), msg);
+                    }
+                }
+                tracing::warn!(
+                    "Trades subscription ended for {}, reconnecting in {}s",
+                    sym, backoff_secs
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
+            }
+        });
+    }
+
+    // Stats relay with auto-reconnect
+    {
+        let ws = ws_client.clone();
+        let bcast = broadcast.clone();
+        let sym = symbol.to_string();
+        tokio::spawn(async move {
+            let mut backoff_secs = 1u64;
+            loop {
+                let (mut rx, _handle) = match ws.subscribe_to_market(sym.clone()) {
+                    Ok(sub) => {
+                        backoff_secs = 1;
+                        tracing::info!("Stats subscription established for {}", sym);
+                        sub
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to subscribe to stats for {}: {:?}, retrying in {}s",
+                            sym, e, backoff_secs
+                        );
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(60);
+                        continue;
+                    }
+                };
+                while let Some(update) = rx.recv().await {
+                    let msg = WsServerMessage {
+                        channel: "stats".to_string(),
+                        symbol: Some(sym.clone()),
+                        data: serde_json::json!({
+                            "mark_price": update.mark_price,
+                            "index_price": update.oracle_price,
+                            "last_price": update.mid_price,
+                            "funding_rate": update.funding_rate,
+                            "open_interest": update.open_interest,
+                            "volume_24h": update.day_volume_usd,
+                        }),
+                    };
+                    bcast.send(&format!("stats:{}", sym), msg);
+                }
+                tracing::warn!(
+                    "Stats subscription ended for {}, reconnecting in {}s",
+                    sym, backoff_secs
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
+            }
+        });
+    }
+
+    // Candles relay with auto-reconnect
+    {
+        let ws = ws_client.clone();
+        let bcast = broadcast.clone();
+        let sym = symbol.to_string();
+        tokio::spawn(async move {
+            let mut backoff_secs = 1u64;
+            loop {
+                let (mut rx, _handle) =
+                    match ws.subscribe_to_candles(sym.clone(), Timeframe::Minute1) {
+                        Ok(sub) => {
+                            backoff_secs = 1;
+                            tracing::info!("Candles subscription established for {}", sym);
+                            sub
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to subscribe to candles for {}: {:?}, retrying in {}s",
+                                sym, e, backoff_secs
+                            );
+                            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                            backoff_secs = (backoff_secs * 2).min(60);
+                            continue;
+                        }
+                    };
+                while let Some(candle) = rx.recv().await {
+                    let msg = WsServerMessage {
+                        channel: "candles".to_string(),
+                        symbol: Some(sym.clone()),
+                        data: serde_json::json!({
+                            "timeframe": "1m",
+                            "candle": {
+                                "time": candle.candle.time,
+                                "open": candle.candle.open,
+                                "high": candle.candle.high,
+                                "low": candle.candle.low,
+                                "close": candle.candle.close,
+                                "volume": candle.candle.volume,
+                            }
+                        }),
+                    };
+                    bcast.send(&format!("candles:{}", sym), msg);
+                }
+                tracing::warn!(
+                    "Candles subscription ended for {}, reconnecting in {}s",
+                    sym, backoff_secs
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
+            }
+        });
+    }
 
     Ok(())
 }
@@ -211,37 +316,66 @@ pub async fn start_trader_relay(
         }
     };
 
-    let (mut rx, _handle) = match ws_client.subscribe_to_trader_state(&authority) {
-        Ok(sub) => sub,
-        Err(e) => {
-            tracing::error!("Failed to subscribe to trader state for {}: {:?}", pubkey_str, e);
-            active_relays.remove(&pubkey_str);
-            return;
-        }
-    };
-
-    while let Some(update) = rx.recv().await {
-        // Stop if no subscribers
-        if !broadcast.has_subscribers(&channel_key) {
-            tracing::info!("No subscribers for {}, stopping trader relay", channel_key);
-            break;
-        }
-
-        // Forward the SDK message as JSON to our broadcast
-        let data = match serde_json::to_value(&update) {
-            Ok(v) => v,
+    let mut backoff_secs = 1u64;
+    loop {
+        let (mut rx, _handle) = match ws_client.subscribe_to_trader_state(&authority) {
+            Ok(sub) => {
+                backoff_secs = 1;
+                tracing::info!("Trader state subscription established for {}", pubkey_str);
+                sub
+            }
             Err(e) => {
-                tracing::warn!("Failed to serialize trader state: {}", e);
+                tracing::error!(
+                    "Failed to subscribe to trader state for {}: {:?}, retrying in {}s",
+                    pubkey_str, e, backoff_secs
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
                 continue;
             }
         };
 
-        let msg = WsServerMessage {
-            channel: "trader_margin".to_string(),
-            symbol: None,
-            data,
-        };
-        broadcast.send(&channel_key, msg);
+        let mut stopped_by_no_subscribers = false;
+        while let Some(update) = rx.recv().await {
+            // Stop if no subscribers
+            if !broadcast.has_subscribers(&channel_key) {
+                tracing::info!("No subscribers for {}, stopping trader relay", channel_key);
+                stopped_by_no_subscribers = true;
+                break;
+            }
+
+            let data = match serde_json::to_value(&update) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("Failed to serialize trader state: {}", e);
+                    continue;
+                }
+            };
+
+            let msg = WsServerMessage {
+                channel: "trader_margin".to_string(),
+                symbol: None,
+                data,
+            };
+            broadcast.send(&channel_key, msg);
+        }
+
+        // If we stopped because no subscribers remain, exit the relay entirely.
+        if stopped_by_no_subscribers {
+            break;
+        }
+
+        // Upstream dropped — reconnect if subscribers still exist.
+        if !broadcast.has_subscribers(&channel_key) {
+            tracing::info!("No subscribers for {} after disconnect, exiting relay", channel_key);
+            break;
+        }
+        tracing::warn!(
+            "Trader state subscription ended for {}, reconnecting in {}s",
+            pubkey_str, backoff_secs
+        );
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(60);
     }
 
     // Cleanup: release relay slot
