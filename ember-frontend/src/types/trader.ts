@@ -61,6 +61,7 @@ export interface TraderAccount {
   initialMargin: SdkDecimalValue;
   riskState: string;
   riskTier: string;
+  capabilities?: Record<string, { immediate: boolean; viaColdActivation: boolean }>;
   positions: TraderPosition[];
   limitOrders: Record<string, LimitOrder[]>;
 }

@@ -127,7 +127,10 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
     }
 
     const flags = typeof primary.flags === "number" ? primary.flags : 0;
-    const activationState: ActivationState = flags >= 63 ? "active" : "inactive";
+    // A wallet is "active" if it can place market orders (the core trading capability).
+    // flags=62 (Cold) is fully functional for trading — only flags < 6 (Frozen) is truly inactive.
+    const canTrade = primary.capabilities?.placeMarketOrder?.immediate === true;
+    const activationState: ActivationState = canTrade || flags >= 63 ? "active" : "inactive";
 
     set({
       account: primary,
