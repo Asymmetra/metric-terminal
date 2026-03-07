@@ -345,25 +345,27 @@ export function MarketHeader() {
       <div className="ml-auto" />
 
       {/* Nav links */}
-      {(
-        [
-          { href: "/terminal", label: "Terminal" },
-          { href: "/analytics", label: "Profile" },
-          { href: "/leaderboard", label: "Leaderboard" },
-        ] as const
-      ).map(({ href, label }) => (
-        <Link
-          key={href}
-          href={href}
-          className={clsx(
-            "font-mono text-[10px] uppercase tracking-wider transition-colors",
-            pathname === href
-              ? "text-ember-orange"
-              : "text-text-secondary/60 hover:text-text-secondary"
-          )}
+      <Link
+        href="/terminal"
+        className={clsx(
+          "font-mono text-[10px] uppercase tracking-wider transition-colors",
+          pathname === "/terminal"
+            ? "text-ember-orange"
+            : "text-text-secondary/60 hover:text-text-secondary"
+        )}
+      >
+        Terminal
+      </Link>
+      {["Profile", "Leaderboard"].map((label) => (
+        <span
+          key={label}
+          className="group relative cursor-default font-mono text-[10px] uppercase tracking-wider text-text-secondary/30"
         >
           {label}
-        </Link>
+          <span className="pointer-events-none absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-surface-l2 px-2 py-0.5 font-mono text-[9px] text-text-secondary opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+            Coming Soon
+          </span>
+        </span>
       ))}
 
       <StatSeparator />
