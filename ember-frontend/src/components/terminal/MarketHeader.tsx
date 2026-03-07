@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMarketStore } from "@/stores/marketStore";
@@ -13,7 +13,48 @@ import { useTraderSync } from "@/hooks/useTraderSync";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { wsClient } from "@/lib/ws";
+import { API_BASE_URL } from "@/lib/constants";
 import clsx from "clsx";
+
+function HealthDot() {
+  const [wsStatus, setWsStatus] = useState<"connected" | "disconnected" | "reconnecting">("disconnected");
+  const [apiOk, setApiOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    return wsClient.onStatus(setWsStatus);
+  }, []);
+
+  const checkApi = useCallback(() => {
+    fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(5000) })
+      .then((r) => setApiOk(r.ok))
+      .catch(() => setApiOk(false));
+  }, []);
+
+  useEffect(() => {
+    checkApi();
+    const interval = setInterval(checkApi, 30000);
+    return () => clearInterval(interval);
+  }, [checkApi]);
+
+  const allGood = wsStatus === "connected" && apiOk === true;
+  const partial = wsStatus === "connected" || apiOk === true;
+
+  const color = allGood ? "bg-ember-green" : partial ? "bg-yellow-500" : "bg-ember-red";
+  const pulse = allGood ? "" : "animate-pulse";
+  const label = allGood
+    ? "All systems operational"
+    : `API: ${apiOk ? "OK" : apiOk === false ? "DOWN" : "checking"} · WS: ${wsStatus}`;
+
+  return (
+    <div className="group relative flex items-center gap-1.5" title={label}>
+      <span className={`inline-block h-2 w-2 rounded-full ${color} ${pulse}`} />
+      <span className="font-mono text-[9px] uppercase tracking-wider text-text-secondary/50">
+        {allGood ? "Live" : wsStatus === "reconnecting" ? "Reconnecting" : "Degraded"}
+      </span>
+    </div>
+  );
+}
 
 function MarketSelector() {
   const [open, setOpen] = useState(false);
@@ -324,6 +365,11 @@ export function MarketHeader() {
           {label}
         </Link>
       ))}
+
+      <StatSeparator />
+
+      {/* Health status */}
+      <HealthDot />
 
       <StatSeparator />
 
