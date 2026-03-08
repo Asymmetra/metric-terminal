@@ -37,6 +37,8 @@ export function useWebSocket() {
           baseLotsDecimals: data.baseLotsDecimals || 2,
           tickSize: data.tickSize || 100,
           fundingIntervalSeconds: data.fundingIntervalSeconds || 3600,
+          takerFee: data.takerFee || 0,
+          makerFee: data.makerFee || 0,
         });
       })
       .catch((err) => {

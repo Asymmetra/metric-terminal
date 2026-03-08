@@ -379,12 +379,22 @@ export function OrderEntry() {
           {/* Price input (limit only) */}
           {orderType === "limit" && (
             <div>
-              <label className={clsx(
-                "mb-1 block text-[10px] tracking-wider uppercase",
-                needsPrice ? "text-ember-orange" : "text-text-secondary/70"
-              )}>
-                Price {needsPrice && <span className="normal-case text-ember-orange/80">— required</span>}
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className={clsx(
+                  "text-[10px] tracking-wider uppercase",
+                  needsPrice ? "text-ember-orange" : "text-text-secondary/70"
+                )}>
+                  Price {needsPrice && <span className="normal-case text-ember-orange/80">— required</span>}
+                </label>
+                {markPrice > 0 && (
+                  <button
+                    onClick={() => setPrice(markPrice.toString())}
+                    className="font-mono text-[9px] text-ember-orange/70 hover:text-ember-orange transition-colors"
+                  >
+                    Mark ${formatPrice(markPrice)}
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type="number"
@@ -616,6 +626,19 @@ export function OrderEntry() {
                   {(derivedOrder.notional / derivedOrder.collateral).toFixed(1)}x
                 </span>
               </div>
+              {marketConfig && (marketConfig.takerFee > 0 || marketConfig.makerFee > 0) && (
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-text-secondary/70">
+                    Est. Fee ({orderType === "market" ? "Taker" : "Maker"})
+                  </span>
+                  <span className="font-mono text-[10px] text-text-secondary">
+                    ${formatPrice(derivedOrder.notional * (orderType === "market" ? marketConfig.takerFee : marketConfig.makerFee))}
+                    <span className="text-text-secondary/50 ml-1">
+                      ({((orderType === "market" ? marketConfig.takerFee : marketConfig.makerFee) * 100).toFixed(2)}%)
+                    </span>
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-[10px] text-text-secondary/70">Mode</span>
                 <span className={clsx(

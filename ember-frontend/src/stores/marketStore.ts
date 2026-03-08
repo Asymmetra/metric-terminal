@@ -6,6 +6,8 @@ export interface MarketConfig {
   baseLotsDecimals: number;
   tickSize: number;
   fundingIntervalSeconds: number;
+  takerFee: number;
+  makerFee: number;
 }
 
 interface MarketStore {

@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
+import { useTraderStore } from "@/stores/traderStore";
+import { api } from "@/lib/api";
 import { wsClient } from "@/lib/ws";
 import { COLORS } from "@/lib/constants";
 import clsx from "clsx";
@@ -25,6 +28,9 @@ export function Chart() {
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState("1m");
   const [chartError, setChartError] = useState<string | null>(null);
+  const [showMarkers, setShowMarkers] = useState(true);
+  const { publicKey } = useWallet();
+  const lastRefresh = useTraderStore((s) => s.lastRefresh);
 
   // WS candle handler — updates the last bar in real-time
   // Only process candles matching the active timeframe (WS only sends 1m)
@@ -257,6 +263,40 @@ export function Chart() {
     return unsub;
   }, [selectedSymbol, activeTimeframe]);
 
+  // Trade markers: overlay user's buy/sell trades on chart
+  useEffect(() => {
+    if (!publicKey || !candleSeriesRef.current || !showMarkers) {
+      if (candleSeriesRef.current) candleSeriesRef.current.setMarkers([]);
+      return;
+    }
+
+    let cancelled = false;
+    api.getTraderTrades(publicKey.toBase58(), { limit: 200 })
+      .then((result) => {
+        if (cancelled || !candleSeriesRef.current) return;
+        const trades = result.trades || [];
+        const markers = trades
+          .filter((t: any) => t.marketSymbol === selectedSymbol)
+          .map((t: any) => {
+            const ts = new Date(t.timestamp);
+            const time = Math.floor(ts.getTime() / 1000);
+            const isBuy = parseFloat(t.baseQty) > 0;
+            return {
+              time,
+              position: isBuy ? ("belowBar" as const) : ("aboveBar" as const),
+              color: isBuy ? COLORS.emberGreen : COLORS.emberRed,
+              shape: isBuy ? ("arrowUp" as const) : ("arrowDown" as const),
+              text: `${isBuy ? "B" : "S"} ${Math.abs(parseFloat(t.baseQty)).toFixed(2)}`,
+            };
+          })
+          .sort((a: any, b: any) => a.time - b.time);
+        candleSeriesRef.current.setMarkers(markers);
+      })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [publicKey, selectedSymbol, activeTimeframe, showMarkers, lastRefresh]);
+
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
       {/* Toolbar */}
@@ -277,6 +317,20 @@ export function Chart() {
         ))}
 
         <div className="ml-auto flex items-center gap-2">
+          {publicKey && (
+            <button
+              onClick={() => setShowMarkers((v) => !v)}
+              className={clsx(
+                "px-2 py-0.5 font-mono text-[10px] transition-colors",
+                showMarkers
+                  ? "bg-surface-l2 text-ember-orange"
+                  : "text-text-secondary/60 hover:text-text-secondary"
+              )}
+              title={showMarkers ? "Hide trade markers" : "Show trade markers"}
+            >
+              Trades
+            </button>
+          )}
           <span className="font-mono text-[10px] text-text-secondary/60">
             {selectedSymbol}-PERP
           </span>
