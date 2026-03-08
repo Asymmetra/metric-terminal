@@ -388,7 +388,7 @@ export function OrderEntry() {
                 </label>
                 {markPrice > 0 && (
                   <button
-                    onClick={() => setPrice(markPrice.toString())}
+                    onClick={() => setPrice(markPrice.toFixed(2))}
                     className="font-mono text-[9px] text-ember-orange/70 hover:text-ember-orange transition-colors"
                   >
                     Mark ${formatPrice(markPrice)}

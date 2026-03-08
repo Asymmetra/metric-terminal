@@ -118,6 +118,7 @@ const OrderbookRow = memo(function OrderbookRow({
 interface HoverInfo {
   side: "bid" | "ask";
   price: number;
+  mouseX: number;
   mouseY: number;
 }
 
@@ -127,6 +128,7 @@ interface DepthStats {
   levels: number;
   vwap: number;
   distFromMid: number;
+  slippage: number; // % difference between VWAP and best price (effective slippage if you swept this depth)
 }
 
 export function Orderbook() {
@@ -274,12 +276,20 @@ export function Orderbook() {
 
     if (count === 0) return null;
 
+    const vwap = cumSize > 0 ? cumNotional / cumSize : 0;
+    // Slippage: how much worse VWAP is vs the best available price
+    const bestPrice = side === "bid" ? (groupedBids[0]?.price || 0) : (groupedAsks[0]?.price || 0);
+    const slippage = bestPrice > 0 && vwap > 0
+      ? (Math.abs(vwap - bestPrice) / bestPrice) * 100
+      : 0;
+
     return {
       cumSize,
       cumNotional,
       levels: count,
-      vwap: cumSize > 0 ? cumNotional / cumSize : 0,
+      vwap,
       distFromMid: midPrice > 0 ? (Math.abs(price - midPrice) / midPrice) * 100 : 0,
+      slippage,
     };
   }, [hoverInfo, groupedBids, groupedAsks, midPrice]);
 
@@ -297,11 +307,11 @@ export function Orderbook() {
   }, [hoverInfo, groupedBids, groupedAsks]);
 
   const handleHoverAsk = useCallback((price: number, e: React.MouseEvent) => {
-    setHoverInfo({ side: "ask", price, mouseY: e.clientY });
+    setHoverInfo({ side: "ask", price, mouseX: e.clientX, mouseY: e.clientY });
   }, []);
 
   const handleHoverBid = useCallback((price: number, e: React.MouseEvent) => {
-    setHoverInfo({ side: "bid", price, mouseY: e.clientY });
+    setHoverInfo({ side: "bid", price, mouseX: e.clientX, mouseY: e.clientY });
   }, []);
 
   const handleLeave = useCallback(() => {
@@ -408,10 +418,14 @@ export function Orderbook() {
         </div>
       )}
 
-      {/* Hover tooltip */}
+      {/* Hover tooltip — fixed position to escape overflow:hidden containers */}
       {hoverInfo && hoverStats && (
         <div
-          className="absolute left-full top-1/2 z-[100] ml-1 w-[220px] -translate-y-1/2 border border-ember-border bg-[#1A1B20] p-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)]"
+          className="fixed z-[200] w-[230px] border border-ember-border bg-[#1A1B20] p-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)] pointer-events-none"
+          style={{
+            left: Math.min(hoverInfo.mouseX + 16, window.innerWidth - 250),
+            top: Math.max(8, hoverInfo.mouseY - 120),
+          }}
         >
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
@@ -440,8 +454,21 @@ export function Orderbook() {
 
             <div className="flex justify-between">
               <span className="text-[10px] text-text-secondary/70">From Mid</span>
-              <span className="font-mono text-[10px] text-text-secondary">
+              <span className={clsx(
+                "font-mono text-[10px]",
+                hoverStats.distFromMid < 1 ? "text-ember-green" : hoverStats.distFromMid < 2 ? "text-yellow-500" : "text-ember-red"
+              )}>
                 {hoverStats.distFromMid.toFixed(2)}%
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">Slippage (VWAP)</span>
+              <span className={clsx(
+                "font-mono text-[10px] font-medium",
+                hoverStats.slippage < 0.1 ? "text-ember-green" : hoverStats.slippage < 0.5 ? "text-yellow-500" : "text-ember-red"
+              )}>
+                {hoverStats.slippage.toFixed(3)}%
               </span>
             </div>
 
@@ -472,6 +499,22 @@ export function Orderbook() {
               <span className="text-[10px] text-text-secondary/70">Levels</span>
               <span className="font-mono text-[10px] text-text-secondary">
                 {hoverStats.levels}
+              </span>
+            </div>
+
+            {/* Depth threshold indicator */}
+            <div className="h-px bg-ember-border/30" />
+            <div className="flex items-center gap-1.5">
+              <span className={clsx(
+                "inline-block h-1.5 w-1.5 rounded-full",
+                hoverStats.distFromMid < 1 ? "bg-ember-green" : hoverStats.distFromMid < 2 ? "bg-yellow-500" : "bg-ember-red"
+              )} />
+              <span className="font-mono text-[9px] text-text-secondary/60">
+                {hoverStats.distFromMid < 1
+                  ? "Within 1% depth"
+                  : hoverStats.distFromMid < 2
+                    ? "Within 2% depth"
+                    : `Beyond 2% depth`}
               </span>
             </div>
           </div>
