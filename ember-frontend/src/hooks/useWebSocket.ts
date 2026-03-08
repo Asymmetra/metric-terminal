@@ -13,14 +13,15 @@ export function useWebSocket() {
   const setMarketConfig = useMarketStore((s) => s.setMarketConfig);
   const setOrderbook = useOrderbookStore((s) => s.setOrderbook);
   const addTrades = useTradeStore((s) => s.addTrades);
-  const setTrades = useTradeStore((s) => s.setTrades);
+  const loadForSymbol = useTradeStore((s) => s.loadForSymbol);
   const setStats = useStatsStore((s) => s.setStats);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
 
   useEffect(() => {
     // Clear stale data from previous market immediately
     setOrderbook([], []);
-    setTrades([]);
+    // Restore persisted trades for this market (or empty if none)
+    loadForSymbol(selectedSymbol);
     setStats(null);
     useStatsStore.getState().setOpen24h(0);
 
@@ -107,5 +108,5 @@ export function useWebSocket() {
       unsubTrades();
       unsubStats();
     };
-  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, setTrades, setStats, setMarkPrice]);
+  }, [selectedSymbol, setMarketConfig, setOrderbook, addTrades, loadForSymbol, setStats, setMarkPrice]);
 }

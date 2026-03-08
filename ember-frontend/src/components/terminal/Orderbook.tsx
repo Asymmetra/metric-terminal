@@ -314,6 +314,16 @@ export function Orderbook() {
     setHoverInfo({ side: "bid", price, mouseX: e.clientX, mouseY: e.clientY });
   }, []);
 
+  // Compute tooltip position: anchored to orderbook right edge, smooth Y tracking
+  const tooltipPosition = useMemo(() => {
+    if (!hoverInfo || !containerRef.current) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    return {
+      left: rect.right + 4,
+      top: Math.max(rect.top, Math.min(hoverInfo.mouseY - 120, rect.bottom - 280)),
+    };
+  }, [hoverInfo]);
+
   const handleLeave = useCallback(() => {
     setHoverInfo(null);
   }, []);
@@ -418,13 +428,14 @@ export function Orderbook() {
         </div>
       )}
 
-      {/* Hover tooltip — fixed position to escape overflow:hidden containers */}
-      {hoverInfo && hoverStats && (
+      {/* Hover tooltip — fixed position anchored to orderbook right edge */}
+      {hoverInfo && hoverStats && tooltipPosition && (
         <div
           className="fixed z-[200] w-[230px] border border-ember-border bg-[#1A1B20] p-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)] pointer-events-none"
           style={{
-            left: Math.min(hoverInfo.mouseX + 16, window.innerWidth - 250),
-            top: Math.max(8, hoverInfo.mouseY - 120),
+            left: tooltipPosition.left,
+            top: tooltipPosition.top,
+            transition: "top 120ms ease-out",
           }}
         >
           <div className="flex flex-col gap-1.5">
