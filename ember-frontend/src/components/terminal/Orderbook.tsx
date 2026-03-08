@@ -2,7 +2,7 @@
 
 import { useMemo, useCallback, useRef, useEffect, useState, memo } from "react";
 import { useOrderbookStore } from "@/stores/orderbookStore";
-import { formatPrice, formatSize } from "@/lib/format";
+import { formatPrice, formatSize, abbreviateNumber } from "@/lib/format";
 import clsx from "clsx";
 
 interface OrderbookLevel {
@@ -38,10 +38,17 @@ interface RowProps {
   maxCumulative: number;
   side: "bid" | "ask";
   priceDecimals: number;
+  isHovered: boolean;
+  isInHoverRange: boolean;
   onClickPrice: (price: number) => void;
+  onHover: (price: number, e: React.MouseEvent) => void;
+  onLeave: () => void;
 }
 
-const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulative, side, priceDecimals, onClickPrice }: RowProps) {
+const OrderbookRow = memo(function OrderbookRow({
+  level, cumulative, maxCumulative, side, priceDecimals,
+  isHovered, isInHoverRange, onClickPrice, onHover, onLeave,
+}: RowProps) {
   const depthPct = maxCumulative > 0 ? (cumulative / maxCumulative) * 100 : 0;
   const isBid = side === "bid";
   const prevSizeRef = useRef(level.size);
@@ -60,9 +67,11 @@ const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulati
   return (
     <div
       onClick={() => onClickPrice(level.price)}
+      onMouseEnter={(e) => onHover(level.price, e)}
+      onMouseLeave={onLeave}
       className={clsx(
         "relative flex cursor-pointer items-center px-2 transition-colors duration-75",
-        "hover:bg-surface-l2/60"
+        isHovered ? "bg-surface-l2/80" : "hover:bg-surface-l2/60"
       )}
       style={{ height: "22px" }}
     >
@@ -82,6 +91,14 @@ const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulati
         style={{ width: `${depthPct}%` }}
       />
 
+      {/* Hover range highlight */}
+      {isInHoverRange && !isHovered && (
+        <div className={clsx(
+          "absolute inset-0 pointer-events-none",
+          isBid ? "bg-ember-green/[0.06]" : "bg-ember-red/[0.06]"
+        )} />
+      )}
+
       {/* Row data */}
       <div className="relative grid w-full grid-cols-3 font-mono text-[11px] leading-none">
         <span className={isBid ? "text-ember-green" : "text-ember-red"}>
@@ -98,6 +115,20 @@ const OrderbookRow = memo(function OrderbookRow({ level, cumulative, maxCumulati
   );
 });
 
+interface HoverInfo {
+  side: "bid" | "ask";
+  price: number;
+  mouseY: number;
+}
+
+interface DepthStats {
+  cumSize: number;
+  cumNotional: number;
+  levels: number;
+  vwap: number;
+  distFromMid: number;
+}
+
 export function Orderbook() {
   const bids = useOrderbookStore((s) => s.bids);
   const asks = useOrderbookStore((s) => s.asks);
@@ -105,6 +136,7 @@ export function Orderbook() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [maxRows, setMaxRows] = useState(15);
   const [grouping, setGrouping] = useState(0.01);
+  const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -141,12 +173,17 @@ export function Orderbook() {
   // Decimal places based on grouping
   const priceDecimals = grouping >= 1 ? 0 : grouping >= 0.1 ? 1 : 2;
 
+  // Mid price from raw best bid/ask
+  const midPrice = useMemo(() => {
+    if (bids[0] && asks[0]) return (bids[0].price + asks[0].price) / 2;
+    return 0;
+  }, [bids, asks]);
+
   // Compute cumulative totals and max for depth bar proportions
   const { displayAsks, displayBids, maxCumulative } = useMemo(() => {
     const askSlice = groupedAsks.slice(0, maxRows);
     const bidSlice = groupedBids.slice(0, maxRows);
 
-    // Cumulative: asks top→bottom (closest to spread first), bids top→bottom
     const askCumulatives = askSlice.reduce<number[]>((acc, l) => {
       acc.push((acc[acc.length - 1] ?? 0) + l.size);
       return acc;
@@ -178,7 +215,6 @@ export function Orderbook() {
     return padded;
   }, [displayAsks, maxRows]);
 
-  // Pad bids for visual symmetry
   const paddedBids = useMemo(() => {
     const padded = [...displayBids];
     while (padded.length < maxRows) {
@@ -197,8 +233,83 @@ export function Orderbook() {
     return null;
   }, [bids, asks]);
 
+  // 1% and 2% depth from raw (ungrouped) levels
+  const depthStats = useMemo(() => {
+    if (!midPrice) return null;
+    const calc = (levels: OrderbookLevel[], pct: number) => {
+      const threshold = midPrice * (pct / 100);
+      let total = 0;
+      for (const l of levels) {
+        if (Math.abs(l.price - midPrice) <= threshold) {
+          total += l.size * l.price;
+        }
+      }
+      return total;
+    };
+    return {
+      bid1: calc(bids, 1), ask1: calc(asks, 1),
+      bid2: calc(bids, 2), ask2: calc(asks, 2),
+    };
+  }, [bids, asks, midPrice]);
+
+  // Compute hover stats: cumulative from best price to hovered level
+  const hoverStats = useMemo((): DepthStats | null => {
+    if (!hoverInfo || !midPrice) return null;
+    const { side, price } = hoverInfo;
+    const levels = side === "bid" ? groupedBids : groupedAsks;
+
+    let cumSize = 0;
+    let cumNotional = 0;
+    let count = 0;
+    for (const l of levels) {
+      // For bids: include levels from best (highest) down to hovered price
+      // For asks: include levels from best (lowest) up to hovered price
+      const include = side === "bid" ? l.price >= price : l.price <= price;
+      if (include) {
+        cumSize += l.size;
+        cumNotional += l.size * l.price;
+        count++;
+      }
+    }
+
+    if (count === 0) return null;
+
+    return {
+      cumSize,
+      cumNotional,
+      levels: count,
+      vwap: cumSize > 0 ? cumNotional / cumSize : 0,
+      distFromMid: midPrice > 0 ? (Math.abs(price - midPrice) / midPrice) * 100 : 0,
+    };
+  }, [hoverInfo, groupedBids, groupedAsks, midPrice]);
+
+  // Track which prices are in the hover range
+  const hoverRangePrices = useMemo((): Set<number> => {
+    if (!hoverInfo) return new Set();
+    const { side, price } = hoverInfo;
+    const levels = side === "bid" ? groupedBids : groupedAsks;
+    const prices = new Set<number>();
+    for (const l of levels) {
+      const include = side === "bid" ? l.price >= price : l.price <= price;
+      if (include) prices.add(l.price);
+    }
+    return prices;
+  }, [hoverInfo, groupedBids, groupedAsks]);
+
+  const handleHoverAsk = useCallback((price: number, e: React.MouseEvent) => {
+    setHoverInfo({ side: "ask", price, mouseY: e.clientY });
+  }, []);
+
+  const handleHoverBid = useCallback((price: number, e: React.MouseEvent) => {
+    setHoverInfo({ side: "bid", price, mouseY: e.clientY });
+  }, []);
+
+  const handleLeave = useCallback(() => {
+    setHoverInfo(null);
+  }, []);
+
   return (
-    <div ref={containerRef} className="flex h-full flex-col overflow-hidden">
+    <div ref={containerRef} className="relative flex h-full flex-col overflow-hidden">
       {/* Column headers */}
       <div className="flex items-center px-2 py-1 text-[10px] text-text-secondary/70">
         <div className="grid flex-1 grid-cols-3">
@@ -233,7 +344,11 @@ export function Orderbook() {
                 maxCumulative={maxCumulative}
                 side="ask"
                 priceDecimals={priceDecimals}
+                isHovered={hoverInfo?.price === item.level.price && hoverInfo?.side === "ask"}
+                isInHoverRange={hoverInfo?.side === "ask" && hoverRangePrices.has(item.level.price)}
                 onClickPrice={handleClickPrice}
+                onHover={handleHoverAsk}
+                onLeave={handleLeave}
               />
             )
           )}
@@ -266,12 +381,102 @@ export function Orderbook() {
                 maxCumulative={maxCumulative}
                 side="bid"
                 priceDecimals={priceDecimals}
+                isHovered={hoverInfo?.price === item.level.price && hoverInfo?.side === "bid"}
+                isInHoverRange={hoverInfo?.side === "bid" && hoverRangePrices.has(item.level.price)}
                 onClickPrice={handleClickPrice}
+                onHover={handleHoverBid}
+                onLeave={handleLeave}
               />
             )
           )}
         </div>
       </div>
+
+      {/* Depth stats footer */}
+      {depthStats && (
+        <div className="flex items-center justify-between border-t border-ember-border/50 bg-ember-black/50 px-2" style={{ height: "22px" }}>
+          <span className="font-mono text-[9px] text-text-secondary/50">
+            1%: <span className="text-ember-green">${abbreviateNumber(depthStats.bid1)}</span>
+            {" / "}
+            <span className="text-ember-red">${abbreviateNumber(depthStats.ask1)}</span>
+          </span>
+          <span className="font-mono text-[9px] text-text-secondary/50">
+            2%: <span className="text-ember-green">${abbreviateNumber(depthStats.bid2)}</span>
+            {" / "}
+            <span className="text-ember-red">${abbreviateNumber(depthStats.ask2)}</span>
+          </span>
+        </div>
+      )}
+
+      {/* Hover tooltip */}
+      {hoverInfo && hoverStats && (
+        <div
+          className="absolute left-full top-1/2 z-[100] ml-1 w-[220px] -translate-y-1/2 border border-ember-border bg-[#1A1B20] p-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.6)]"
+        >
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-text-primary">
+                Depth Summary
+              </span>
+              <span className={clsx(
+                "font-mono text-[10px] font-medium",
+                hoverInfo.side === "bid" ? "text-ember-green" : "text-ember-red"
+              )}>
+                {hoverInfo.side === "bid" ? "BID" : "ASK"}
+              </span>
+            </div>
+
+            <div className="h-px bg-ember-border/50" />
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">Price</span>
+              <span className={clsx(
+                "font-mono text-[10px]",
+                hoverInfo.side === "bid" ? "text-ember-green" : "text-ember-red"
+              )}>
+                ${formatPrice(hoverInfo.price)}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">From Mid</span>
+              <span className="font-mono text-[10px] text-text-secondary">
+                {hoverStats.distFromMid.toFixed(2)}%
+              </span>
+            </div>
+
+            <div className="h-px bg-ember-border/30" />
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">Cum. Size</span>
+              <span className="font-mono text-[10px] text-text-primary">
+                {formatSize(hoverStats.cumSize, 2)}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">Cum. Notional</span>
+              <span className="font-mono text-[10px] text-text-primary">
+                ${abbreviateNumber(hoverStats.cumNotional)}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">VWAP</span>
+              <span className="font-mono text-[10px] text-text-secondary">
+                ${formatPrice(hoverStats.vwap)}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-[10px] text-text-secondary/70">Levels</span>
+              <span className="font-mono text-[10px] text-text-secondary">
+                {hoverStats.levels}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
