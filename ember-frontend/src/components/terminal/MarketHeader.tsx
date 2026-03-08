@@ -20,15 +20,25 @@ import clsx from "clsx";
 function HealthDot() {
   const [wsStatus, setWsStatus] = useState<"connected" | "disconnected" | "reconnecting">("disconnected");
   const [apiOk, setApiOk] = useState<boolean | null>(null);
+  const [apiLatency, setApiLatency] = useState<number | null>(null);
+  const [hover, setHover] = useState(false);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     return wsClient.onStatus(setWsStatus);
   }, []);
 
   const checkApi = useCallback(() => {
+    const start = performance.now();
     fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(5000) })
-      .then((r) => setApiOk(r.ok))
-      .catch(() => setApiOk(false));
+      .then((r) => {
+        setApiLatency(Math.round(performance.now() - start));
+        setApiOk(r.ok);
+      })
+      .catch(() => {
+        setApiLatency(null);
+        setApiOk(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -37,21 +47,110 @@ function HealthDot() {
     return () => clearInterval(interval);
   }, [checkApi]);
 
+  // Tick every second when hovering to update freshness values
+  useEffect(() => {
+    if (!hover) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hover]);
+
   const allGood = wsStatus === "connected" && apiOk === true;
   const partial = wsStatus === "connected" || apiOk === true;
 
   const color = allGood ? "bg-ember-green" : partial ? "bg-yellow-500" : "bg-ember-red";
   const pulse = allGood ? "" : "animate-pulse";
-  const label = allGood
-    ? "All systems operational"
-    : `API: ${apiOk ? "OK" : apiOk === false ? "DOWN" : "checking"} · WS: ${wsStatus}`;
+
+  // Freshness helper
+  const freshness = (lastMs: number) => {
+    if (!lastMs) return null;
+    const ago = Math.floor((Date.now() - lastMs) / 1000);
+    if (ago < 2) return "<1s ago";
+    if (ago < 60) return `${ago}s ago`;
+    if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+    return `${Math.floor(ago / 3600)}h ago`;
+  };
+
+  const latencyColor = (ms: number | null) => {
+    if (ms === null) return "text-ember-red";
+    if (ms < 200) return "text-ember-green";
+    if (ms < 500) return "text-yellow-500";
+    return "text-ember-red";
+  };
+
+  // Force read wsClient fields on each tick
+  void tick;
+  const obFresh = freshness(wsClient.lastMessageAt["orderbook"]);
+  const statsFresh = freshness(wsClient.lastMessageAt["stats"]);
+  const tradesFresh = freshness(wsClient.lastMessageAt["trades"]);
+  const candlesFresh = freshness(wsClient.lastMessageAt["candles"]);
+  const lastAnyFresh = freshness(wsClient.lastAnyMessageAt);
 
   return (
-    <div className="group relative flex items-center gap-1.5" title={label}>
+    <div
+      className="group relative flex items-center gap-1.5 cursor-default"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
       <span className={`inline-block h-2 w-2 rounded-full ${color} ${pulse}`} />
       <span className="font-mono text-[9px] uppercase tracking-wider text-text-secondary/50">
         {allGood ? "Live" : wsStatus === "reconnecting" ? "Reconnecting" : "Degraded"}
       </span>
+
+      {/* Rich hover panel */}
+      {hover && (
+        <div className="absolute right-0 top-full z-[200] mt-1 w-[260px] border border-ember-border bg-[#1A1B20] p-3 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
+          <div className="mb-2 font-mono text-[10px] font-medium uppercase tracking-wider text-text-primary">
+            System Health
+          </div>
+
+          {/* REST API */}
+          <div className="flex items-center justify-between py-1">
+            <div className="flex items-center gap-1.5">
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${apiOk ? "bg-ember-green" : apiOk === false ? "bg-ember-red" : "bg-yellow-500"}`} />
+              <span className="font-mono text-[10px] text-text-secondary">REST API</span>
+            </div>
+            <span className={clsx("font-mono text-[10px]", latencyColor(apiLatency))}>
+              {apiOk === null ? "checking..." : apiOk ? `${apiLatency}ms` : "DOWN"}
+            </span>
+          </div>
+
+          {/* WebSocket */}
+          <div className="flex items-center justify-between py-1">
+            <div className="flex items-center gap-1.5">
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${wsStatus === "connected" ? "bg-ember-green" : wsStatus === "reconnecting" ? "bg-yellow-500" : "bg-ember-red"}`} />
+              <span className="font-mono text-[10px] text-text-secondary">WebSocket</span>
+            </div>
+            <span className={clsx("font-mono text-[10px]", wsStatus === "connected" ? "text-ember-green" : "text-ember-red")}>
+              {wsStatus === "connected" ? (lastAnyFresh || "connected") : wsStatus}
+            </span>
+          </div>
+
+          {/* Divider */}
+          <div className="my-1.5 h-px bg-ember-border/50" />
+
+          {/* Channel freshness */}
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-text-secondary/50">
+            Data Feeds
+          </div>
+
+          {[
+            { label: "Orderbook", fresh: obFresh },
+            { label: "Stats / Price", fresh: statsFresh },
+            { label: "Trades", fresh: tradesFresh },
+            { label: "Candles", fresh: candlesFresh },
+          ].map(({ label, fresh }) => (
+            <div key={label} className="flex items-center justify-between py-0.5">
+              <span className="font-mono text-[10px] text-text-secondary/70">{label}</span>
+              <div className="flex items-center gap-1.5">
+                <span className={`inline-block h-1 w-1 rounded-full ${fresh ? "bg-ember-green" : "bg-ember-red/50"}`} />
+                <span className={clsx("font-mono text-[10px]", fresh ? "text-text-secondary" : "text-text-secondary/40")}>
+                  {fresh || "no data"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

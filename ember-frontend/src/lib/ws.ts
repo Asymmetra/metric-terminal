@@ -16,6 +16,10 @@ class EmberWSClient {
   private reconnectDelay = 1000;
   private statusListeners: Set<StatusListener> = new Set();
   private currentStatus: "connected" | "disconnected" | "reconnecting" = "disconnected";
+  /** Timestamps of last received message per channel (e.g. "orderbook", "stats", "trades") */
+  public lastMessageAt: Record<string, number> = {};
+  /** Timestamp of last WS message from any channel */
+  public lastAnyMessageAt = 0;
 
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
@@ -59,6 +63,9 @@ class EmberWSClient {
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        const now = Date.now();
+        this.lastAnyMessageAt = now;
+        if (msg.channel) this.lastMessageAt[msg.channel] = now;
         if (msg.channel === "trader_margin") {
           // trader_margin has no symbol — route by authority from the data payload
           const authority = msg.data?.authority;
