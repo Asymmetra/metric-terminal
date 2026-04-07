@@ -558,14 +558,12 @@ if (transfer1.ok) {
 // Wait longer for state to propagate, then retry once if stale
 await sleep(5000);
 let isoBalanceAfterTransfer = 0;
-for (let attempt = 0; attempt < 2; attempt++) {
+for (let attempt = 0; attempt < 9; attempt++) {
   const stateAfterTransfer = await getTraderState();
   isoBalanceAfterTransfer = parseFloat(getSubaccount(stateAfterTransfer, 1)?.collateralBalance?.ui || "0");
   if (isoBalanceAfterTransfer >= 0.9) break;
-  if (attempt === 0) {
-    log(`  Retry: isolated balance=${isoBalanceAfterTransfer}, waiting 5s...`);
-    await sleep(5000);
-  }
+  log(`  Polling isolated balance: ${isoBalanceAfterTransfer} (attempt ${attempt + 1}/9)...`);
+  await sleep(5000);
 }
 log(`\n--- TEST 16: Verify isolated balance ---`);
 log(`  Isolated (sub 1) collateral: ${isoBalanceAfterTransfer}`);
