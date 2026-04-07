@@ -68,7 +68,9 @@ export function Positions() {
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
-  const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, closeAllPositions, connected } = useTransactionBuilder();
+  const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, closeAllPositions, cancelStopLoss, connected } = useTransactionBuilder();
+  // Track which position+leg is being cancelled: "posKey:tp" or "posKey:sl"
+  const [cancellingLeg, setCancellingLeg] = useState<string | null>(null);
   const { publicKey } = useWallet();
   const openPosition = useTradeDetailStore((s) => s.openPosition);
   const openTradeHistoryDetail = useTradeDetailStore((s) => s.openTradeHistory);
@@ -213,6 +215,20 @@ export function Positions() {
       console.error("Close all failed:", e);
     } finally {
       setClosingAll(false);
+    }
+  };
+
+  // Cancel a single TP or SL leg
+  const handleCancelLeg = async (pos: typeof positions[0], leg: "tp" | "sl") => {
+    const posKey = `${pos.symbol}-${pos.subaccount_index}`;
+    if (cancellingLeg?.startsWith(posKey)) return; // block both legs while either in-flight
+    setCancellingLeg(`${posKey}:${leg}`);
+    try {
+      await cancelStopLoss(pos.symbol, leg, pos.subaccount_index);
+    } catch (e: any) {
+      console.error(`Cancel ${leg} failed:`, e);
+    } finally {
+      setCancellingLeg(null);
     }
   };
 
@@ -374,14 +390,54 @@ export function Positions() {
                           )}
                         </td>
                         <td className="px-3 text-right font-mono text-[10px]">
-                          {pos.tp_price != null
-                            ? <span className="text-ember-green">${formatPrice(pos.tp_price)}</span>
-                            : <span className="text-text-secondary/30">—</span>}
+                          {pos.tp_price != null ? (
+                            <span
+                              className="group/tp inline-flex items-center gap-1 cursor-pointer"
+                              onClick={(e) => { e.stopPropagation(); handleCancelLeg(pos, "tp"); }}
+                            >
+                              {cancellingLeg?.startsWith(posKey) ? (
+                                <span className="text-text-secondary/50">...</span>
+                              ) : (
+                                <>
+                                  <span className="text-ember-green group-hover/tp:line-through group-hover/tp:text-text-secondary/60 transition-colors">
+                                    ${formatPrice(pos.tp_price)}
+                                  </span>
+                                  <span className="hidden group-hover/tp:inline text-ember-red/70 text-[9px]">✕</span>
+                                </>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-text-secondary/30">—</span>
+                          )}
+                          {/* Amber dot: has SL but no TP */}
+                          {pos.tp_price == null && pos.sl_price != null && (
+                            <span className="inline-block ml-1 w-1.5 h-1.5 rounded-full bg-amber-500" title="Partial bracket — no take profit" />
+                          )}
                         </td>
                         <td className="px-3 text-right font-mono text-[10px]">
-                          {pos.sl_price != null
-                            ? <span className="text-ember-red">${formatPrice(pos.sl_price)}</span>
-                            : <span className="text-text-secondary/30">—</span>}
+                          {pos.sl_price != null ? (
+                            <span
+                              className="group/sl inline-flex items-center gap-1 cursor-pointer"
+                              onClick={(e) => { e.stopPropagation(); handleCancelLeg(pos, "sl"); }}
+                            >
+                              {cancellingLeg?.startsWith(posKey) ? (
+                                <span className="text-text-secondary/50">...</span>
+                              ) : (
+                                <>
+                                  <span className="text-ember-red group-hover/sl:line-through group-hover/sl:text-text-secondary/60 transition-colors">
+                                    ${formatPrice(pos.sl_price)}
+                                  </span>
+                                  <span className="hidden group-hover/sl:inline text-ember-red/70 text-[9px]">✕</span>
+                                </>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-text-secondary/30">—</span>
+                          )}
+                          {/* Amber dot: has TP but no SL */}
+                          {pos.sl_price == null && pos.tp_price != null && (
+                            <span className="inline-block ml-1 w-1.5 h-1.5 rounded-full bg-amber-500" title="Partial bracket — no stop loss" />
+                          )}
                         </td>
                         <td className="px-3 text-right">
                           <button

@@ -357,5 +357,47 @@ export function useTransactionBuilder() {
     [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
-  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, submitMultiLimitOrders, connected: !!publicKey };
+  const cancelStopLoss = useCallback(
+    async (symbol: string, leg: "tp" | "sl", subaccountIndex?: number): Promise<TxResult> => {
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      const isTP = leg === "tp";
+      const label = isTP ? "Take Profit" : "Stop Loss";
+      const direction = isTP ? "greater_than" : "less_than";
+      const toastId = addToast("loading", `Cancelling ${label}`, `${symbol}-PERP`);
+
+      try {
+        const response = await api.buildCancelStopLoss({
+          authority: publicKey.toBase58(),
+          symbol,
+          direction,
+          ...(subaccountIndex !== undefined && { subaccount_index: subaccountIndex }),
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, sendTransaction, connection,
+          (status) => updateToast(toastId, { title: STATUS_LABELS[status] })
+        );
+
+        if (result.confirmed) {
+          const riskDetail = isTP
+            ? "Position now has no profit target"
+            : "Position now unprotected on downside";
+          updateToast(toastId, { type: "success", title: `${label} Cancelled`, detail: `${symbol}-PERP · ${riskDetail}`, txid: result.txid });
+        } else {
+          updateToast(toastId, { type: "error", title: `Cancel ${label} Expired`, detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", title: `Cancel ${label} Failed`, detail: e?.message });
+        throw e;
+      }
+    },
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+  );
+
+  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, submitMultiLimitOrders, cancelStopLoss, connected: !!publicKey };
 }

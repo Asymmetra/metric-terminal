@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { useStatsStore } from "@/stores/statsStore";
+import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { formatPrice, formatSize, formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -16,7 +17,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-function SectionHeader({ title }: { title: string }) {
+function SectionHeader({ title }: { title: React.ReactNode }) {
   return (
     <div className="pt-3 pb-1 mt-2 border-t border-ember-border/30">
       <span className="font-mono text-[9px] uppercase tracking-wider text-text-secondary/40">{title}</span>
@@ -94,6 +95,20 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
   const isLong = data.side.toLowerCase() === "long";
   const markPrices = useStatsStore((s) => s.markPrices);
   const liveMarkPrice = markPrices[data.symbol] ?? data.mark_price;
+  const { cancelStopLoss } = useTransactionBuilder();
+  const [cancellingLeg, setCancellingLeg] = useState<"tp" | "sl" | null>(null);
+
+  const handleCancelLeg = async (leg: "tp" | "sl") => {
+    if (cancellingLeg) return; // block both while either in-flight
+    setCancellingLeg(leg);
+    try {
+      await cancelStopLoss(data.symbol, leg, data.subaccount_index);
+    } catch {
+      // toast handles error display
+    } finally {
+      setCancellingLeg(null);
+    }
+  };
 
   // Derived values
   const collateral = data.allocated_collateral > 0
@@ -188,16 +203,59 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
       </DetailRow>
 
       {/* TP/SL */}
-      <SectionHeader title="Take Profit / Stop Loss" />
+      <SectionHeader title={
+        <span className="inline-flex items-center gap-1.5">
+          Take Profit / Stop Loss
+          {(data.tp_price != null) !== (data.sl_price != null) && (
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" title="Partial bracket" />
+          )}
+        </span>
+      } />
       <DetailRow label="Take Profit">
-        {data.tp_price != null
-          ? <span className="text-ember-green">${formatPrice(data.tp_price)}</span>
-          : <span className="text-text-secondary/30">Not set</span>}
+        <span className="inline-flex items-center gap-2">
+          {data.tp_price != null ? (
+            <>
+              <span className="text-ember-green">${formatPrice(data.tp_price)}</span>
+              <button
+                onClick={() => handleCancelLeg("tp")}
+                disabled={cancellingLeg !== null}
+                className={clsx(
+                  "font-mono text-[9px] uppercase tracking-wider transition-colors",
+                  cancellingLeg !== null
+                    ? "text-text-secondary/40"
+                    : "text-ember-red/60 hover:text-ember-red"
+                )}
+              >
+                {cancellingLeg === "tp" ? "..." : "Cancel"}
+              </button>
+            </>
+          ) : (
+            <span className="text-text-secondary/30">{data.sl_price != null ? "—" : "Not set"}</span>
+          )}
+        </span>
       </DetailRow>
       <DetailRow label="Stop Loss">
-        {data.sl_price != null
-          ? <span className="text-ember-red">${formatPrice(data.sl_price)}</span>
-          : <span className="text-text-secondary/30">Not set</span>}
+        <span className="inline-flex items-center gap-2">
+          {data.sl_price != null ? (
+            <>
+              <span className="text-ember-red">${formatPrice(data.sl_price)}</span>
+              <button
+                onClick={() => handleCancelLeg("sl")}
+                disabled={cancellingLeg !== null}
+                className={clsx(
+                  "font-mono text-[9px] uppercase tracking-wider transition-colors",
+                  cancellingLeg !== null
+                    ? "text-text-secondary/40"
+                    : "text-ember-red/60 hover:text-ember-red"
+                )}
+              >
+                {cancellingLeg === "sl" ? "..." : "Cancel"}
+              </button>
+            </>
+          ) : (
+            <span className="text-text-secondary/30">{data.tp_price != null ? "—" : "Not set"}</span>
+          )}
+        </span>
       </DetailRow>
       {data.tp_price != null && (
         <DetailRow label="TP Distance">

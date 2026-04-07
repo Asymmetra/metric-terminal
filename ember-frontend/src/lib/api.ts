@@ -64,6 +64,8 @@ export const api = {
     fetchApi<any>("/api/tx/close-all-positions", { method: "POST", body: JSON.stringify(params) }),
   buildMultiLimitOrders: (params: { authority: string; symbol: string; bids: Array<{ price: number; size_lots: number }>; asks: Array<{ price: number; size_lots: number }> }) =>
     fetchApi<any>("/api/tx/place-multi-limit-orders", { method: "POST", body: JSON.stringify(params) }),
+  buildCancelStopLoss: (params: { authority: string; symbol: string; direction: string; subaccount_index?: number }) =>
+    fetchApi<any>("/api/tx/cancel-stop-loss", { method: "POST", body: JSON.stringify(params) }),
   getTraderSubaccounts: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}/subaccounts`),
   getTraderPnl: (pubkey: string, resolution = "1h", limit = 168) =>
     fetchApi<any>(`/api/trader/${pubkey}/pnl?resolution=${resolution}&limit=${limit}`),
