@@ -306,26 +306,31 @@ export function Orderbook() {
     return prices;
   }, [hoverInfo, groupedBids, groupedAsks]);
 
+  const [tooltipPosition, setTooltipPosition] = useState<{ left: number; top: number } | null>(null);
+
+  const updateTooltipPosition = useCallback((mouseY: number) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setTooltipPosition({
+      left: rect.right + 4,
+      top: Math.max(rect.top, Math.min(mouseY - 120, rect.bottom - 280)),
+    });
+  }, []);
+
   const handleHoverAsk = useCallback((price: number, e: React.MouseEvent) => {
     setHoverInfo({ side: "ask", price, mouseX: e.clientX, mouseY: e.clientY });
-  }, []);
+    updateTooltipPosition(e.clientY);
+  }, [updateTooltipPosition]);
 
   const handleHoverBid = useCallback((price: number, e: React.MouseEvent) => {
     setHoverInfo({ side: "bid", price, mouseX: e.clientX, mouseY: e.clientY });
-  }, []);
-
-  // Compute tooltip position: anchored to orderbook right edge, smooth Y tracking
-  const tooltipPosition = useMemo(() => {
-    if (!hoverInfo || !containerRef.current) return null;
-    const rect = containerRef.current.getBoundingClientRect();
-    return {
-      left: rect.right + 4,
-      top: Math.max(rect.top, Math.min(hoverInfo.mouseY - 120, rect.bottom - 280)),
-    };
-  }, [hoverInfo]);
+    updateTooltipPosition(e.clientY);
+  }, [updateTooltipPosition]);
 
   const handleLeave = useCallback(() => {
     setHoverInfo(null);
+    setTooltipPosition(null);
   }, []);
 
   return (

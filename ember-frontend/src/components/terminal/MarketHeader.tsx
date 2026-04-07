@@ -22,7 +22,7 @@ function HealthDot() {
   const [apiOk, setApiOk] = useState<boolean | null>(null);
   const [apiLatency, setApiLatency] = useState<number | null>(null);
   const [hover, setHover] = useState(false);
-  const [tick, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     return wsClient.onStatus(setWsStatus);
@@ -50,7 +50,7 @@ function HealthDot() {
   // Tick every second when hovering to update freshness values
   useEffect(() => {
     if (!hover) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [hover]);
 
@@ -60,10 +60,10 @@ function HealthDot() {
   const color = allGood ? "bg-ember-green" : partial ? "bg-yellow-500" : "bg-ember-red";
   const pulse = allGood ? "" : "animate-pulse";
 
-  // Freshness helper
+  // Freshness helper — uses `now` state (updated every second while hovering)
   const freshness = (lastMs: number) => {
     if (!lastMs) return null;
-    const ago = Math.floor((Date.now() - lastMs) / 1000);
+    const ago = Math.floor((now - lastMs) / 1000);
     if (ago < 2) return "<1s ago";
     if (ago < 60) return `${ago}s ago`;
     if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
@@ -78,7 +78,7 @@ function HealthDot() {
   };
 
   // Force read wsClient fields on each tick
-  void tick;
+  void now;
   const obFresh = freshness(wsClient.lastMessageAt["orderbook"]);
   const statsFresh = freshness(wsClient.lastMessageAt["stats"]);
   const tradesFresh = freshness(wsClient.lastMessageAt["trades"]);
