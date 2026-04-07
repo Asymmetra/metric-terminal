@@ -141,26 +141,50 @@ async function buildAndSend(endpoint, body, label) {
   }
   log(`  Simulation OK (${sim.value.unitsConsumed} CU)`);
 
-  // Send
-  const sig = await connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: true,
-    maxRetries: 3,
-  });
-  log(`  TX sent: ${sig}`);
+  // Send + confirm with retry on block-height expiry
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let currentSig, currentBlockhash, currentLastValid;
+    if (attempt === 1) {
+      currentSig = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+      currentBlockhash = blockhash;
+      currentLastValid = lastValidBlockHeight;
+    } else {
+      // Re-fetch blockhash and resend on retry
+      log(`  Retry ${attempt}/3: refreshing blockhash and resending...`);
+      const fresh = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = fresh.blockhash;
+      tx.sign(keypair);
+      currentSig = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+      currentBlockhash = fresh.blockhash;
+      currentLastValid = fresh.lastValidBlockHeight;
+    }
+    log(`  TX sent: ${currentSig}`);
 
-  // Confirm
-  const confirmation = await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    "confirmed"
-  );
-
-  if (confirmation.value.err) {
-    log(`  TX FAILED on-chain: ${JSON.stringify(confirmation.value.err)}`);
-    return { ok: false, sig, onChainErr: confirmation.value.err };
+    try {
+      const confirmation = await connection.confirmTransaction(
+        { signature: currentSig, blockhash: currentBlockhash, lastValidBlockHeight: currentLastValid },
+        "confirmed"
+      );
+      if (confirmation.value.err) {
+        log(`  TX FAILED on-chain: ${JSON.stringify(confirmation.value.err)}`);
+        return { ok: false, sig: currentSig, onChainErr: confirmation.value.err };
+      }
+      log(`  TX CONFIRMED ✓`);
+      return { ok: true, sig: currentSig, data };
+    } catch (err) {
+      if (err.name === 'TransactionExpiredBlockheightExceededError' && attempt < 3) {
+        log(`  Block height expired for ${currentSig}, retrying...`);
+        continue;
+      }
+      throw err;
+    }
   }
-
-  log(`  TX CONFIRMED ✓`);
-  return { ok: true, sig, data };
 }
 
 async function getTraderState() {

@@ -73,15 +73,29 @@ async function buildAndSend(endpoint, body, label) {
     return { ok: false, simError: sim.value.err, logs: sim.value.logs };
   }
   log(`  Sim OK (${sim.value.unitsConsumed} CU)`);
-  const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
-  log(`  TX sent: ${sig}`);
-  const conf = await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
-  if (conf.value.err) {
-    log(`  TX FAILED on-chain: ${JSON.stringify(conf.value.err)}`);
-    return { ok: false, sig, onChainErr: conf.value.err };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let currentSig, bh, lv;
+    if (attempt === 1) {
+      currentSig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
+      bh = blockhash; lv = lastValidBlockHeight;
+    } else {
+      log(`  Retry ${attempt}/3: refreshing blockhash...`);
+      const fresh = await connection.getLatestBlockhash('confirmed');
+      tx.recentBlockhash = fresh.blockhash; tx.sign([kp]);
+      currentSig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
+      bh = fresh.blockhash; lv = fresh.lastValidBlockHeight;
+    }
+    log(`  TX sent: ${currentSig}`);
+    try {
+      const conf = await connection.confirmTransaction({ signature: currentSig, blockhash: bh, lastValidBlockHeight: lv }, 'confirmed');
+      if (conf.value.err) { log(`  TX FAILED on-chain: ${JSON.stringify(conf.value.err)}`); return { ok: false, sig: currentSig, onChainErr: conf.value.err }; }
+      log(`  TX CONFIRMED ✓`);
+      return { ok: true, sig: currentSig, data };
+    } catch (err) {
+      if (err.name === 'TransactionExpiredBlockheightExceededError' && attempt < 3) { log(`  Block height expired, retrying...`); continue; }
+      throw err;
+    }
   }
-  log(`  TX CONFIRMED ✓`);
-  return { ok: true, sig, data };
 }
 
 log('╔══════════════════════════════════════════════════╗');
