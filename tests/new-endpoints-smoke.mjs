@@ -346,6 +346,42 @@ async function runTests() {
     assert(ok || status === 400, `Unexpected status ${status}`);
   });
 
+  // 16. Isolated market order — unregistered subaccount (regression test)
+  // The old handler used HTTP API pre-flight which 404'd on unregistered traders.
+  // The local SDK builder auto-registers, so this should return 200 with instructions.
+  await testCase('Isolated market order: unregistered subaccount builds TX', async () => {
+    const { ok, data, status } = await apiCall('/api/tx/isolated-market-order', {
+      method: 'POST',
+      body: JSON.stringify({
+        authority: TEST_WALLET_PUBKEY,
+        symbol: 'SOL',
+        side: 'buy',
+        size_lots: 1,
+        subaccount_index: 99
+      })
+    });
+    verbose(`Status: ${status}, Data: ${JSON.stringify(data)}`);
+    assert(ok, `Expected 200 for unregistered sub=99, got ${status}: ${JSON.stringify(data)}`);
+    assert(Array.isArray(data.instructions), 'Should return instructions array');
+    // Should contain register + sync + market order instructions (3+)
+    assert(data.instructions.length >= 2, `Expected 2+ instructions for auto-register, got ${data.instructions.length}`);
+  });
+
+  // 17. Isolated market order — missing subaccount_index returns 400
+  await testCase('Isolated market order: reject missing subaccount_index', async () => {
+    const { status } = await apiCall('/api/tx/isolated-market-order', {
+      method: 'POST',
+      body: JSON.stringify({
+        authority: TEST_WALLET_PUBKEY,
+        symbol: 'SOL',
+        side: 'buy',
+        size_lots: 1
+      })
+    });
+    verbose(`Status: ${status}`);
+    assert(status === 400, `Expected 400 for missing subaccount_index, got ${status}`);
+  });
+
   // -----------------------------------------------------------------------
   // Summary
   // -----------------------------------------------------------------------

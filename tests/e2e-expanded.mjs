@@ -418,6 +418,7 @@ const isoMarketBuy = await buildAndSend("/api/tx/isolated-market-order", {
   side: "buy",
   size_lots: 1,
   collateral_usdc: 2.0,
+  subaccount_index: 1,
 }, "TEST 10: Isolated market buy SOL (1 lot, 2 USDC collateral)");
 
 if (isoMarketBuy.ok) {
@@ -465,6 +466,7 @@ const isoMarketSell = await buildAndSend("/api/tx/isolated-market-order", {
   symbol: "SOL",
   side: "sell",
   size_lots: sizeLots12,
+  subaccount_index: 1,
 }, `TEST 12: Close isolated SOL position (${sizeLots12} lots)`);
 
 if (isoMarketSell.ok) {

@@ -3,7 +3,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use phoenix_ix::{LimitOrderParams, create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
-use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, PlaceIsolatedMarketOrderRequest, Side, TraderKey};
+use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
@@ -103,8 +103,6 @@ pub struct IsolatedMarketOrderRequest {
     /// Delta above existing collateral is transferred from cross-margin.
     #[serde(default)]
     pub collateral_usdc: Option<f64>,
-    #[serde(default)]
-    pub allow_cross_and_isolated: Option<bool>,
     /// Isolated subaccount index (1–100). When provided, targets that specific
     /// isolated subaccount slot. Defaults to None (Phoenix API picks the slot).
     #[serde(default)]
@@ -680,38 +678,102 @@ async fn isolated_market_order(
     );
 
     validate_size_lots(req.size_lots)?;
-    parse_authority(&req.authority)?; // validate pubkey format
+    let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
-    let collateral = build_collateral(req.collateral_usdc)?;
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
-    let allow_cross_and_isolated = req.allow_cross_and_isolated.unwrap_or(false);
 
-    let transfer_amount = match &collateral {
-        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => *collateral,
-        _ => 0,
-    };
-    let tp_sl = bracket.as_ref().map(BracketLegOrders::to_tp_sl_config);
-
-    let instructions = state
-        .http_client
-        .build_isolated_market_order_tx_with_request(PlaceIsolatedMarketOrderRequest {
-            authority: req.authority.clone(),
-            symbol: req.symbol.clone(),
-            side: side.to_api_string().to_string(),
-            num_base_lots: Some(req.size_lots),
-            transfer_amount,
-            pda_index: req.subaccount_index,
-            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
-            tp_sl,
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| {
-            AppError::Phoenix(format!("Failed to build isolated market order: {}", e))
+    // Require explicit subaccount index (1–100), same as isolated_limit_order.
+    let sub_idx = req
+        .subaccount_index
+        .filter(|&i| i > 0 && i <= 100)
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "subaccount_index (1–100) is required for isolated market orders".to_string(),
+            )
         })?;
 
+    let metadata = state.metadata.read().await;
+    let builder = PhoenixTxBuilder::new(&metadata);
+    let mut all_instructions: Vec<Instruction> = Vec::new();
+
+    // Auto-register isolated subaccount if not yet registered.
+    // The local builder constructs the order instruction without a pre-flight
+    // HTTP lookup, so unregistered traders no longer 404. Prepend register+sync
+    // instructions if the PDA doesn't exist yet.
+    let is_registered = state
+        .http_client
+        .get_traders(&authority)
+        .await
+        .map(|traders| traders.iter().any(|t| t.trader_subaccount_index == sub_idx))
+        .unwrap_or(false);
+
+    if !is_registered {
+        tracing::info!(
+            "Isolated sub={} not registered for {}, prepending registration",
+            sub_idx,
+            req.authority
+        );
+        let register_ixs = builder
+            .build_register_trader(authority, 0, sub_idx)
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build register trader: {}", e))
+            })?;
+        all_instructions.extend(register_ixs);
+
+        let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
+        let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+        let sync_ixs = builder
+            .build_sync_parent_to_child(authority, parent_pda, child_pda)
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build sync parent to child: {}", e))
+            })?;
+        all_instructions.extend(sync_ixs);
+    }
+
+    // Transfer collateral from cross-margin to isolated subaccount if requested.
+    if let Some(usdc) = req.collateral_usdc {
+        let parent_pda = TraderKey::derive_pda(&authority, 0, 0);
+        let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+        let transfer_ixs = builder
+            .build_transfer_collateral(authority, parent_pda, child_pda, usdc)
+            .map_err(|e| {
+                AppError::Phoenix(format!("Failed to build collateral transfer: {}", e))
+            })?;
+        all_instructions.extend(transfer_ixs);
+    }
+
+    // Build the isolated market order using the local SDK builder.
+    // This bypasses the Phoenix HTTP pre-flight lookup that would otherwise
+    // 404 on any unregistered sub=N PDA before the TX is submitted.
+    let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+    let market_ixs = builder
+        .build_market_order(
+            authority,
+            child_pda,
+            &req.symbol,
+            side,
+            req.size_lots,
+            None, // bracket legs appended separately below
+        )
+        .map_err(|e| AppError::Phoenix(format!("Failed to build isolated market order: {}", e)))?;
+    all_instructions.extend(market_ixs);
+
+    // Append bracket leg (TP/SL) instructions bound to the isolated subaccount PDA.
+    if let Some(ref bracket_legs) = bracket {
+        let trader_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+        let bracket_ixs = build_bracket_leg_ixs(
+            &metadata,
+            &req.symbol,
+            authority,
+            trader_pda,
+            side,
+            bracket_legs,
+        )?;
+        all_instructions.extend(bracket_ixs);
+    }
+
     Ok(Json(serialize_instructions(
-        instructions,
+        all_instructions,
         format!(
             "Isolated market {} order: {} lots on {}",
             req.side, req.size_lots, req.symbol
@@ -990,45 +1052,48 @@ async fn close_all_positions(
         }
     }
 
-    // Process isolated positions asynchronously
-    // Note: Each isolated order requires an async HTTP call to build
-    // This is a limitation of the current SDK design
-    for pos in isolated_positions {
-        validate_size_lots(pos.size_lots)?;
+    // Process isolated positions using local SDK builder (no HTTP pre-flight).
+    // Positions already exist so the trader is registered, but using the local
+    // builder keeps the code path consistent with isolated_market_order.
+    if !isolated_positions.is_empty() {
+        let metadata = state.metadata.read().await;
+        let builder = PhoenixTxBuilder::new(&metadata);
 
-        let position_side = match pos.side.to_lowercase().as_str() {
-            "long" => Side::Bid,
-            "short" => Side::Ask,
-            _ => return Err(AppError::BadRequest(
-                format!("Invalid position side: {}. Use 'long' or 'short'", pos.side)
-            )),
-        };
+        for pos in isolated_positions {
+            validate_size_lots(pos.size_lots)?;
 
-        let close_side = match position_side {
-            Side::Bid => Side::Ask,
-            Side::Ask => Side::Bid,
-        };
+            let position_side = match pos.side.to_lowercase().as_str() {
+                "long" => Side::Bid,
+                "short" => Side::Ask,
+                _ => return Err(AppError::BadRequest(
+                    format!("Invalid position side: {}. Use 'long' or 'short'", pos.side)
+                )),
+            };
 
-        let instructions = state
-            .http_client
-            .build_isolated_market_order_tx_with_request(PlaceIsolatedMarketOrderRequest {
-                authority: req.authority.clone(),
-                symbol: pos.symbol.clone(),
-                side: close_side.to_api_string().to_string(),
-                num_base_lots: Some(pos.size_lots),
-                pda_index: Some(pos.subaccount_index),
-                is_reduce_only: Some(true),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| {
-                AppError::Phoenix(format!(
-                    "Failed to build isolated close for {}: {}",
-                    pos.symbol, e
-                ))
-            })?;
+            let close_side = match position_side {
+                Side::Bid => Side::Ask,
+                Side::Ask => Side::Bid,
+            };
 
-        all_instructions.extend(instructions);
+            let child_pda = TraderKey::derive_pda(&authority, 0, pos.subaccount_index);
+            let instructions = builder
+                .build_market_order(
+                    authority,
+                    child_pda,
+                    &pos.symbol,
+                    close_side,
+                    pos.size_lots,
+                    None, // No bracket orders for closes
+                )
+                .map_err(|e| {
+                    AppError::Phoenix(format!(
+                        "Failed to build isolated close for {}: {}",
+                        pos.symbol, e
+                    ))
+                })?;
+
+            all_instructions.extend(instructions);
+        }
     }
 
     // Check instruction count limits
