@@ -11,10 +11,11 @@ import { useUiStore } from "@/stores/uiStore";
 import { formatUsd, formatPrice } from "@/lib/format";
 import { MarginMode } from "@/types/trader";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
+import { MultiOrderPanel } from "@/components/terminal/MultiOrderPanel";
 import clsx from "clsx";
 
 export function OrderEntry() {
-  const [orderType, setOrderType] = useState<"market" | "limit">("limit");
+  const [orderType, setOrderType] = useState<"market" | "limit" | "multi">("limit");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
   const [collateralInput, setCollateralInput] = useState("");
@@ -50,7 +51,7 @@ export function OrderEntry() {
   const setFillPrice = useOrderbookStore((s) => s.setFillPrice);
 
   useEffect(() => {
-    if (fillPrice !== null) {
+    if (fillPrice !== null && orderType !== "multi") {
       setPrice(fillPrice.toString());
       if (orderType === "market") setOrderType("limit");
       setFillPrice(null);
@@ -73,9 +74,9 @@ export function OrderEntry() {
     if (isIsolatedOnly) setMarginMode("isolated");
   }, [selectedSymbol, isIsolatedOnly]);
 
-  // Hide TP/SL when switching to limit orders (architecturally unsupported)
+  // Hide TP/SL when switching to limit/multi orders (architecturally unsupported)
   useEffect(() => {
-    if (orderType === "limit") {
+    if (orderType === "limit" || orderType === "multi") {
       setShowTpSl(false);
       setTpPrice("");
       setSlPrice("");
@@ -178,7 +179,7 @@ export function OrderEntry() {
 
   const handleSubmit = async () => {
     if (submittingRef.current) return;
-    if (!connected || !derivedOrder) return;
+    if (!connected || !derivedOrder || orderType === "multi") return;
     if (orderType === "limit" && (!price || parseFloat(price) <= 0)) return;
     if (showTpSl && (!tpValid || !slValid)) return;
 
@@ -271,7 +272,7 @@ export function OrderEntry() {
         <div className="flex flex-col gap-3 p-3">
           {/* Order type tabs */}
           <div className="flex border-b border-ember-border/50">
-            {(["limit", "market"] as const).map((t) => (
+            {(["limit", "market", "multi"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setOrderType(t)}
@@ -287,8 +288,11 @@ export function OrderEntry() {
             ))}
           </div>
 
+          {/* Multi-order panel */}
+          {orderType === "multi" && <MultiOrderPanel />}
+
           {/* Side toggle */}
-          <div className="grid grid-cols-2 gap-px bg-ember-border">
+          {orderType !== "multi" && <><div className="grid grid-cols-2 gap-px bg-ember-border">
             <button
               onClick={() => setSide("buy")}
               className={clsx(
@@ -717,6 +721,7 @@ export function OrderEntry() {
               {validation.buttonLabel}
             </button>
           )}
+          </>}
         </div>
 
         {/* Account info — shown when wallet connected */}

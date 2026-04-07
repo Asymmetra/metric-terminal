@@ -309,5 +309,53 @@ export function useTransactionBuilder() {
     [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
   );
 
-  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, connected: !!publicKey };
+  const submitMultiLimitOrders = useCallback(
+    async (
+      symbol: string,
+      bids: Array<{ price: number; size_lots: number }>,
+      asks: Array<{ price: number; size_lots: number }>,
+      onStatus?: (status: TxStatus) => void,
+    ): Promise<TxResult> => {
+      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      const total = bids.length + asks.length;
+      const bidRange = bids.length > 0 ? `${bids.length} bid${bids.length !== 1 ? "s" : ""}` : "";
+      const askRange = asks.length > 0 ? `${asks.length} ask${asks.length !== 1 ? "s" : ""}` : "";
+      const detail = [bidRange, askRange].filter(Boolean).join(" + ") + ` on ${symbol}`;
+      const toastId = addToast("loading", `Building ${total} Orders`, detail);
+
+      try {
+        const response = await api.buildMultiLimitOrders({
+          authority: publicKey.toBase58(),
+          symbol,
+          bids,
+          asks,
+        });
+        const instructions = deserializeInstructions(response.instructions);
+
+        const result = await buildAndSignTransaction(
+          instructions, publicKey, sendTransaction, connection,
+          (status) => {
+            onStatus?.(status);
+            updateToast(toastId, { title: STATUS_LABELS[status] });
+          }
+        );
+
+        if (result.confirmed) {
+          updateToast(toastId, { type: "success", title: `${total} Orders Confirmed`, detail, txid: result.txid });
+        } else {
+          updateToast(toastId, { type: "error", title: "Multi-Order Expired", detail: "Transaction status unknown — check the explorer before retrying.", txid: result.txid });
+        }
+
+        await refreshTraderData();
+        return result;
+      } catch (e: any) {
+        updateToast(toastId, { type: "error", title: "Multi-Order Failed", detail: decodeOrderError(e?.message ?? "") });
+        throw e;
+      }
+    },
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+  );
+
+  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, submitMultiLimitOrders, connected: !!publicKey };
 }

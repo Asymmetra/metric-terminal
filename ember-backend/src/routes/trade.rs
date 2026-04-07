@@ -1185,7 +1185,7 @@ async fn place_multi_limit_orders(
         ));
     }
 
-    const MAX_ORDERS: usize = 20;
+    const MAX_ORDERS: usize = 10;
     let total = req.bids.len() + req.asks.len();
     if total > MAX_ORDERS {
         return Err(AppError::BadRequest(format!(
