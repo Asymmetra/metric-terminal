@@ -1,5 +1,11 @@
 //! Example: Query exchange keys, SOL market, and trader info via HTTP API.
 //!
+//! Demonstrates the resource-based sub-client API:
+//!   client.markets().get_markets()
+//!   client.exchange().get_keys()
+//!   client.traders().get_trader(&authority)
+//!   etc.
+//!
 //! Run with:
 //!   export PHOENIX_API_KEY=your_api_key  # optional
 //!   export TRADER_PUBKEY=your_trader_pubkey  # optional
@@ -23,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch exchange keys
     println!("=== Exchange Keys ===");
-    let exchange_keys = client.get_exchange_keys().await?;
+    let exchange_keys = client.exchange().get_keys().await?;
     println!("  Global Config:     {}", exchange_keys.global_config);
     println!("  Canonical Mint:    {}", exchange_keys.canonical_mint);
     println!("  Global Vault:      {}", exchange_keys.global_vault);
@@ -58,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch SOL market config (static configuration, not live data)
     println!("=== SOL Market Config ===");
-    let market = client.get_market("SOL").await?;
+    let market = client.markets().get_market("SOL").await?;
     println!("  Symbol:            {}", market.symbol);
     println!("  Asset ID:          {}", market.asset_id);
     println!("  Status:            {:?}", market.market_status);
@@ -118,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Fetch SOL candles
     println!("=== SOL Candles (1m) ===");
     let params = CandlesQueryParams::new("SOL", Timeframe::Minute1).with_limit(5);
-    let candles = client.get_candles(params).await?;
+    let candles = client.candles().get_candles(params).await?;
     println!("  Latest {} candles:", candles.len());
     for candle in &candles {
         println!(
@@ -135,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch all markets (static configuration)
     println!("=== All Markets ===");
-    let markets = client.get_markets().await?;
+    let markets = client.markets().get_markets().await?;
     println!("  Markets ({} total):", markets.len());
     for m in &markets {
         println!(
@@ -155,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(pubkey_str) = std::env::var("TRADER_PUBKEY") {
         println!("=== Trader Subaccounts ===");
         let authority = Pubkey::from_str(&pubkey_str)?;
-        let traders = client.get_traders(&authority).await?;
+        let traders = client.traders().get_trader(&authority).await?;
         println!("  Found {} subaccount(s)\n", traders.len());
 
         for trader in &traders {
@@ -199,12 +205,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Fetch trade history (fills) for this trader
         println!("=== Trade History ===");
         let params = TradeHistoryQueryParams::new().with_limit(10);
-        let trades = client.get_trade_history(&authority, params).await?;
+        let trades = client.trades().get_trader_trade_history(&authority, params).await?;
         println!("  Latest {} trades:", trades.data.len());
         for fill in &trades.data {
             println!(
-                "    {} | {} {} @ {} ({} quote)",
-                fill.timestamp, fill.market_symbol, fill.base_qty, fill.price, fill.quote_qty
+                "    {} | {} {} {:?} @ {} | PnL: {} | Fees: {} | {}",
+                fill.timestamp,
+                fill.market_symbol,
+                fill.base_lots_delta,
+                fill.liquidity,
+                fill.price,
+                fill.realized_pnl,
+                fill.fees,
+                fill.signature.clone().unwrap_or("N/A".to_string())
             );
         }
         if trades.has_more {
@@ -214,7 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Fetch collateral history for this trader
         println!("=== Collateral History ===");
         let params = CollateralHistoryQueryParams::new(10);
-        let history = client.get_collateral_history(&authority, params).await?;
+        let history = client.collateral().get_user_collateral_history(&authority, params).await?;
         println!("  Latest {} events:", history.data.len());
         for event in &history.data {
             println!(
@@ -230,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Fetch funding history for this trader
         println!("=== Funding History ===");
         let params = FundingHistoryQueryParams::new().with_limit(10);
-        let funding = client.get_funding_history(&authority, params).await?;
+        let funding = client.funding().get_user_funding_history(&authority, params).await?;
         println!("  Latest {} events:", funding.events.len());
         for event in &funding.events {
             println!(
@@ -253,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let params = PnlQueryParams::new(PnlResolution::Day1)
             .with_start_time(six_months_ago_ms)
             .with_end_time(now_ms);
-        let pnl = client.get_pnl(&authority, params).await?;
+        let pnl = client.traders().get_trader_pnl(&authority, params).await?;
         println!("  {} data points:", pnl.len());
         for point in &pnl {
             println!(
@@ -270,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Fetch order history for this trader
         println!("=== Order History ===");
         let params = OrderHistoryQueryParams::new(10);
-        let orders = client.get_order_history(&authority, params).await?;
+        let orders = client.orders().get_trader_order_history(&authority, params).await?;
         println!("  Latest {} orders:", orders.data.len());
         for order in &orders.data {
             println!(
@@ -291,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(cursor) = &orders.next_cursor {
                 println!("\n  Fetching next page...");
                 let next_params = OrderHistoryQueryParams::new(5).with_cursor(cursor);
-                let next_page = client.get_order_history(&authority, next_params).await?;
+                let next_page = client.orders().get_trader_order_history(&authority, next_params).await?;
                 println!("  Next {} orders:", next_page.data.len());
                 for order in &next_page.data {
                     println!(
@@ -305,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Demonstrate market filter
         println!("\n  Filtering by SOL market:");
         let sol_params = OrderHistoryQueryParams::new(5).with_market_symbol("SOL");
-        let sol_orders = client.get_order_history(&authority, sol_params).await?;
+        let sol_orders = client.orders().get_trader_order_history(&authority, sol_params).await?;
         println!("  Found {} SOL orders", sol_orders.data.len());
         println!();
 
@@ -314,14 +327,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sol_params = TradeHistoryQueryParams::new()
             .with_market_symbol("SOL")
             .with_limit(5);
-        let sol_trades = client.get_trade_history(&authority, sol_params).await?;
+        let sol_trades = client.trades().get_trader_trade_history(&authority, sol_params).await?;
         println!("  Found {} SOL trades", sol_trades.data.len());
         println!();
     }
 
     // Fetch exchange config (static market parameters)
     println!("=== Exchange Config ===");
-    let exchange = client.get_exchange().await?;
+    let exchange = client.exchange().get_exchange().await?;
     println!("  Markets ({} total):", exchange.markets.len());
     for market in &exchange.markets {
         println!("\n  {} Market Config:", market.symbol);

@@ -149,6 +149,28 @@ pub fn client_order_id_to_bytes(id: u128) -> [u8; 16] {
     id.to_le_bytes()
 }
 
+/// A condensed order for use in multi-limit-order instructions.
+///
+/// Contains only price, size, and optional expiry — the minimal data
+/// needed per order in a batch.
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
+pub struct CondensedOrder {
+    pub price_in_ticks: u64,
+    pub size_in_base_lots: u64,
+    pub last_valid_slot: Option<u64>,
+}
+
+/// A batch of post-only limit orders (bids and asks) sent in a single
+/// instruction.
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
+pub struct MultipleOrderPacket {
+    pub bids: Vec<CondensedOrder>,
+    pub asks: Vec<CondensedOrder>,
+    pub client_order_id: Option<[u8; 16]>,
+    /// Whether orders should slide to the top of the book if they would cross.
+    pub slide: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use borsh::to_vec;

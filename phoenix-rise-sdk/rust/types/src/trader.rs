@@ -258,6 +258,7 @@ pub struct TraderStateSplineDelta {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeHistoryDelta {
+    pub signature: String,
     pub timestamp: u64,
     pub slot: i64,
     pub slot_index: i32,

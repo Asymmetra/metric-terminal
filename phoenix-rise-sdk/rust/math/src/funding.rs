@@ -75,7 +75,7 @@ impl FundingCalculator {
         // using the i128 max to match on-chain bounds exactly.
         let projected_f = acc_i128 as f64 / period_i128 as f64; // quote lots per base lot
         let max_rate = self.max_funding_rate_per_interval.as_inner() as f64;
-        let clamped = projected_f.clamp(-max_rate as f64, max_rate as f64);
+        let clamped = projected_f.clamp(-max_rate, max_rate);
 
         // Convert to quote units per base unit.
         let quote_lots_per_quote_unit = 10f64.powi(self.quote_lot_decimals as i32);

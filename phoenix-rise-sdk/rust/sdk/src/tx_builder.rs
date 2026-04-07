@@ -6,18 +6,20 @@
 use std::str::FromStr;
 
 use phoenix_ix::{
-    CancelId, CancelOrdersByIdParams, DepositFundsParams, Direction, EmberDepositParams,
-    EmberWithdrawParams, IsolatedCollateralFlow, IsolatedLimitOrderParams,
-    IsolatedMarketOrderParams, LimitOrderParams, MarketOrderParams, RegisterTraderParams, Side,
-    SplApproveParams, StopLossOrderKind, StopLossParams, SyncParentToChildParams,
-    TransferCollateralChildToParentParams, TransferCollateralParams, USDC_MINT,
-    WithdrawFundsParams, create_associated_token_account_idempotent_ix,
-    create_cancel_orders_by_id_ix, create_deposit_funds_ix, create_ember_deposit_ix,
+    CancelId, CancelOrdersByIdParams, CancelStopLossParams, CondensedOrder, DepositFundsParams,
+    Direction, EmberDepositParams, EmberWithdrawParams, IsolatedCollateralFlow,
+    IsolatedLimitOrderParams, IsolatedMarketOrderParams, LimitOrderParams, MarketOrderParams,
+    MultiLimitOrderParams, RegisterTraderParams, Side, SplApproveParams, StopLossOrderKind,
+    StopLossParams, SyncParentToChildParams, TransferCollateralChildToParentParams,
+    TransferCollateralParams, USDC_MINT, WithdrawFundsParams,
+    create_associated_token_account_idempotent_ix, create_cancel_orders_by_id_ix,
+    create_cancel_stop_loss_ix, create_deposit_funds_ix, create_ember_deposit_ix,
     create_ember_withdraw_ix, create_place_limit_order_ix, create_place_market_order_ix,
-    create_place_stop_loss_ix, create_register_trader_ix, create_spl_approve_ix,
-    create_sync_parent_to_child_ix, create_transfer_collateral_child_to_parent_ix,
-    create_transfer_collateral_ix, create_withdraw_funds_ix, get_associated_token_address,
-    get_ember_state_address, get_ember_vault_address,
+    create_place_multi_limit_order_ix, create_place_stop_loss_ix, create_register_trader_ix,
+    create_spl_approve_ix, create_sync_parent_to_child_ix,
+    create_transfer_collateral_child_to_parent_ix, create_transfer_collateral_ix,
+    create_withdraw_funds_ix, get_associated_token_address, get_ember_state_address,
+    get_ember_vault_address,
 };
 use phoenix_math_utils::{MathError, WrapperNum};
 use phoenix_types::{CROSS_MARGIN_SUBACCOUNT_IDX, ExchangeMarketConfig, Trader, TraderKey};
@@ -125,7 +127,7 @@ impl BracketLegOrders {
 /// let trader_pda = Pubkey::new_unique();
 ///
 /// // Build instructions without sending
-/// let ixs = builder.build_market_order(authority, trader_pda, "SOL", Side::Bid, 100)?;
+/// let ixs = builder.build_market_order(authority, trader_pda, "SOL", Side::Bid, 100, None)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -298,6 +300,88 @@ impl<'a> PhoenixTxBuilder<'a> {
         self.build_limit_order_with_params(params)
     }
 
+    /// Build a multi-limit-order instruction with pre-built params.
+    pub fn build_multi_limit_order_with_params(
+        &self,
+        params: MultiLimitOrderParams,
+    ) -> Result<Vec<Instruction>, PhoenixTxBuilderError> {
+        let ix = create_place_multi_limit_order_ix(params)?;
+        Ok(vec![ix.into()])
+    }
+
+    /// Build a multi-limit-order instruction.
+    ///
+    /// Places multiple post-only limit orders (bids and asks) in a single
+    /// instruction.
+    ///
+    /// # Arguments
+    ///
+    /// * `authority` - The trader's wallet address (signer)
+    /// * `trader_pda` - The trader's PDA account
+    /// * `symbol` - Market symbol
+    /// * `bids` - Bid orders as (price_usd, num_base_lots) tuples
+    /// * `asks` - Ask orders as (price_usd, num_base_lots) tuples
+    /// * `slide` - Whether orders should slide to top of book if they would cross
+    pub fn build_multi_limit_order(
+        &self,
+        authority: Pubkey,
+        trader_pda: Pubkey,
+        symbol: &str,
+        bids: &[(f64, u64)],
+        asks: &[(f64, u64)],
+        slide: bool,
+    ) -> Result<Vec<Instruction>, PhoenixTxBuilderError> {
+        let market = self
+            .metadata
+            .get_market(symbol)
+            .ok_or_else(|| PhoenixTxBuilderError::UnknownSymbol(symbol.to_string()))?;
+
+        let calc = self
+            .metadata
+            .get_market_calculator(symbol)
+            .ok_or_else(|| PhoenixTxBuilderError::UnknownSymbol(symbol.to_string()))?;
+
+        let addrs = self.parse_addresses(market)?;
+
+        let bid_orders: Vec<CondensedOrder> = bids
+            .iter()
+            .map(|(price, size)| {
+                Ok(CondensedOrder {
+                    price_in_ticks: calc.price_to_ticks(*price)?.as_inner(),
+                    size_in_base_lots: *size,
+                    last_valid_slot: None,
+                })
+            })
+            .collect::<Result<_, PhoenixTxBuilderError>>()?;
+
+        let ask_orders: Vec<CondensedOrder> = asks
+            .iter()
+            .map(|(price, size)| {
+                Ok(CondensedOrder {
+                    price_in_ticks: calc.price_to_ticks(*price)?.as_inner(),
+                    size_in_base_lots: *size,
+                    last_valid_slot: None,
+                })
+            })
+            .collect::<Result<_, PhoenixTxBuilderError>>()?;
+
+        let params = MultiLimitOrderParams::builder()
+            .trader(authority)
+            .trader_account(trader_pda)
+            .perp_asset_map(addrs.perp_asset_map)
+            .orderbook(addrs.orderbook)
+            .spline_collection(addrs.spline_collection)
+            .global_trader_index(addrs.global_trader_index)
+            .active_trader_buffer(addrs.active_trader_buffer)
+            .bids(bid_orders)
+            .asks(ask_orders)
+            .slide(slide)
+            .symbol(symbol)
+            .build()?;
+
+        self.build_multi_limit_order_with_params(params)
+    }
+
     /// Build cancel orders instruction.
     ///
     /// # Arguments
@@ -336,6 +420,44 @@ impl<'a> PhoenixTxBuilder<'a> {
             .build()?;
 
         let ix = create_cancel_orders_by_id_ix(params)?;
+        Ok(vec![ix.into()])
+    }
+
+    /// Build a cancel stop loss instruction.
+    ///
+    /// Cancels an active stop-loss or take-profit order for a given market
+    /// and execution direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `authority` - The trader's wallet address (signer / funder)
+    /// * `trader_pda` - The trader's PDA account
+    /// * `symbol` - Market symbol ("SOL", "BTC", "ETH")
+    /// * `execution_direction` - Which leg to cancel (`LessThan` for SL on
+    ///   longs, `GreaterThan` for TP on longs; reversed for shorts)
+    pub fn build_cancel_bracket_leg(
+        &self,
+        authority: Pubkey,
+        trader_pda: Pubkey,
+        symbol: &str,
+        execution_direction: Direction,
+    ) -> Result<Vec<Instruction>, PhoenixTxBuilderError> {
+        let market = self
+            .metadata
+            .get_market(symbol)
+            .ok_or_else(|| PhoenixTxBuilderError::UnknownSymbol(symbol.to_string()))?;
+
+        let asset_id = market.asset_id as u64;
+
+        let params = CancelStopLossParams::builder()
+            .funder(authority)
+            .trader_account(trader_pda)
+            .position_authority(authority)
+            .asset_id(asset_id)
+            .execution_direction(execution_direction)
+            .build()?;
+
+        let ix = create_cancel_stop_loss_ix(params)?;
         Ok(vec![ix.into()])
     }
 
@@ -979,7 +1101,7 @@ impl<'a> PhoenixTxBuilder<'a> {
     ///   bracket trade side = Ask
     /// - Primary Ask (short): SL triggers GreaterThan, TP triggers LessThan,
     ///   bracket trade side = Bid
-    fn build_bracket_leg_orders(
+    pub fn build_bracket_leg_orders(
         &self,
         authority: Pubkey,
         trader_account: Pubkey,

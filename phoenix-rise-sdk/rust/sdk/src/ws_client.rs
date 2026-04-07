@@ -139,7 +139,7 @@ impl PhoenixWSClient {
     /// Create a new WebSocket client and connect to the server.
     ///
     /// # Arguments
-    /// * `ws_url` - The WebSocket URL (e.g., "wss://api.phoenix.trade/v1/ws")
+    /// * `ws_url` - The WebSocket URL (e.g., "wss://api.phoenix.trade/ws")
     /// * `api_key` - Optional API key for authentication
     pub fn new(ws_url: &str, api_key: Option<String>) -> Result<Self, PhoenixWsError> {
         Self::new_internal(ws_url, api_key, false)
@@ -151,7 +151,7 @@ impl PhoenixWSClient {
     /// updates.
     ///
     /// # Arguments
-    /// * `ws_url` - The WebSocket URL (e.g., "wss://api.phoenix.trade/v1/ws")
+    /// * `ws_url` - The WebSocket URL (e.g., "wss://api.phoenix.trade/ws")
     /// * `api_key` - Optional API key for authentication
     pub fn new_with_connection_status(
         ws_url: &str,

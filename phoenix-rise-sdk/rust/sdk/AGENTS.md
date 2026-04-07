@@ -23,6 +23,7 @@ Stateless REST client for the Phoenix perpetuals API. Methods include:
 - `get_traders(authority)` — fetch trader state via HTTP
 - `get_collateral_history(...)` / `get_funding_history(...)` / `get_order_history(...)` / `get_trade_history(...)`
 - `get_candles(symbol, timeframe, ...)`
+- `build_isolated_limit_order_tx(...)` / `build_isolated_market_order_tx(...)` — server-side isolated order construction
 
 Constructed via `PhoenixHttpClient::new_from_env()` or `PhoenixHttpClient::from_env(env)`. Reads `PHOENIX_API_URL` and optional `PHOENIX_API_KEY` from environment.
 

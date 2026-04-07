@@ -213,7 +213,7 @@ impl BasisPoints {
     }
 
     pub fn to_u16(&self) -> u16 {
-        if self.as_inner() > Self::UPPER_BOUND as u64 {
+        if self.as_inner() > Self::UPPER_BOUND {
             Self::UPPER_BOUND as u16
         } else {
             self.as_inner() as u16

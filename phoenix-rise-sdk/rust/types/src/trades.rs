@@ -8,6 +8,23 @@ use serde::{Deserialize, Serialize};
 use crate::core::Side;
 use crate::js_safe_ints::JsSafeU64;
 
+/// Liquidity role in a trade (maker or taker).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LiquidityRole {
+    Maker,
+    Taker,
+}
+
+/// Type of trade.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeType {
+    Limit,
+    Market,
+    Liquidation,
+}
+
 /// Trades message from the trades channel (wrapper with array of events).
 ///
 /// The trades channel sends messages containing the symbol and an array of
@@ -71,21 +88,49 @@ pub struct TradesSubscriptionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeHistoryItem {
-    /// Market symbol associated with the fill (e.g., "SOL").
+    /// User ID
+    pub user_id: i64,
+    /// Trader ID
+    pub trader_id: i64,
+    /// Trader PDA index
+    pub trader_pda_index: i32,
+    /// Subaccount index
+    pub subaccount_index: i32,
+    /// Market symbol
     pub market_symbol: String,
-    /// Human-readable base quantity.
-    pub base_qty: String,
-    /// Human-readable quote quantity.
-    pub quote_qty: String,
-    /// Human-readable price derived from the fill quantities.
-    pub price: String,
-    /// Timestamp of the fill (ISO 8601).
-    pub timestamp: String,
-    /// Transaction signature containing the fill.
-    pub transaction_signature: String,
-    /// Instruction type that emitted this fill (e.g., PlaceMarketOrder,
-    /// LiquidateViaMarketOrder).
+    /// Transaction signature
+    pub signature: Option<String>,
+    /// Formatted datetime string (ISO 8601).
+    pub timestamp: DateTime<Utc>,
+    /// Slot coordinates for cursor
+    pub slot: i64,
+    pub slot_index: i32,
+    pub event_index: i32,
+    pub instruction_index: i32,
+    /// Instruction type (e.g., "PlaceLimitOrder", "PlaceMarketOrder")
     pub instruction_type: String,
+    // Position info
+    /// Base lots before the trade (human readable)
+    pub base_lots_before: String,
+    /// Base lots after the trade (human readable)
+    pub base_lots_after: String,
+    /// Base lots delta (human readable, signed)
+    pub base_lots_delta: String,
+    /// Virtual quote lots before (human readable)
+    pub virtual_quote_lots_before: String,
+    /// Virtual quote lots after (human readable)
+    pub virtual_quote_lots_after: String,
+    /// Virtual quote lots delta (human readable, signed)
+    pub virtual_quote_lots_delta: String,
+    pub price: String,
+    // PnL info
+    /// Realized PnL from this trade (human readable USD)
+    pub realized_pnl: String,
+    pub fees: String,
+    pub liquidity: LiquidityRole,
+    pub order_sequence_number: Option<i64>,
+    pub spline_sequence_number: Option<i64>,
+    pub trade_type: TradeType,
 }
 
 /// Response from the trade history endpoint.

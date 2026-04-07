@@ -1,0 +1,250 @@
+---
+title: "PhoenixWsClient"
+description: "WebSocket client for real-time streaming of market and trader data"
+---
+
+PhoenixWsClient provides real-time streaming access to Phoenix market data via WebSocket. It handles connection management, subscriptions, and message routing with composable adapters for different data types.
+
+## Creating a Client
+
+```typescript
+import { createPhoenixWsClient, toWebSocketUrl } from 'phoenix-sdk';
+
+// Create with default configuration
+const wsClient = await createPhoenixWsClient();
+
+// Or with explicit URL and API key
+const wsClient = await createPhoenixWsClient({
+  url: toWebSocketUrl('https://perp-api.phoenix.trade'),
+  apiKey: 'your-api-key', // optional
+});
+```
+
+## Subscriptions
+
+All subscription methods return an async iterable that yields typed messages:
+
+```typescript
+// Subscribe to L2 orderbook
+for await (const update of wsClient.subscribe('l2book:SOL')) {
+  console.log('Best bid:', update.bids[0]?.price);
+  console.log('Best ask:', update.asks[0]?.price);
+}
+```
+
+### Market Data Subscriptions
+
+#### L2 Orderbook
+
+```typescript
+const subscription = wsClient.subscribe('l2book:SOL');
+for await (const update of subscription) {
+  // L2BookUpdate type
+  const { bids, asks, symbol } = update;
+  console.log(`Spread: ${asks[0].price - bids[0].price}`);
+}
+```
+
+**Message type:** `L2BookUpdate` with `bids` and `asks` (each containing `price` and `size`)
+
+#### Market Statistics
+
+```typescript
+const subscription = wsClient.subscribe('market_stats:SOL');
+for await (const update of subscription) {
+  // MarketStatsUpdate type
+  const { markPrice, oraclePrice, volume24h, fundingRate } = update;
+  console.log(`Mark: ${markPrice}, Funding: ${fundingRate}%`);
+}
+```
+
+**Message type:** `MarketStatsUpdate` with mark price, oracle price, volume, funding rate
+
+#### Candles
+
+```typescript
+const subscription = wsClient.subscribe('candles:SOL:1m');
+for await (const candle of subscription) {
+  // CandleData type
+  const { open, high, low, close, volume } = candle;
+  console.log(`Candle: O=${open} H=${high} L=${low} C=${close} V=${volume}`);
+}
+```
+
+**Timeframes:** `1s`, `5s`, `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`
+
+#### Trades
+
+```typescript
+const subscription = wsClient.subscribe('trades:SOL');
+for await (const trade of subscription) {
+  // TradesUpdate type
+  const { symbol, fills } = trade;
+  for (const fill of fills) {
+    console.log(`${fill.side} ${fill.size} @ ${fill.price}`);
+  }
+}
+```
+
+**Message type:** `TradesUpdate` with array of fills (price, size, side, timestamp)
+
+#### Funding Rate
+
+```typescript
+const subscription = wsClient.subscribe('funding_rate:SOL');
+for await (const update of subscription) {
+  // FundingRateUpdate type
+  const { fundingRate, fundingRateUnit } = update;
+  console.log(`Funding: ${fundingRate}`);
+}
+```
+
+**Message type:** `FundingRateUpdate` with funding rate and next funding time
+
+#### All Mids
+
+```typescript
+const subscription = wsClient.subscribe('all_mids');
+for await (const update of subscription) {
+  // AllMidsUpdate type - all mid prices across markets
+  for (const [symbol, midPrice] of Object.entries(update.mids)) {
+    console.log(`${symbol}: ${midPrice}`);
+  }
+}
+```
+
+### Trader Subscriptions
+
+#### Trader State
+
+```typescript
+const authority = 'YOUR_AUTHORITY_PUBKEY';
+const subscription = wsClient.subscribe(`trader_state:${authority}`);
+for await (const update of subscription) {
+  // TraderStateUpdate type
+  const { collateral, positions } = update;
+  console.log(`Collateral: ${collateral}`);
+  for (const pos of positions) {
+    console.log(`${pos.symbol}: ${pos.baseLots} lots`);
+  }
+}
+```
+
+**Message type:** `TraderStateUpdate` with collateral, positions, orders, and splines
+
+#### Trader State with PDA Index
+
+```typescript
+const subscription = wsClient.subscribe(
+  `trader_state:${authority}:${pdaIndex}`
+);
+for await (const update of subscription) {
+  // TraderStateUpdate with specific PDA
+}
+```
+
+### Exchange Data
+
+#### Notifications
+
+```typescript
+const subscription = wsClient.subscribe('notifications');
+for await (const notification of subscription) {
+  // Notification type (fill alerts, order rejections, etc.)
+  console.log(notification.message);
+}
+```
+
+#### Exchange Status
+
+```typescript
+const subscription = wsClient.subscribe('exchange_status');
+for await (const status of subscription) {
+  // ExchangeStatus: operational status, maintenance windows, etc.
+  console.log(`Status: ${status.operational ? 'Up' : 'Down'}`);
+}
+```
+
+## Custom Subscription Registration
+
+Register custom subscription types with adapters:
+
+```typescript
+import { registerSubscription } from 'phoenix-sdk';
+
+const myAdapter = {
+  parseMessage: (msg: unknown) => {
+    // Parse your custom message format
+    return msg as CustomData;
+  },
+  key: (data: CustomData) => `custom:${data.id}`,
+};
+
+registerSubscription('custom', myAdapter);
+
+// Now use it
+const subscription = wsClient.subscribe('custom');
+for await (const data of subscription) {
+  // CustomData type
+}
+```
+
+## Connection Management
+
+```typescript
+// Check connection status
+const isConnected = wsClient.isConnected();
+
+// Get connection status updates
+for await (const status of wsClient.connectionStatus()) {
+  console.log(`Connection: ${status}`); // 'connecting' | 'connected' | 'disconnected'
+}
+
+// Shutdown
+await wsClient.shutdown();
+```
+
+## Error Handling
+
+```typescript
+try {
+  for await (const update of wsClient.subscribe('l2book:SOL')) {
+    // handle update
+  }
+} catch (error) {
+  if (error instanceof WsConnectionError) {
+    console.error('Connection failed:', error.message);
+  } else if (error instanceof WsSubscriptionError) {
+    console.error('Subscription failed:', error.message);
+  }
+}
+```
+
+## Configuration
+
+```typescript
+interface PhoenixWsClientConfig {
+  url?: string;              // WebSocket URL (default: derived from API URL)
+  apiKey?: string;           // Optional API key for authenticated endpoints
+  reconnect?: boolean;       // Auto-reconnect on disconnect (default: true)
+  maxReconnectAttempts?: number;  // Max reconnect attempts (default: 10)
+  reconnectDelay?: number;   // Initial reconnect delay in ms (default: 1000)
+}
+```
+
+## Message Types
+
+All messages are strongly typed. Common fields:
+
+- **Timestamps** - Unix milliseconds
+- **Prices** - Decimal strings (e.g., "150.50")
+- **Quantities** - Base/quote lots as bigint (atomic units)
+- **Symbols** - String market symbol (e.g., "SOL", "ETH")
+
+## Notes
+
+- Subscriptions use automatic reconnection with exponential backoff
+- Multiple subscriptions to the same data are deduplicated server-side (only one wire subscription sent)
+- Async iterables can be cancelled with `break` or `return`
+- Each subscription is independent; dropping one doesn't affect others
+- Messages are delivered in server order and should not be re-ordered by clients

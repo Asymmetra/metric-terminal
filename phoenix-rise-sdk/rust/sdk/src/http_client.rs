@@ -7,19 +7,22 @@ use std::time::Duration;
 
 use phoenix_ix::{IsolatedCollateralFlow, Side};
 use phoenix_types::{
-    ApiCandle, ApiInstructionResponse, CandlesQueryParams, CollateralHistoryQueryParams,
-    CollateralHistoryResponse, ExchangeKeysView, ExchangeMarketConfig, ExchangeResponse,
-    FundingHistoryQueryParams, FundingHistoryResponse, OrderHistoryQueryParams,
-    OrderHistoryResponse, PhoenixHttpError, PlaceIsolatedLimitOrderRequest,
-    PlaceIsolatedMarketOrderRequest, PnlPoint, PnlQueryParams, TradeHistoryQueryParams,
-    TradeHistoryResponse, TraderKey, TraderStateResponse, TraderView,
+    ApiCandle, CandlesQueryParams, CollateralHistoryQueryParams, CollateralHistoryResponse,
+    ExchangeKeysView, ExchangeMarketConfig, ExchangeResponse, FundingHistoryQueryParams,
+    FundingHistoryResponse, OrderHistoryQueryParams, OrderHistoryResponse, PhoenixHttpError,
+    PlaceIsolatedLimitOrderRequest, PlaceIsolatedMarketOrderRequest, PnlPoint, PnlQueryParams,
+    TradeHistoryQueryParams, TradeHistoryResponse, TraderKey, TraderView,
 };
 use reqwest::header::RETRY_AFTER;
 use reqwest::{Client, RequestBuilder, Response};
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 use tracing::debug;
 
+use crate::api::{
+    CandlesClient, CollateralClient, ExchangeClient, FundingClient, InviteClient, MarketsClient,
+    OrdersClient, TradersClient, TradesClient,
+};
 use crate::env::PhoenixEnv;
 use crate::tx_builder::BracketLegOrders;
 
@@ -53,107 +56,24 @@ impl Default for RateLimitRetryConfig {
     }
 }
 
-/// HTTP client for Phoenix API.
-///
-/// Provides methods for fetching exchange configuration and market data
-/// from the Phoenix perpetuals API.
-///
-/// # Example
-///
-/// ```no_run
-/// use phoenix_sdk::PhoenixHttpClient;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     // Load from environment variables
-///     let client = PhoenixHttpClient::new_from_env();
-///
-///     // Get exchange keys
-///     let exchange_keys = client.get_exchange_keys().await?;
-///     println!("Global config: {}", exchange_keys.global_config);
-///
-///     // Get market config (static configuration, not live data)
-///     let market = client.get_market("SOL").await?;
-///     println!("SOL taker fee: {:.4}%", market.taker_fee * 100.0);
-///
-///     Ok(())
-/// }
-/// ```
+/// Shared HTTP transport used by all resource sub-clients.
 #[derive(Debug, Clone)]
-pub struct PhoenixHttpClient {
-    api_url: String,
-    api_key: Option<String>,
-    client: Client,
-    rate_limit_retry: RateLimitRetryConfig,
+pub(crate) struct HttpClientInner {
+    pub api_url: String,
+    pub api_key: Option<String>,
+    pub client: Client,
+    pub rate_limit_retry: RateLimitRetryConfig,
 }
 
-impl PhoenixHttpClient {
-    /// Creates a new HTTP client using environment variables.
-    ///
-    /// Uses `PhoenixEnv::load()` to read configuration from environment.
-    pub fn new_from_env() -> Self {
-        Self::from_env(PhoenixEnv::load())
-    }
-
-    /// Creates a new HTTP client from a `PhoenixEnv`.
-    pub fn from_env(env: PhoenixEnv) -> Self {
-        Self {
-            api_url: env.api_url,
-            api_key: env.api_key,
-            client: Client::new(),
-            rate_limit_retry: RateLimitRetryConfig::default(),
-        }
-    }
-
-    /// Creates a new HTTP client with the given API URL and API key.
-    ///
-    /// # Arguments
-    ///
-    /// * `api_url` - Base URL for the Phoenix API (e.g., "https://api.phoenix.trade/v1")
-    /// * `api_key` - API key for authentication
-    pub fn new(api_url: impl Into<String>, api_key: impl Into<String>) -> Self {
-        Self {
-            api_url: api_url.into(),
-            api_key: Some(api_key.into()),
-            client: Client::new(),
-            rate_limit_retry: RateLimitRetryConfig::default(),
-        }
-    }
-
-    /// Creates a new HTTP client without an API key.
-    pub fn new_public(api_url: impl Into<String>) -> Self {
-        Self {
-            api_url: api_url.into(),
-            api_key: None,
-            client: Client::new(),
-            rate_limit_retry: RateLimitRetryConfig::default(),
-        }
-    }
-
-    /// Sets automatic rate-limit retry behavior for this client.
-    pub fn set_rate_limit_retry_config(&mut self, config: RateLimitRetryConfig) {
-        self.rate_limit_retry = config;
-    }
-
-    /// Builder-style variant of [`Self::set_rate_limit_retry_config`].
-    pub fn with_rate_limit_retry_config(mut self, config: RateLimitRetryConfig) -> Self {
-        self.rate_limit_retry = config;
-        self
-    }
-
-    /// Returns the current automatic rate-limit retry configuration.
-    pub fn rate_limit_retry_config(&self) -> &RateLimitRetryConfig {
-        &self.rate_limit_retry
-    }
-
-    fn maybe_add_api_key(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+impl HttpClientInner {
+    pub fn maybe_add_api_key(&self, request: RequestBuilder) -> RequestBuilder {
         match &self.api_key {
             Some(key) => request.header(API_KEY_HEADER, key),
             None => request,
         }
     }
 
-    async fn send_with_rate_limit_retry(
+    pub async fn send_with_rate_limit_retry(
         &self,
         mut request: RequestBuilder,
     ) -> Result<Response, PhoenixHttpError> {
@@ -225,705 +145,258 @@ impl PhoenixHttpClient {
             request = next_request;
         }
     }
+}
 
-    /// Fetches the exchange keys and configuration.
-    ///
-    /// Returns the global configuration addresses, authority keys, and
-    /// other exchange-level data.
+/// HTTP client for Phoenix API.
+///
+/// Provides resource sub-client accessors (e.g. `client.markets()`,
+/// `client.traders()`) that mirror the TypeScript SDK's `V1ApiClients`
+/// shape. Existing flat methods remain for backwards compatibility and
+/// delegate to the sub-clients.
+///
+/// # Example
+///
+/// ```no_run
+/// use phoenix_sdk::PhoenixHttpClient;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let client = PhoenixHttpClient::new_from_env();
+///
+///     // Resource-based access (new)
+///     let markets = client.markets().get_markets().await?;
+///     let sol = client.markets().get_market("SOL").await?;
+///
+///     // Flat access (backwards-compatible)
+///     let keys = client.get_exchange_keys().await?;
+///
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct PhoenixHttpClient {
+    inner: HttpClientInner,
+}
+
+impl PhoenixHttpClient {
+    /// Creates a new HTTP client using environment variables.
+    pub fn new_from_env() -> Self {
+        Self::from_env(PhoenixEnv::load())
+    }
+
+    /// Creates a new HTTP client from a `PhoenixEnv`.
+    pub fn from_env(env: PhoenixEnv) -> Self {
+        Self {
+            inner: HttpClientInner {
+                api_url: env.api_url,
+                api_key: env.api_key,
+                client: Client::new(),
+                rate_limit_retry: RateLimitRetryConfig::default(),
+            },
+        }
+    }
+
+    /// Creates a new HTTP client with the given API URL and API key.
+    pub fn new(api_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            inner: HttpClientInner {
+                api_url: api_url.into(),
+                api_key: Some(api_key.into()),
+                client: Client::new(),
+                rate_limit_retry: RateLimitRetryConfig::default(),
+            },
+        }
+    }
+
+    /// Creates a new HTTP client without an API key.
+    pub fn new_public(api_url: impl Into<String>) -> Self {
+        Self {
+            inner: HttpClientInner {
+                api_url: api_url.into(),
+                api_key: None,
+                client: Client::new(),
+                rate_limit_retry: RateLimitRetryConfig::default(),
+            },
+        }
+    }
+
+    /// Sets automatic rate-limit retry behavior for this client.
+    pub fn set_rate_limit_retry_config(&mut self, config: RateLimitRetryConfig) {
+        self.inner.rate_limit_retry = config;
+    }
+
+    /// Builder-style variant of [`Self::set_rate_limit_retry_config`].
+    pub fn with_rate_limit_retry_config(mut self, config: RateLimitRetryConfig) -> Self {
+        self.inner.rate_limit_retry = config;
+        self
+    }
+
+    /// Returns the current automatic rate-limit retry configuration.
+    pub fn rate_limit_retry_config(&self) -> &RateLimitRetryConfig {
+        &self.inner.rate_limit_retry
+    }
+
+    // --- Resource sub-client accessors ---
+
+    pub fn markets(&self) -> MarketsClient<'_> {
+        MarketsClient { http: &self.inner }
+    }
+
+    pub fn exchange(&self) -> ExchangeClient<'_> {
+        ExchangeClient { http: &self.inner }
+    }
+
+    pub fn traders(&self) -> TradersClient<'_> {
+        TradersClient { http: &self.inner }
+    }
+
+    pub fn collateral(&self) -> CollateralClient<'_> {
+        CollateralClient { http: &self.inner }
+    }
+
+    pub fn funding(&self) -> FundingClient<'_> {
+        FundingClient { http: &self.inner }
+    }
+
+    pub fn orders(&self) -> OrdersClient<'_> {
+        OrdersClient { http: &self.inner }
+    }
+
+    pub fn trades(&self) -> TradesClient<'_> {
+        TradesClient { http: &self.inner }
+    }
+
+    pub fn candles(&self) -> CandlesClient<'_> {
+        CandlesClient { http: &self.inner }
+    }
+
+    pub fn invite(&self) -> InviteClient<'_> {
+        InviteClient { http: &self.inner }
+    }
+
+    // --- Backwards-compatible flat methods (delegate to sub-clients) ---
+
     pub async fn get_exchange_keys(&self) -> Result<ExchangeKeysView, PhoenixHttpError> {
-        let url = format!("{}/exchange/keys", self.api_url);
-
-        let response = self
-            .send_with_rate_limit_retry(self.maybe_add_api_key(self.client.get(&url)))
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse ExchangeKeysView: {}", e))
-        })
+        self.exchange().get_keys().await
     }
 
-    /// Fetches static market configuration for all markets.
-    ///
-    /// Returns market configuration including fees, leverage tiers, and risk
-    /// factors. Does NOT include live data like prices or open interest.
     pub async fn get_markets(&self) -> Result<Vec<ExchangeMarketConfig>, PhoenixHttpError> {
-        let url = format!("{}/exchange/markets", self.api_url);
-
-        let response = self
-            .send_with_rate_limit_retry(self.maybe_add_api_key(self.client.get(&url)))
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response
-            .json()
-            .await
-            .map_err(|e| PhoenixHttpError::ParseFailed(format!("Failed to parse markets: {}", e)))
+        self.markets().get_markets().await
     }
 
-    /// Fetches static market configuration for a specific symbol.
-    ///
-    /// # Arguments
-    ///
-    /// * `symbol` - Trading symbol (e.g., "SOL", "BTC", "ETH")
-    ///
-    /// Returns market configuration including fees, leverage tiers, and risk
-    /// factors. Does NOT include live data like prices or open interest.
-    pub async fn get_market(&self, symbol: &str) -> Result<ExchangeMarketConfig, PhoenixHttpError> {
-        let symbol_upper = symbol.to_ascii_uppercase();
-        let url = format!("{}/exchange/market/{}", self.api_url, symbol_upper);
-
-        let response = self
-            .send_with_rate_limit_retry(self.maybe_add_api_key(self.client.get(&url)))
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse ExchangeMarketConfig: {}", e))
-        })
+    pub async fn get_market(
+        &self,
+        symbol: &str,
+    ) -> Result<ExchangeMarketConfig, PhoenixHttpError> {
+        self.markets().get_market(symbol).await
     }
 
-    /// Fetches the full exchange configuration including keys and market
-    /// configs.
-    ///
-    /// Returns exchange keys and static market parameters. Does NOT include
-    /// live data like mark prices, open interest, or current funding rates.
     pub async fn get_exchange(&self) -> Result<ExchangeResponse, PhoenixHttpError> {
-        let url = format!("{}/exchange", self.api_url);
-
-        let response = self
-            .send_with_rate_limit_retry(self.maybe_add_api_key(self.client.get(&url)))
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        let body = response.text().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to read response body: {}", e))
-        })?;
-
-        serde_json::from_str(&body).map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse ExchangeResponse: {}", e))
-        })
+        self.exchange().get_exchange().await
     }
 
-    /// Fetches all trader subaccounts for an authority pubkey.
-    ///
-    /// Returns all subaccounts (cross-margin and isolated) for the given
-    /// authority.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    ///
-    /// Returns a vector of all trader subaccounts.
     pub async fn get_traders(
         &self,
         authority: &Pubkey,
     ) -> Result<Vec<TraderView>, PhoenixHttpError> {
-        self.get_traders_internal(authority, 0).await
+        self.traders().get_trader(authority).await
     }
 
-    /// Fetches all trader subaccounts for a given authority and PDA index.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `pda_index` - The PDA index (usually 0)
-    ///
-    /// Returns a vector of all trader subaccounts.
-    async fn get_traders_internal(
-        &self,
-        authority: &Pubkey,
-        pda_index: u8,
-    ) -> Result<Vec<TraderView>, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/state", self.api_url, authority);
-
-        let response = self
-            .send_with_rate_limit_retry(
-                self.maybe_add_api_key(self.client.get(&url))
-                    .query(&[("pdaIndex", pda_index)]),
-            )
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        let resp: TraderStateResponse = response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse TraderStateResponse: {}", e))
-        })?;
-
-        Ok(resp.traders)
-    }
-
-    /// Fetches collateral history for an authority pubkey.
-    ///
-    /// Uses default PDA index (0) to fetch the collateral history.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including limit and pagination cursors
-    ///
-    /// Returns a paginated list of collateral events (deposits and
-    /// withdrawals).
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::str::FromStr;
-    ///
-    /// use phoenix_sdk::{CollateralHistoryQueryParams, PhoenixHttpClient};
-    /// use solana_pubkey::Pubkey;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client = PhoenixHttpClient::new_from_env();
-    ///     let authority = Pubkey::from_str("YOUR_AUTHORITY_PUBKEY")?;
-    ///
-    ///     // Get last 100 collateral events
-    ///     let params = CollateralHistoryQueryParams::new(100);
-    ///     let response = client.get_collateral_history(&authority, params).await?;
-    ///
-    ///     for event in response.data {
-    ///         println!(
-    ///             "{}: {} {} (balance after: {})",
-    ///             event.timestamp, event.event_type, event.amount, event.collateral_after
-    ///         );
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn get_collateral_history(
         &self,
         authority: &Pubkey,
         params: CollateralHistoryQueryParams,
     ) -> Result<CollateralHistoryResponse, PhoenixHttpError> {
-        self.get_collateral_history_internal(authority, params)
+        self.collateral()
+            .get_user_collateral_history(authority, params)
             .await
     }
 
-    /// Fetches collateral history for a trader using a TraderKey.
-    ///
-    /// Uses the TraderKey's pda_index for the query.
-    ///
-    /// # Arguments
-    ///
-    /// * `trader_key` - The TraderKey containing authority and indices
-    /// * `params` - Query parameters including limit and pagination cursors
-    ///
-    /// Returns a paginated list of collateral events (deposits and
-    /// withdrawals).
     pub async fn get_collateral_history_with_trader_key(
         &self,
         trader_key: &TraderKey,
         params: CollateralHistoryQueryParams,
     ) -> Result<CollateralHistoryResponse, PhoenixHttpError> {
-        let params = params.with_pda_index(trader_key.pda_index);
-        self.get_collateral_history_internal(&trader_key.authority(), params)
+        self.collateral()
+            .get_trader_collateral_history(trader_key, params)
             .await
     }
 
-    /// Fetches collateral history by authority.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including pda_index, limit, and pagination
-    ///   cursors
-    ///
-    /// Returns a paginated list of collateral events (deposits and
-    /// withdrawals).
-    async fn get_collateral_history_internal(
-        &self,
-        authority: &Pubkey,
-        params: CollateralHistoryQueryParams,
-    ) -> Result<CollateralHistoryResponse, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/collateral-history", self.api_url, authority);
-
-        let mut request = self.maybe_add_api_key(self.client.get(&url)).query(&[
-            ("pdaIndex", params.pda_index.to_string()),
-            ("limit", params.request.limit.to_string()),
-        ]);
-
-        if let Some(next_cursor) = &params.request.next_cursor {
-            request = request.query(&[("nextCursor", next_cursor)]);
-        }
-        if let Some(prev_cursor) = &params.request.prev_cursor {
-            request = request.query(&[("prevCursor", prev_cursor)]);
-        }
-        if let Some(cursor) = &params.request.cursor {
-            request = request.query(&[("cursor", cursor)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!(
-                "Failed to parse CollateralHistoryResponse: {}",
-                e
-            ))
-        })
-    }
-
-    /// Fetches funding history for an authority pubkey.
-    ///
-    /// Uses default indices (pda_index=0, subaccount_index=0) to derive the
-    /// trader PDA.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including symbol filter, time range,
-    ///   limit, and pagination
-    ///
-    /// Returns a paginated list of funding payment events.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::str::FromStr;
-    ///
-    /// use phoenix_sdk::{FundingHistoryQueryParams, PhoenixHttpClient};
-    /// use solana_pubkey::Pubkey;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client = PhoenixHttpClient::new_from_env();
-    ///     let authority = Pubkey::from_str("YOUR_AUTHORITY_PUBKEY")?;
-    ///
-    ///     // Get last 100 funding events for SOL
-    ///     let params = FundingHistoryQueryParams::new()
-    ///         .with_symbol("SOL")
-    ///         .with_limit(100);
-    ///     let response = client.get_funding_history(&authority, params).await?;
-    ///
-    ///     for event in response.events {
-    ///         println!(
-    ///             "{}: {} {} USDC",
-    ///             event.timestamp, event.symbol, event.funding_payment
-    ///         );
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn get_funding_history(
         &self,
         authority: &Pubkey,
         params: FundingHistoryQueryParams,
     ) -> Result<FundingHistoryResponse, PhoenixHttpError> {
-        self.get_funding_history_internal(authority, params).await
+        self.funding()
+            .get_user_funding_history(authority, params)
+            .await
     }
 
-    /// Fetches funding history for a trader using a TraderKey.
-    ///
-    /// Uses the TraderKey's pda_index for the query.
-    ///
-    /// # Arguments
-    ///
-    /// * `trader_key` - The TraderKey containing authority and indices
-    /// * `params` - Query parameters including symbol filter, time range,
-    ///   limit, and pagination
-    ///
-    /// Returns a paginated list of funding payment events.
     pub async fn get_funding_history_with_trader_key(
         &self,
         trader_key: &TraderKey,
         params: FundingHistoryQueryParams,
     ) -> Result<FundingHistoryResponse, PhoenixHttpError> {
-        let params = params.with_pda_index(trader_key.pda_index);
-        self.get_funding_history_internal(&trader_key.authority(), params)
+        self.funding()
+            .get_trader_funding_history(trader_key, params)
             .await
     }
 
-    /// Fetches funding history by authority.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including pda_index, symbol filter, time
-    ///   range, limit, and pagination
-    ///
-    /// Returns a paginated list of funding payment events.
-    async fn get_funding_history_internal(
-        &self,
-        authority: &Pubkey,
-        params: FundingHistoryQueryParams,
-    ) -> Result<FundingHistoryResponse, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/funding-history", self.api_url, authority);
-
-        let mut request = self.maybe_add_api_key(self.client.get(&url));
-
-        if let Some(symbol) = &params.symbol {
-            request = request.query(&[("symbol", symbol)]);
-        }
-        if let Some(start_time) = params.start_time {
-            request = request.query(&[("startTime", start_time)]);
-        }
-        if let Some(end_time) = params.end_time {
-            request = request.query(&[("endTime", end_time)]);
-        }
-        if let Some(limit) = params.limit {
-            request = request.query(&[("limit", limit)]);
-        }
-        if let Some(cursor) = &params.cursor {
-            request = request.query(&[("cursor", cursor)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        let body = response.text().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to read response body: {}", e))
-        })?;
-
-        serde_json::from_str(&body).map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse FundingHistoryResponse: {}", e))
-        })
-    }
-
-    /// Fetches order history for an authority pubkey.
-    ///
-    /// Uses default PDA index (0) to fetch the order history.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including limit, market filter, and cursor
-    ///
-    /// Returns a paginated list of order history items.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::str::FromStr;
-    ///
-    /// use phoenix_sdk::{OrderHistoryQueryParams, PhoenixHttpClient};
-    /// use solana_pubkey::Pubkey;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client = PhoenixHttpClient::new_from_env();
-    ///     let authority = Pubkey::from_str("YOUR_AUTHORITY_PUBKEY")?;
-    ///
-    ///     // Get last 100 orders
-    ///     let params = OrderHistoryQueryParams::new(100);
-    ///     let response = client.get_order_history(&authority, params).await?;
-    ///
-    ///     for order in response.data {
-    ///         println!(
-    ///             "{}: {:?} {:?} {} @ {}",
-    ///             order.market_symbol, order.status, order.side, order.base_qty, order.price
-    ///         );
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn get_order_history(
         &self,
         authority: &Pubkey,
         params: OrderHistoryQueryParams,
     ) -> Result<OrderHistoryResponse, PhoenixHttpError> {
-        self.get_order_history_internal(authority, params).await
+        self.orders()
+            .get_trader_order_history(authority, params)
+            .await
     }
 
-    /// Fetches order history for a trader using a TraderKey.
-    ///
-    /// Uses the TraderKey's pda_index for the query.
-    ///
-    /// # Arguments
-    ///
-    /// * `trader_key` - The TraderKey containing authority and indices
-    /// * `params` - Query parameters including limit, market filter, and cursor
-    ///
-    /// Returns a paginated list of order history items.
     pub async fn get_order_history_with_trader_key(
         &self,
         trader_key: &TraderKey,
         params: OrderHistoryQueryParams,
     ) -> Result<OrderHistoryResponse, PhoenixHttpError> {
-        let params = params.with_pda_index(trader_key.pda_index);
-        self.get_order_history_internal(&trader_key.authority(), params)
+        self.orders()
+            .get_trader_order_history_with_trader_key(trader_key, params)
             .await
     }
 
-    /// Fetches order history by authority.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including pda_index, limit, market filter,
-    ///   and cursor
-    ///
-    /// Returns a paginated list of order history items.
-    async fn get_order_history_internal(
-        &self,
-        authority: &Pubkey,
-        params: OrderHistoryQueryParams,
-    ) -> Result<OrderHistoryResponse, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/order-history", self.api_url, authority);
-
-        let mut request = self
-            .maybe_add_api_key(self.client.get(&url))
-            .query(&[("limit", params.limit)]);
-
-        if let Some(pda_index) = params.trader_pda_index {
-            request = request.query(&[("traderPdaIndex", pda_index)]);
-        }
-        if let Some(market_symbol) = &params.market_symbol {
-            request = request.query(&[("marketSymbol", market_symbol)]);
-        }
-        if let Some(cursor) = &params.cursor {
-            request = request.query(&[("cursor", cursor)]);
-        }
-        if let Some(privy_id) = &params.privy_id {
-            request = request.query(&[("privyId", privy_id)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse OrderHistoryResponse: {}", e))
-        })
-    }
-
-    /// Fetches historical candle data.
-    ///
-    /// # Arguments
-    ///
-    /// * `params` - Query parameters including symbol, timeframe, time range,
-    ///   and limit
-    ///
-    /// Returns a vector of candles sorted by time (oldest first).
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use phoenix_sdk::{CandlesQueryParams, PhoenixHttpClient, Timeframe};
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client = PhoenixHttpClient::new_from_env();
-    ///
-    ///     // Get last 100 1-minute candles for SOL
-    ///     let params = CandlesQueryParams::new("SOL", Timeframe::Minute1).with_limit(100);
-    ///     let candles = client.get_candles(params).await?;
-    ///
-    ///     for candle in candles {
-    ///         println!(
-    ///             "time={} open={} close={}",
-    ///             candle.time, candle.open, candle.close
-    ///         );
-    ///     }
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn get_candles(
         &self,
         params: CandlesQueryParams,
     ) -> Result<Vec<ApiCandle>, PhoenixHttpError> {
-        let url = format!("{}/candles", self.api_url);
-
-        let mut request = self
-            .maybe_add_api_key(self.client.get(&url))
-            .query(&[("symbol", &params.symbol), ("timeframe", &params.timeframe)]);
-
-        if let Some(start_time) = params.start_time {
-            request = request.query(&[("startTime", start_time)]);
-        }
-        if let Some(end_time) = params.end_time {
-            request = request.query(&[("endTime", end_time)]);
-        }
-        if let Some(limit) = params.limit {
-            request = request.query(&[("limit", limit)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse candles response: {}", e))
-        })
+        self.candles().get_candles(params).await
     }
 
-    /// Fetches trade history (fills) for an authority pubkey.
-    ///
-    /// Uses default PDA index (0) to fetch the trade history.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including market filter, limit, and cursor
-    ///
-    /// Returns a paginated list of fill records.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::str::FromStr;
-    ///
-    /// use phoenix_sdk::{PhoenixHttpClient, TradeHistoryQueryParams};
-    /// use solana_pubkey::Pubkey;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client = PhoenixHttpClient::new_from_env();
-    ///     let authority = Pubkey::from_str("YOUR_AUTHORITY_PUBKEY")?;
-    ///
-    ///     // Get last 100 trades for this trader
-    ///     let params = TradeHistoryQueryParams::new().with_limit(100);
-    ///     let response = client.get_trade_history(&authority, params).await?;
-    ///
-    ///     for fill in response.data {
-    ///         println!("{}: {} @ {}", fill.timestamp, fill.base_qty, fill.price);
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
-    /// ```
     pub async fn get_trade_history(
         &self,
         authority: &Pubkey,
         params: TradeHistoryQueryParams,
     ) -> Result<TradeHistoryResponse, PhoenixHttpError> {
-        self.get_trade_history_internal(authority, params).await
+        self.trades()
+            .get_trader_trade_history(authority, params)
+            .await
     }
 
-    /// Fetches trade history (fills) for a trader using a TraderKey.
-    ///
-    /// Uses the TraderKey's pda_index for the query.
-    ///
-    /// # Arguments
-    ///
-    /// * `trader_key` - The TraderKey containing authority and indices
-    /// * `params` - Query parameters including market filter, limit, and cursor
-    ///
-    /// Returns a paginated list of fill records.
     pub async fn get_trade_history_with_trader_key(
         &self,
         trader_key: &TraderKey,
         params: TradeHistoryQueryParams,
     ) -> Result<TradeHistoryResponse, PhoenixHttpError> {
-        let params = params.with_pda_index(trader_key.pda_index);
-        self.get_trade_history_internal(&trader_key.authority(), params)
+        self.trades()
+            .get_trader_trade_history_with_trader_key(trader_key, params)
             .await
     }
 
-    /// Fetches trade history by authority.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including pda_index, market filter, limit,
-    ///   and cursor
-    ///
-    /// Returns a paginated list of fill records.
-    async fn get_trade_history_internal(
-        &self,
-        authority: &Pubkey,
-        params: TradeHistoryQueryParams,
-    ) -> Result<TradeHistoryResponse, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/trades-history", self.api_url, authority);
-
-        let mut request = self
-            .maybe_add_api_key(self.client.get(&url))
-            .query(&[("pdaIndex", params.pda_index)]);
-
-        if let Some(market_symbol) = &params.market_symbol {
-            request = request.query(&[("market_symbol", market_symbol)]);
-        }
-        if let Some(limit) = params.limit {
-            request = request.query(&[("limit", limit)]);
-        }
-        if let Some(cursor) = &params.cursor {
-            request = request.query(&[("cursor", cursor)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse TradeHistoryResponse: {}", e))
-        })
-    }
-
-    /// Fetches PnL time-series data for an authority pubkey.
-    ///
-    /// # Arguments
-    ///
-    /// * `authority` - The trader's authority pubkey
-    /// * `params` - Query parameters including resolution, time range, and
-    ///   limit
-    ///
-    /// Returns a vector of PnL data points.
     pub async fn get_pnl(
         &self,
         authority: &Pubkey,
         params: PnlQueryParams,
     ) -> Result<Vec<PnlPoint>, PhoenixHttpError> {
-        self.get_pnl_internal(authority, params).await
+        self.traders().get_trader_pnl(authority, params).await
     }
 
-    /// Builds isolated limit order instructions via the server-side endpoint.
-    ///
-    /// Mirrors the signature of
-    /// [`PhoenixTxBuilder::build_isolated_limit_order`] but delegates
-    /// instruction construction to the server, so no WebSocket connection
-    /// or local trader state is needed.
-    ///
-    /// Only [`IsolatedCollateralFlow::TransferFromCrossMargin`] is supported;
-    /// [`IsolatedCollateralFlow::Deposit`] returns an error.
     pub async fn build_isolated_limit_order_tx(
         &self,
         authority: &Pubkey,
@@ -934,59 +407,28 @@ impl PhoenixHttpClient {
         collateral: Option<IsolatedCollateralFlow>,
         allow_cross_and_isolated: bool,
     ) -> Result<Vec<Instruction>, PhoenixHttpError> {
-        let transfer_amount = collateral_transfer_amount(&collateral)?;
-
-        let request = PlaceIsolatedLimitOrderRequest {
-            authority: authority.to_string(),
-            symbol: symbol.to_string(),
-            side: side.to_api_string().to_string(),
-            price: Some(price),
-            num_base_lots: Some(num_base_lots),
-            transfer_amount,
-            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
-            ..Default::default()
-        };
-
-        self.build_isolated_limit_order_tx_with_request(request)
+        self.orders()
+            .build_isolated_limit_order_tx(
+                authority,
+                symbol,
+                side,
+                price,
+                num_base_lots,
+                collateral,
+                allow_cross_and_isolated,
+            )
             .await
     }
 
-    /// Builds isolated limit order instructions from a raw request payload.
     pub async fn build_isolated_limit_order_tx_with_request(
         &self,
         request: PlaceIsolatedLimitOrderRequest,
     ) -> Result<Vec<Instruction>, PhoenixHttpError> {
-        let url = format!("{}/ix/place-isolated-limit-order", self.api_url);
-
-        let response = self
-            .send_with_rate_limit_retry(
-                self.maybe_add_api_key(self.client.post(&url))
-                    .json(&request),
-            )
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        let api_ixs: Vec<ApiInstructionResponse> = response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse instruction response: {}", e))
-        })?;
-
-        api_ixs.into_iter().map(try_into_instruction).collect()
+        self.orders()
+            .build_isolated_limit_order_tx_with_request(request)
+            .await
     }
 
-    /// Builds isolated market order instructions via the server-side endpoint.
-    ///
-    /// Mirrors the signature of
-    /// [`PhoenixTxBuilder::build_isolated_market_order`] but delegates
-    /// instruction construction to the server, so no WebSocket connection
-    /// or local trader state is needed.
-    ///
-    /// Only [`IsolatedCollateralFlow::TransferFromCrossMargin`] is supported;
-    /// [`IsolatedCollateralFlow::Deposit`] returns an error.
     pub async fn build_isolated_market_order_tx(
         &self,
         authority: &Pubkey,
@@ -997,127 +439,35 @@ impl PhoenixHttpClient {
         allow_cross_and_isolated: bool,
         bracket: Option<&BracketLegOrders>,
     ) -> Result<Vec<Instruction>, PhoenixHttpError> {
-        let transfer_amount = collateral_transfer_amount(&collateral)?;
-        let tp_sl = bracket.map(BracketLegOrders::to_tp_sl_config);
-
-        let request = PlaceIsolatedMarketOrderRequest {
-            authority: authority.to_string(),
-            symbol: symbol.to_string(),
-            side: side.to_api_string().to_string(),
-            num_base_lots: Some(num_base_lots),
-            transfer_amount,
-            allow_cross_and_isolated_for_asset: Some(allow_cross_and_isolated),
-            tp_sl,
-            ..Default::default()
-        };
-
-        self.build_isolated_market_order_tx_with_request(request)
+        self.orders()
+            .build_isolated_market_order_tx(
+                authority,
+                symbol,
+                side,
+                num_base_lots,
+                collateral,
+                allow_cross_and_isolated,
+                bracket,
+            )
             .await
     }
 
-    /// Builds isolated market order instructions from a raw request payload.
     pub async fn build_isolated_market_order_tx_with_request(
         &self,
         request: PlaceIsolatedMarketOrderRequest,
     ) -> Result<Vec<Instruction>, PhoenixHttpError> {
-        let url = format!("{}/ix/place-isolated-market-order", self.api_url);
-
-        let response = self
-            .send_with_rate_limit_retry(
-                self.maybe_add_api_key(self.client.post(&url))
-                    .json(&request),
-            )
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        let api_ixs: Vec<ApiInstructionResponse> = response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse instruction response: {}", e))
-        })?;
-
-        api_ixs.into_iter().map(try_into_instruction).collect()
+        self.orders()
+            .build_isolated_market_order_tx_with_request(request)
+            .await
     }
 
-    async fn get_pnl_internal(
+    pub async fn register_trader(
         &self,
         authority: &Pubkey,
-        params: PnlQueryParams,
-    ) -> Result<Vec<PnlPoint>, PhoenixHttpError> {
-        let url = format!("{}/trader/{}/pnl", self.api_url, authority);
-
-        let mut request = self
-            .maybe_add_api_key(self.client.get(&url))
-            .query(&[("resolution", params.resolution.to_string())]);
-
-        if let Some(start_time) = params.start_time {
-            request = request.query(&[("startTime", start_time)]);
-        }
-        if let Some(end_time) = params.end_time {
-            request = request.query(&[("endTime", end_time)]);
-        }
-        if let Some(limit) = params.limit {
-            request = request.query(&[("limit", limit)]);
-        }
-
-        let response = self.send_with_rate_limit_retry(request).await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let message = response.text().await.unwrap_or_default();
-            return Err(PhoenixHttpError::ApiError { status, message });
-        }
-
-        response.json().await.map_err(|e| {
-            PhoenixHttpError::ParseFailed(format!("Failed to parse PnL response: {}", e))
-        })
+        code: &str,
+    ) -> Result<String, PhoenixHttpError> {
+        self.invite().activate_invite(authority, code).await
     }
-}
-
-fn collateral_transfer_amount(
-    collateral: &Option<IsolatedCollateralFlow>,
-) -> Result<u64, PhoenixHttpError> {
-    match collateral {
-        Some(IsolatedCollateralFlow::TransferFromCrossMargin { collateral }) => Ok(*collateral),
-        Some(IsolatedCollateralFlow::Deposit { .. }) => Err(PhoenixHttpError::ApiError {
-            status: 0,
-            message: "IsolatedCollateralFlow::Deposit is not supported by the server-side \
-                      endpoint; use TransferFromCrossMargin instead"
-                .to_string(),
-        }),
-        None => Ok(0),
-    }
-}
-
-fn try_into_instruction(api_ix: ApiInstructionResponse) -> Result<Instruction, PhoenixHttpError> {
-    let program_id: Pubkey = api_ix
-        .program_id
-        .parse()
-        .map_err(|e| PhoenixHttpError::ParseFailed(format!("Invalid program_id pubkey: {}", e)))?;
-
-    let accounts = api_ix
-        .keys
-        .into_iter()
-        .map(|meta| {
-            let pubkey: Pubkey = meta.pubkey.parse().map_err(|e| {
-                PhoenixHttpError::ParseFailed(format!("Invalid account pubkey: {}", e))
-            })?;
-            Ok(if meta.is_writable {
-                AccountMeta::new(pubkey, meta.is_signer)
-            } else {
-                AccountMeta::new_readonly(pubkey, meta.is_signer)
-            })
-        })
-        .collect::<Result<Vec<_>, PhoenixHttpError>>()?;
-
-    Ok(Instruction::new_with_bytes(
-        program_id,
-        &api_ix.data,
-        accounts,
-    ))
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
@@ -1134,10 +484,13 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = PhoenixHttpClient::new("https://api.phoenix.trade/v1", "test-key");
-        assert_eq!(client.api_url, "https://api.phoenix.trade/v1");
-        assert_eq!(client.api_key.as_deref(), Some("test-key"));
-        assert_eq!(client.rate_limit_retry, RateLimitRetryConfig::default());
+        let client = PhoenixHttpClient::new("https://perp-api.phoenix.trade", "test-key");
+        assert_eq!(client.inner.api_url, "https://perp-api.phoenix.trade");
+        assert_eq!(client.inner.api_key.as_deref(), Some("test-key"));
+        assert_eq!(
+            client.inner.rate_limit_retry,
+            RateLimitRetryConfig::default()
+        );
     }
 
     #[test]
@@ -1145,17 +498,23 @@ mod tests {
         let url = String::from("https://api.example.com");
         let key = String::from("my-api-key");
         let client = PhoenixHttpClient::new(url, key);
-        assert_eq!(client.api_url, "https://api.example.com");
-        assert_eq!(client.api_key.as_deref(), Some("my-api-key"));
-        assert_eq!(client.rate_limit_retry, RateLimitRetryConfig::default());
+        assert_eq!(client.inner.api_url, "https://api.example.com");
+        assert_eq!(client.inner.api_key.as_deref(), Some("my-api-key"));
+        assert_eq!(
+            client.inner.rate_limit_retry,
+            RateLimitRetryConfig::default()
+        );
     }
 
     #[test]
     fn test_client_public() {
         let client = PhoenixHttpClient::new_public("https://api.example.com");
-        assert_eq!(client.api_url, "https://api.example.com");
-        assert!(client.api_key.is_none());
-        assert_eq!(client.rate_limit_retry, RateLimitRetryConfig::default());
+        assert_eq!(client.inner.api_url, "https://api.example.com");
+        assert!(client.inner.api_key.is_none());
+        assert_eq!(
+            client.inner.rate_limit_retry,
+            RateLimitRetryConfig::default()
+        );
     }
 
     #[test]

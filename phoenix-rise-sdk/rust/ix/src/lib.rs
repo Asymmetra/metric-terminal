@@ -27,6 +27,7 @@
 //! ```
 
 mod cancel_orders;
+mod cancel_stop_loss;
 mod constants;
 mod create_ata;
 mod deposit_funds;
@@ -35,6 +36,7 @@ mod ember_withdraw;
 mod error;
 mod limit_order;
 mod market_order;
+mod multi_limit_order;
 mod order_packet;
 mod register_trader;
 mod spl_approve;
@@ -45,6 +47,7 @@ mod types;
 mod withdraw_funds;
 
 pub use cancel_orders::{CancelOrdersByIdParams, create_cancel_orders_by_id_ix};
+pub use cancel_stop_loss::{CancelStopLossParams, create_cancel_stop_loss_ix};
 pub use constants::*;
 pub use create_ata::create_associated_token_account_idempotent_ix;
 pub use deposit_funds::{DepositFundsParams, create_deposit_funds_ix};
@@ -58,7 +61,12 @@ pub use limit_order::{
 pub use market_order::{
     IsolatedMarketOrderParams, MarketOrderParams, create_place_market_order_ix,
 };
-pub use order_packet::{OrderPacket, client_order_id_to_bytes};
+pub use multi_limit_order::{
+    MultiLimitOrderParams, MultiLimitOrderParamsBuilder, create_place_multi_limit_order_ix,
+};
+pub use order_packet::{
+    CondensedOrder, MultipleOrderPacket, OrderPacket, client_order_id_to_bytes,
+};
 pub use register_trader::{RegisterTraderParams, create_register_trader_ix};
 pub use spl_approve::{SplApproveParams, create_spl_approve_ix};
 pub use stop_loss::{StopLossParams, StopLossParamsBuilder, create_place_stop_loss_ix};

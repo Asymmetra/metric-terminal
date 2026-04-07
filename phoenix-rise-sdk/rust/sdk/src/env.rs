@@ -10,8 +10,8 @@ pub(crate) const PHOENIX_WS_URL_ENV: &str = "PHOENIX_WS_URL";
 pub(crate) const PHOENIX_API_URL_ENV: &str = "PHOENIX_API_URL";
 pub(crate) const PHOENIX_API_KEY_ENV: &str = "PHOENIX_API_KEY";
 
-pub(crate) const DEFAULT_PHOENIX_API_URL: &str = "https://public-api.phoenix.trade";
-pub(crate) const DEFAULT_WS_URL: &str = "wss://public-api.phoenix.trade/ws";
+pub(crate) const DEFAULT_PHOENIX_API_URL: &str = "https://perp-api.phoenix.trade";
+pub(crate) const DEFAULT_WS_URL: &str = "wss://perp-api.phoenix.trade/ws";
 
 /// Environment configuration for Phoenix SDK.
 ///
@@ -45,7 +45,7 @@ impl PhoenixEnv {
     ///
     /// # Environment Variables
     ///
-    /// * `PHOENIX_API_URL` - Base URL for the Phoenix API. Defaults to `https://public-api.phoenix.trade`.
+    /// * `PHOENIX_API_URL` - Base URL for the Phoenix API. Defaults to `https://perp-api.phoenix.trade`.
     /// * `PHOENIX_WS_URL` - WebSocket URL. If not set, derived from the API URL
     ///   by converting the scheme (https→wss, http→ws) and appending `/ws`.
     /// * `PHOENIX_API_KEY` - Optional API key for authenticated endpoints.
@@ -70,8 +70,8 @@ impl PhoenixEnv {
 impl Default for PhoenixEnv {
     /// Returns the default environment configuration.
     ///
-    /// Uses `https://public-api.phoenix.trade` as the API URL and
-    /// `wss://public-api.phoenix.trade/ws` as the WebSocket URL. No API key is
+    /// Uses `https://perp-api.phoenix.trade` as the API URL and
+    /// `wss://perp-api.phoenix.trade/ws` as the WebSocket URL. No API key is
     /// set.
     fn default() -> Self {
         Self {
@@ -98,15 +98,7 @@ pub(crate) fn ws_url_from_api_url(api_url: &str) -> Result<String, PhoenixWsErro
         return Err(PhoenixWsError::UnsupportedUrlScheme(scheme.to_string()));
     }
 
-    // Append /ws path if not already present
-    let mut segments: Vec<&str> = url
-        .path_segments()
-        .map(|s| s.filter(|seg| !seg.is_empty()).collect())
-        .unwrap_or_default();
-    if segments.last().copied() != Some("ws") {
-        segments.push("ws");
-    }
-    url.set_path(&format!("/{}", segments.join("/")));
+    url.set_path("/ws");
     url.set_query(None);
     url.set_fragment(None);
 
@@ -129,15 +121,15 @@ mod tests {
     #[test]
     fn test_default_env() {
         let env = PhoenixEnv::default();
-        assert_eq!(env.api_url, "https://public-api.phoenix.trade");
-        assert_eq!(env.ws_url, "wss://public-api.phoenix.trade/ws");
+        assert_eq!(env.api_url, "https://perp-api.phoenix.trade");
+        assert_eq!(env.ws_url, "wss://perp-api.phoenix.trade/ws");
         assert!(env.api_key.is_none());
     }
 
     #[test]
     fn test_ws_url_from_https_api_url_appends_ws() {
-        let ws_url = ws_url_from_api_url("https://public-api.phoenix.trade").unwrap();
-        assert_eq!(ws_url, "wss://public-api.phoenix.trade/ws");
+        let ws_url = ws_url_from_api_url("https://perp-api.phoenix.trade").unwrap();
+        assert_eq!(ws_url, "wss://perp-api.phoenix.trade/ws");
     }
 
     #[test]
@@ -149,18 +141,18 @@ mod tests {
     #[test]
     fn test_ws_url_preserves_path() {
         let ws_url = ws_url_from_api_url("https://api.phoenix.trade/v1").unwrap();
-        assert_eq!(ws_url, "wss://api.phoenix.trade/v1/ws");
+        assert_eq!(ws_url, "wss://api.phoenix.trade/ws");
     }
 
     #[test]
     fn test_ws_url_handles_trailing_slash() {
-        let ws_url = ws_url_from_api_url("https://public-api.phoenix.trade/").unwrap();
-        assert_eq!(ws_url, "wss://public-api.phoenix.trade/ws");
+        let ws_url = ws_url_from_api_url("https://perp-api.phoenix.trade/").unwrap();
+        assert_eq!(ws_url, "wss://perp-api.phoenix.trade/ws");
     }
 
     #[test]
     fn test_ws_url_does_not_double_append_ws() {
-        let ws_url = ws_url_from_api_url("https://public-api.phoenix.trade/ws").unwrap();
-        assert_eq!(ws_url, "wss://public-api.phoenix.trade/ws");
+        let ws_url = ws_url_from_api_url("https://perp-api.phoenix.trade/ws").unwrap();
+        assert_eq!(ws_url, "wss://perp-api.phoenix.trade/ws");
     }
 }

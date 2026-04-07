@@ -11,7 +11,7 @@
 //!
 //! ```bash
 //! # PHOENIX_API_KEY is optional
-//! PHOENIX_WS_URL=wss://public-api.phoenix.trade/ws \
+//! PHOENIX_WS_URL=wss://perp-api.phoenix.trade/ws \
 //! PHOENIX_API_KEY=your_api_key \
 //! cargo run --example compute_trader_margin -- <AUTHORITY_PUBKEY>
 //! ```

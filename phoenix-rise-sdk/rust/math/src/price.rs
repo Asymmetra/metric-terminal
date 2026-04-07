@@ -145,7 +145,7 @@ impl Price {
 
         let value_f64 = decimal.to_f64().ok_or(MathError::Overflow)?;
         let dynamic_expo = dynamic_price_decimals(value_f64) as u32;
-        let source_scale = decimal.scale() as u32;
+        let source_scale = decimal.scale();
 
         // Target exponent: keep at least the source scale, respect the dynamic
         // heuristic, and never exceed `max_decimals`.
@@ -176,7 +176,7 @@ impl Price {
         if mantissa <= 0 {
             return Err(MathError::Underflow);
         }
-        if mantissa as i128 > u64::MAX as i128 {
+        if mantissa > u64::MAX as i128 {
             return Err(MathError::Overflow);
         }
 
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn quantize_price_large_value_rounds() {
-        let price = 50_000.1234;
+        let price = 50_000.123_4;
         let p = Price::from_f64(price).unwrap();
         assert_eq!(p.expo, 4); // reduced decimals with floor at 4 for large price
         let ticks = p

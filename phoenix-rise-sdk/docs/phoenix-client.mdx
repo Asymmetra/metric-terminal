@@ -1,0 +1,184 @@
+---
+title: "PhoenixHttpClient"
+description: "HTTP client for REST API access to markets, traders, candles, and account data"
+---
+
+PhoenixHttpClient provides access to the Phoenix REST API for fetching exchange configuration, market data, trader state, and historical data. Use it when you need static data, historical queries, or building transactions with server-side information.
+
+## Creating a Client
+
+```typescript
+import { createPhoenixClient } from 'phoenix-sdk';
+
+// Create with default configuration
+const client = createPhoenixClient();
+
+// Or with custom configuration
+const client = createPhoenixClient({
+  apiUrl: 'https://perp-api.phoenix.trade',
+  apiKey: 'your-api-key', // optional
+});
+
+// Access the HTTP client
+const httpClient = client.http;
+```
+
+## API Methods
+
+### Exchange Configuration
+
+```typescript
+// Get exchange metadata
+const exchange = await httpClient.exchange.getExchange();
+
+// Get markets list
+const markets = await httpClient.markets.getMarkets();
+
+// Get specific market
+const market = await httpClient.markets.getMarket('SOL');
+```
+
+**Methods:**
+- `exchange.getExchange()` - Get exchange configuration and metadata
+- `markets.getMarkets()` - List all markets with metadata
+- `markets.getMarket(symbol)` - Get specific market data
+
+### Trader Data
+
+```typescript
+// Get trader view (positions, collateral, orders)
+const trader = await httpClient.traders.getTrader({
+  authority: 'YOUR_AUTHORITY_PUBKEY',
+});
+
+// Get order history
+const orders = await httpClient.orders.getOrderHistory({
+  authority: 'YOUR_AUTHORITY_PUBKEY',
+  limit: 50,
+});
+
+// Get trade history
+const trades = await httpClient.trades.getTradeHistory({
+  authority: 'YOUR_AUTHORITY_PUBKEY',
+  symbol: 'SOL',
+});
+```
+
+**Methods:**
+- `traders.getTrader(params)` - Fetch trader positions and state
+- `orders.getOrderHistory(params)` - Fetch executed orders
+- `trades.getTradeHistory(params)` - Fetch trade fills
+
+### Historical Data
+
+```typescript
+// Get collateral event history
+const collateralEvents = await httpClient.collateral.getCollateralHistory({
+  authority: 'YOUR_AUTHORITY_PUBKEY',
+  limit: 20,
+});
+
+// Get funding rate history
+const fundingHistory = await httpClient.funding.getFundingHistory({
+  symbol: 'SOL',
+  limit: 50,
+});
+
+// Get candles (OHLCV)
+const candles = await httpClient.candles.getCandles({
+  symbol: 'SOL',
+  timeframe: '1m',
+  limit: 100,
+});
+```
+
+**Methods:**
+- `collateral.getCollateralHistory(params)` - Fetch collateral deposits/withdrawals
+- `funding.getFundingHistory(params)` - Fetch funding rate changes
+- `candles.getCandles(params)` - Fetch candlestick data
+
+## TraderView
+
+The trader view contains all positions and account data:
+
+```typescript
+interface TraderView {
+  authority: string;
+  traderKey: {
+    authority: string;
+    traderId: number;
+  };
+  advancedMarginFlags: number;
+  tradingState: {
+    balances: Record<string, bigint>;  // Symbol -> quote lots
+    nativeBalances: Record<string, bigint>;  // Symbol -> native collateral
+  };
+  positions: Array<{
+    symbol: string;
+    baseLots: bigint;
+    quoteLots: bigint;
+    entryPrice?: number;
+    currentPrice?: number;
+    unrealizedPnl?: number;
+  }>;
+  orders: Array<{
+    id: string;
+    symbol: string;
+    side: 'Bid' | 'Ask';
+    price: number;
+    baseLots: bigint;
+  }>;
+  maintenanceMarginRequired: number;
+  initialMarginRequired: number;
+  availableCollateral: number;
+  liquidationPrice?: number;
+}
+```
+
+## Error Handling
+
+```typescript
+try {
+  const market = await httpClient.markets.getMarket('SOL');
+} catch (error) {
+  if (error instanceof PhoenixHttpError) {
+    console.error(`HTTP Error: ${error.code} - ${error.message}`);
+    if (error.retryable) {
+      // Safe to retry
+    }
+  }
+}
+```
+
+**Error Types:**
+- `PhoenixHttpError` - HTTP request failed with status code
+- `NetworkError` - Connection or timeout error
+- `ValidationError` - Invalid parameters
+
+## Configuration
+
+```typescript
+interface PhoenixHttpClientConfig {
+  apiUrl?: string;           // Default: https://perp-api.phoenix.trade
+  apiKey?: string;           // Optional API key for authenticated endpoints
+  timeout?: number;          // Request timeout in ms (default: 30000)
+  retryAttempts?: number;    // Number of retries (default: 3)
+  retryDelay?: number;       // Initial retry delay in ms (default: 100)
+}
+```
+
+## Environment Variables
+
+The client reads from environment if not explicitly configured:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PHOENIX_API_URL` | `https://perp-api.phoenix.trade` | HTTP API base URL |
+| `PHOENIX_API_KEY` | — | Optional API key |
+
+## Notes
+
+- All amounts are in atomic units (quote lots, base lots) unless otherwise specified
+- Prices returned by the API are in USD
+- Timestamps are Unix seconds
+- No local caching is performed; all calls fetch fresh data from the server

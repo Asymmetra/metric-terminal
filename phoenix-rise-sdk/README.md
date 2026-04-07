@@ -1,27 +1,62 @@
-# Rise - the Phoenix Perps SDK
+# Rise - the Phoenix Perpetuals SDK
 
-SDK for the Phoenix perpetuals exchange on Solana. Available in Rust and Python. Fetch real-time market and trader data via websocket and HTTP and place orders via RPC.
+Multi-language SDK for the Phoenix perpetuals exchange on Solana. Fetch real-time market and trader data via WebSocket and HTTP, and place orders via Solana RPC.
+
+Build with **Rust** or **TypeScript**.
 
 ## Features
 
 - **Real-time WebSocket subscriptions** - L2 orderbook, market stats, candles, trader state, fills
-- **Unified PhoenixClient** - Auto-reconnect, dependency-aware subscriptions, and receiver-based events
-- **Local state management** - Automatic snapshot/delta reconciliation with sequence ordering
-- **Order execution** - Market orders, limit orders, and cancellations via Solana RPC
-- **Type-safe** - Strongly typed message routing and state containers
+- **High-level HTTP client** - Markets, traders, candles, order history, collateral events
+- **Unified client** - Auto-reconnect, dependency-aware subscriptions, and event-based API
+- **Order execution** - Market orders, limit orders, post-only, stop-loss, and cancellations (cross-margin and isolated margin)
+- **Multi-step flows** - Composed operations like deposit-and-place-order with instruction sequencing
+- **Type-safe** - Strongly typed instruction builders, message routing, and state containers
+- **Modular builders** - Compose individual Solana instructions for custom transactions
 
-## Architecture
+## Getting Started
 
+Choose your language:
+
+- **[Rust SDK](./rust/README.md)** - Async/await, strongly-typed, full-featured
+- **[TypeScript SDK](./ts/README.md)** - JavaScript/ESM, module-based, browser-compatible
+
+## Quick Examples
+
+### Rust - Subscribe to Market Data
+
+```rust
+use phoenix_sdk::{PhoenixClient, PhoenixSubscription};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = PhoenixClient::new_from_env().await?;
+    let (mut rx, _handle) = client
+        .subscribe(PhoenixSubscription::market("SOL"))
+        .await?;
+
+    while let Some(event) = rx.recv().await {
+        println!("{:?}", event);
+    }
+    Ok(())
+}
 ```
-rust/
-├── sdk/      phoenix-sdk        High-level client, WebSocket/HTTP
-├── types/    phoenix-types      Wire format + shared client model types
-├── math/     phoenix-math-utils Margin calculations, risk, fixed-point math
-├── ix/       phoenix-ix         Solana instruction builders for order placement
-└── cli/      phoenix-sdk-cli    Smoke-test CLI for HTTP + WebSocket
 
-python/
-└── phoenix_sdk/                 HTTP client, WebSocket client, tx builder, instruction builders
+### TypeScript - Place a Market Order
+
+```typescript
+import { createPhoenixClient, buildPlaceMarketOrderIx } from 'phoenix-sdk';
+
+const client = createPhoenixClient();
+const authority = /* your pubkey */;
+
+const ix = await buildPlaceMarketOrderIx({
+  authority,
+  symbol: 'SOL',
+  side: 'Bid',
+  baseLots: 100n,
+  client: /* your instruction client */,
+});
 ```
 
 ## Quick Start
@@ -135,6 +170,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Trader registration
+
+Register a trader with the SDK, through the UI, or with the following curl command:
+
+`curl -sS -X POST 'https://perp-api.phoenix.trade/v1/invite/activate' -H "Content-Type: application/json" -d '{"authority":"'"$PUBKEY"'","code": "'"$CODE"'"}'`
+
 ## Crates
 
 ### phoenix-sdk
@@ -148,7 +189,7 @@ Main SDK with WebSocket client and state containers:
 | `L2Book` | Orderbook state with bid/ask accessors, spread, and liquidity metrics |
 | `MarketStats` | Mark price, oracle price, funding rates, volume |
 | `Market` | Combined L2Book + MarketStats container |
-| `PhoenixTxBuilder` | Transaction builder for orders, deposits, withdrawals |
+| `PhoenixTxBuilder` | Transaction builder for orders (cross and isolated margin), deposits, withdrawals |
 | `PhoenixHttpClient` | REST API for exchange configuration |
 
 ### phoenix-types
@@ -165,11 +206,15 @@ client model types used by `phoenix-sdk` (`PhoenixSubscription`,
 
 ### phoenix-ix
 
-Solana instruction builders for the Phoenix program:
+Solana instruction builders for the Phoenix program (cross-margin and isolated margin):
 
 - `create_place_limit_order_ix` - Build limit order instructions
 - `create_place_market_order_ix` - Build market order instructions
 - `create_cancel_orders_by_id_ix` - Build cancel instructions
+- `create_place_stop_loss_ix` - Build stop-loss order instructions
+- `create_register_trader_ix` - Register trader subaccounts
+- `create_transfer_collateral_ix` - Transfer collateral between cross and isolated subaccounts
+- `create_sync_parent_to_child_ix` - Sync parent state to isolated child subaccounts
 
 ## Examples
 
@@ -202,6 +247,18 @@ cargo run -p phoenix-sdk --example compute_trader_margin
 # HTTP client usage
 cargo run -p phoenix-sdk --example http_client
 
+# Isolated margin market order (client-side)
+cargo run -p phoenix-sdk --example isolated_market_order_client
+
+# Isolated margin market order (server-side)
+cargo run -p phoenix-sdk --example isolated_market_order_server
+
+# Isolated margin limit order
+cargo run -p phoenix-sdk --example isolated_limit_order
+
+# Register trader subaccount
+cargo run -p phoenix-sdk --example register_trader
+
 # Market maker example
 cargo run -p phoenix-sdk --example market_maker
 
@@ -213,42 +270,11 @@ cargo run -p phoenix-sdk --example ws_debug_cli
 
 | Variable | Description |
 |----------|-------------|
-| `PHOENIX_API_URL` | Optional Phoenix REST API URL (defaults to `https://public-api.phoenix.trade`) |
-| `PHOENIX_WS_URL` | Optional Phoenix WebSocket URL (defaults to `wss://public-api.phoenix.trade/ws`) |
+| `PHOENIX_API_URL` | Optional Phoenix REST API URL (defaults to `https://perp-api.phoenix.trade`) |
+| `PHOENIX_WS_URL` | Optional Phoenix WebSocket URL (defaults to `wss://perp-api.phoenix.trade/ws`) |
 | `PHOENIX_API_KEY` | Optional Phoenix API key (sent as `x-api-key` when set) |
 
-## Python SDK
-
-Async SDK for the Phoenix REST and WebSocket APIs. Includes HTTP client, WebSocket client with auto-reconnect, Solana transaction builder, and instruction builders. Requires Python 3.10+.
-
-```python
-import asyncio
-from phoenix_sdk import PhoenixHttpClient, CandlesQueryParams
-
-async def main():
-    async with PhoenixHttpClient.from_env() as client:
-        markets = await client.get_markets()
-        for m in markets:
-            print(f"{m.symbol}: taker_fee={m.taker_fee}")
-
-        candles = await client.get_candles(
-            CandlesQueryParams("SOL", "1m").with_limit(100)
-        )
-        for c in candles:
-            print(f"  {c.time}: {c.open} -> {c.close}")
-
-asyncio.run(main())
-```
-
-### Install
-
-```bash
-cd python
-pip install -e ".[dev]"
-pytest tests/
-```
-
-## Build (Rust)
+## Build
 
 ```bash
 cd rust

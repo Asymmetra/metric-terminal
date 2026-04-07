@@ -12,7 +12,7 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Connect to the WebSocket server
-//!     let client = PhoenixWSClient::new("wss://api.phoenix.trade/v1/ws", None)?;
+//!     let client = PhoenixWSClient::new("wss://api.phoenix.trade/ws", None)?;
 //!
 //!     // Create a trader key from your authority pubkey
 //!     let key = TraderKey::new(Pubkey::new_unique());
@@ -37,6 +37,7 @@
 //! }
 //! ```
 
+pub mod api;
 mod client;
 mod env;
 mod http_client;
@@ -44,17 +45,21 @@ mod tx_builder;
 mod ws_client;
 
 // Re-export main types
+pub use api::{
+    CandlesClient, CollateralClient, ExchangeClient, FundingClient, InviteClient, MarketsClient,
+    OrdersClient, TradersClient, TradesClient,
+};
 pub use client::PhoenixClient;
 pub use env::PhoenixEnv;
 pub use http_client::{PhoenixHttpClient, RateLimitRetryConfig};
 // Re-export phoenix-ix types users will need for orders
 pub use phoenix_ix::{
-    CancelId, FifoOrderId, OrderFlags, RegisterTraderParams, SelfTradeBehavior, Side,
-    TransferCollateralParams,
+    CancelId, CondensedOrder, FifoOrderId, MultiLimitOrderParams, OrderFlags,
+    RegisterTraderParams, SelfTradeBehavior, Side, TransferCollateralParams,
 };
 pub use phoenix_ix::{
-    Direction, IsolatedCollateralFlow, IsolatedLimitOrderParams, IsolatedMarketOrderParams,
-    StopLossOrderKind, StopLossParams,
+    CancelStopLossParams, Direction, IsolatedCollateralFlow, IsolatedLimitOrderParams,
+    IsolatedMarketOrderParams, StopLossOrderKind, StopLossParams,
 };
 /// Re-export the types crate for direct access if needed.
 pub use phoenix_types as types;

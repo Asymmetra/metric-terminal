@@ -105,6 +105,16 @@ pub fn place_stop_loss_discriminant() -> [u8; 8] {
     compute_discriminant("global:place_stop_loss")
 }
 
+/// Instruction discriminant for place_multi_limit_order.
+pub fn place_multi_limit_order_discriminant() -> [u8; 8] {
+    compute_discriminant("global:place_multi_limit_order")
+}
+
+/// Instruction discriminant for cancel_stop_loss.
+pub fn cancel_stop_loss_discriminant() -> [u8; 8] {
+    compute_discriminant("global:cancel_stop_loss")
+}
+
 /// Derives the stop loss PDA for a given trader account and asset ID.
 ///
 /// Seeds: ["stoploss", trader_account, &asset_id.to_le_bytes()]

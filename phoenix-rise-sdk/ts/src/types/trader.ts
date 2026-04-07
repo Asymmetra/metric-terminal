@@ -1,0 +1,205 @@
+import z from "zod";
+import { type TokenAmount, TokenAmountSchema } from "@/primitives/TokenAmount";
+import { type Side, side } from "@/primitives/Side";
+import { type Symbol, symbol } from "@/primitives/Symbol";
+import type { Authority } from "@/primitives/_addressTypes";
+
+const zSymbol = z.string().transform(symbol);
+const zAuthority = z
+  .string()
+  .transform((value): Authority => value as Authority);
+
+export enum RiskState {
+  Healthy = "healthy",
+  Unhealthy = "unhealthy",
+  Underwater = "underwater",
+  ZeroCollateralNoPositions = "zeroCollateralNoPositions",
+}
+
+export enum RiskTier {
+  Safe = "safe",
+  AtRisk = "atRisk",
+  Cancellable = "cancellable",
+  Liquidatable = "liquidatable",
+  BackstopLiquidatable = "backstopLiquidatable",
+  HighRisk = "highRisk",
+}
+
+export interface Position {
+  symbol: Symbol;
+  positionSize: TokenAmount;
+  virtualQuotePosition: TokenAmount;
+  entryPrice: TokenAmount;
+  unrealizedPnl: TokenAmount;
+  discountedUnrealizedPnl?: TokenAmount;
+  positionInitialMargin: TokenAmount;
+  initialMargin: TokenAmount;
+  maintenanceMargin: TokenAmount;
+  backstopMargin: TokenAmount;
+  limitOrderMargin: TokenAmount;
+  positionValue: TokenAmount;
+  unsettledFunding: TokenAmount;
+  accumulatedFunding: TokenAmount;
+  liquidationPrice: TokenAmount;
+  takeProfitPrice?: TokenAmount | null;
+  stopLossPrice?: TokenAmount | null;
+}
+
+export const PositionSchema: z.ZodType<Position> = z.object({
+  symbol: zSymbol,
+  positionSize: TokenAmountSchema,
+  virtualQuotePosition: TokenAmountSchema,
+  entryPrice: TokenAmountSchema,
+  unrealizedPnl: TokenAmountSchema,
+  discountedUnrealizedPnl: TokenAmountSchema.optional(),
+  positionInitialMargin: TokenAmountSchema,
+  initialMargin: TokenAmountSchema,
+  maintenanceMargin: TokenAmountSchema,
+  backstopMargin: TokenAmountSchema,
+  limitOrderMargin: TokenAmountSchema,
+  positionValue: TokenAmountSchema,
+  unsettledFunding: TokenAmountSchema,
+  accumulatedFunding: TokenAmountSchema,
+  liquidationPrice: TokenAmountSchema,
+  takeProfitPrice: TokenAmountSchema.nullable().optional(),
+  stopLossPrice: TokenAmountSchema.nullable().optional(),
+});
+
+export interface LimitOrder {
+  price: TokenAmount;
+  side: Side;
+  orderSequenceNumber: string;
+  initialTradeSize: TokenAmount;
+  tradeSizeRemaining: TokenAmount;
+  marginRequirement: TokenAmount;
+  marginFactor: TokenAmount;
+  isReduceOnly: boolean;
+  isStopLoss?: boolean;
+  isStopLossDirection?: boolean;
+}
+
+export const LimitOrderSchema: z.ZodType<LimitOrder> = z.object({
+  price: TokenAmountSchema,
+  side: z
+    .union([
+      z.enum(["bid", "ask", "Bid", "Ask", "buy", "sell", "Buy", "Sell"]),
+      z.literal(0),
+      z.literal(1),
+    ])
+    .transform((value) => {
+      if (typeof value === "number") {
+        return value === 0 ? side("bid") : side("ask");
+      }
+      return side(value as "bid" | "buy" | "ask" | "sell");
+    }),
+  orderSequenceNumber: z.string(),
+  initialTradeSize: TokenAmountSchema,
+  tradeSizeRemaining: TokenAmountSchema,
+  marginRequirement: TokenAmountSchema,
+  marginFactor: TokenAmountSchema,
+  isReduceOnly: z.boolean(),
+  isStopLoss: z.boolean().optional().default(false),
+  isStopLossDirection: z.boolean().optional().default(false),
+});
+
+export interface CapabilityAccess {
+  immediate: boolean;
+  viaColdActivation: boolean;
+}
+
+const CapabilityAccessSchema: z.ZodType<CapabilityAccess> = z.object({
+  immediate: z.boolean(),
+  viaColdActivation: z.boolean().optional().default(false),
+});
+
+export interface TraderCapabilities {
+  placeLimitOrder: CapabilityAccess;
+  placeMarketOrder: CapabilityAccess;
+  riskIncreasingTrade: CapabilityAccess;
+  riskReducingTrade: CapabilityAccess;
+  depositCollateral: CapabilityAccess;
+  withdrawCollateral: CapabilityAccess;
+}
+
+export const TraderCapabilitiesSchema: z.ZodType<TraderCapabilities> = z.object(
+  {
+    placeLimitOrder: CapabilityAccessSchema,
+    placeMarketOrder: CapabilityAccessSchema,
+    riskIncreasingTrade: CapabilityAccessSchema,
+    riskReducingTrade: CapabilityAccessSchema,
+    depositCollateral: CapabilityAccessSchema,
+    withdrawCollateral: CapabilityAccessSchema,
+  }
+);
+
+export interface TraderView {
+  flags: number;
+  state: string;
+  capabilities: TraderCapabilities;
+  traderKey: Authority;
+  traderPdaIndex: number;
+  traderSubaccountIndex: number;
+  authority: Authority;
+  collateralBalance: TokenAmount;
+  effectiveCollateral: TokenAmount;
+  effectiveCollateralForWithdrawals: TokenAmount;
+  unrealizedPnl: TokenAmount;
+  discountedUnrealizedPnl: TokenAmount;
+  unsettledFundingOwed: TokenAmount;
+  accumulatedFunding: TokenAmount;
+  portfolioValue: TokenAmount;
+  maintenanceMargin: TokenAmount;
+  cancelMargin: TokenAmount;
+  initialMargin: TokenAmount;
+  initialMarginForWithdrawals: TokenAmount;
+  riskState: RiskState;
+  riskTier: RiskTier;
+  positions: Position[];
+  limitOrders: Record<Symbol, LimitOrder[]>;
+  maxPositions: number;
+  lastDepositSlot: number;
+  isInActiveTraders: boolean;
+  makerFeeOverrideMultiplier: number;
+  takerFeeOverrideMultiplier: number;
+}
+
+export const TraderViewSchema: z.ZodType<TraderView> = z.object({
+  flags: z.number(),
+  state: z.string(),
+  capabilities: TraderCapabilitiesSchema,
+  traderKey: zAuthority,
+  traderPdaIndex: z.number(),
+  traderSubaccountIndex: z.number(),
+  authority: zAuthority,
+  collateralBalance: TokenAmountSchema,
+  effectiveCollateral: TokenAmountSchema,
+  effectiveCollateralForWithdrawals: TokenAmountSchema,
+  unsettledFundingOwed: TokenAmountSchema,
+  accumulatedFunding: TokenAmountSchema,
+  portfolioValue: TokenAmountSchema,
+  maintenanceMargin: TokenAmountSchema,
+  cancelMargin: TokenAmountSchema,
+  initialMargin: TokenAmountSchema,
+  initialMarginForWithdrawals: TokenAmountSchema,
+  unrealizedPnl: TokenAmountSchema,
+  discountedUnrealizedPnl: TokenAmountSchema,
+  riskState: z.enum(RiskState),
+  riskTier: z.enum(RiskTier),
+  positions: z.array(PositionSchema),
+  limitOrders: z
+    .record(z.string(), z.array(LimitOrderSchema))
+    .transform(
+      (limitOrders): Record<Symbol, LimitOrder[]> =>
+        Object.fromEntries(
+          Object.entries(limitOrders).map(([marketSymbol, orders]) => [
+            symbol(marketSymbol),
+            orders,
+          ])
+        ) as Record<Symbol, LimitOrder[]>
+    ),
+  maxPositions: z.number(),
+  lastDepositSlot: z.number().default(0),
+  isInActiveTraders: z.boolean(),
+  makerFeeOverrideMultiplier: z.number().default(1),
+  takerFeeOverrideMultiplier: z.number().default(1),
+});

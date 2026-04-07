@@ -17,7 +17,7 @@ use url::Url;
 #[command(name = "phoenix-sdk-cli")]
 #[command(about = "Tiny smoke-test CLI for Phoenix SDK HTTP + WebSocket clients")]
 struct Cli {
-    /// Base API URL (e.g. https://public-api.phoenix.trade)
+    /// Base API URL (e.g. https://perp-api.phoenix.trade)
     #[arg(long, global = true)]
     api_url: Option<String>,
 

@@ -6,7 +6,7 @@
 //! - Explicit handle drops for unsubscription
 //!
 //! Run with:
-//!   export PHOENIX_WS_URL=wss://public-api.phoenix.trade/ws
+//!   export PHOENIX_WS_URL=wss://perp-api.phoenix.trade/ws
 //!   cargo run -p phoenix-sdk --example subscribe_market_stats -- SOL
 
 use std::env;
