@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
-use phoenix_ix::{LimitOrderParams, create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
+use phoenix_ix::{LimitOrderParams, MarketOrderParams, create_place_stop_loss_ix, Direction, StopLossOrderKind, StopLossParams};
 use phoenix_math_utils::WrapperNum;
 use phoenix_sdk::{BracketLegOrders, CancelId, IsolatedCollateralFlow, PhoenixMetadata, PhoenixTxBuilder, Side, TraderKey};
 use serde::{Deserialize, Deserializer, de};
@@ -28,6 +28,11 @@ pub struct MarketOrderRequest {
     pub stop_loss_price: Option<f64>,
     #[serde(default)]
     pub take_profit_price: Option<f64>,
+    /// Maximum allowed slippage in basis points (1 bp = 0.01%).
+    /// Defaults to 200 (2%) if omitted. The on-chain IOC order will reject
+    /// fills beyond `best_price ± slippage`.
+    #[serde(default)]
+    pub max_slippage_bps: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +116,10 @@ pub struct IsolatedMarketOrderRequest {
     pub stop_loss_price: Option<f64>,
     #[serde(default)]
     pub take_profit_price: Option<f64>,
+    /// Maximum allowed slippage in basis points (1 bp = 0.01%).
+    /// Defaults to 200 (2%) if omitted.
+    #[serde(default)]
+    pub max_slippage_bps: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -262,6 +271,90 @@ fn validate_subaccount_index(index: u8) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+/// Resolved account addresses for a given market, used to construct
+/// `MarketOrderParams` manually (needed for slippage-limited orders).
+struct MarketAddresses {
+    perp_asset_map: Pubkey,
+    global_trader_index: Vec<Pubkey>,
+    active_trader_buffer: Vec<Pubkey>,
+    orderbook: Pubkey,
+    spline_collection: Pubkey,
+}
+
+fn resolve_market_addresses(
+    metadata: &PhoenixMetadata,
+    symbol: &str,
+) -> Result<MarketAddresses, AppError> {
+    let market = metadata
+        .get_market(symbol)
+        .ok_or_else(|| AppError::MarketNotFound(symbol.to_string()))?;
+    let keys = metadata.keys();
+    let perp_asset_map = Pubkey::from_str(&keys.perp_asset_map)
+        .map_err(|e| AppError::Phoenix(format!("Invalid perp_asset_map pubkey: {}", e)))?;
+    let global_trader_index: Vec<Pubkey> = keys
+        .global_trader_index
+        .iter()
+        .map(|s| Pubkey::from_str(s).map_err(|e| AppError::Phoenix(format!("Invalid pubkey: {}", e))))
+        .collect::<Result<_, _>>()?;
+    let active_trader_buffer: Vec<Pubkey> = keys
+        .active_trader_buffer
+        .iter()
+        .map(|s| Pubkey::from_str(s).map_err(|e| AppError::Phoenix(format!("Invalid pubkey: {}", e))))
+        .collect::<Result<_, _>>()?;
+    let orderbook = Pubkey::from_str(&market.market_pubkey)
+        .map_err(|e| AppError::Phoenix(format!("Invalid orderbook pubkey: {}", e)))?;
+    let spline_collection = Pubkey::from_str(&market.spline_pubkey)
+        .map_err(|e| AppError::Phoenix(format!("Invalid spline pubkey: {}", e)))?;
+    Ok(MarketAddresses {
+        perp_asset_map,
+        global_trader_index,
+        active_trader_buffer,
+        orderbook,
+        spline_collection,
+    })
+}
+
+/// Default slippage for normal market orders (2%).
+const DEFAULT_SLIPPAGE_BPS: u16 = 200;
+
+/// Wider default for close-all-positions (5%) — emergency closes need room.
+const CLOSE_ALL_SLIPPAGE_BPS: u16 = 500;
+
+/// Compute a slippage-capped limit price in ticks from the best available
+/// orderbook price. Returns `None` when the orderbook cache has no data for
+/// this symbol (in which case the order proceeds without a price cap to
+/// avoid blocking trades when price feeds are stale).
+fn compute_slippage_limit_ticks(
+    state: &AppState,
+    metadata: &PhoenixMetadata,
+    symbol: &str,
+    side: Side,
+    slippage_bps: u16,
+) -> Option<u64> {
+    let book = state.market_cache.get_orderbook(symbol)?;
+    let calc = metadata.get_market_calculator(symbol)?;
+
+    // For buys, reference the best ask (price we'd pay). Cap above it.
+    // For sells, reference the best bid (price we'd receive). Cap below it.
+    let reference_price = match side {
+        Side::Bid => book.asks.first().map(|l| l.price),
+        Side::Ask => book.bids.first().map(|l| l.price),
+    }?;
+
+    let factor = slippage_bps as f64 / 10_000.0;
+    let limit_price = match side {
+        Side::Bid => reference_price * (1.0 + factor),
+        Side::Ask => reference_price * (1.0 - factor),
+    };
+
+    // Ensure the limit price is positive and finite.
+    if limit_price <= 0.0 || !limit_price.is_finite() {
+        return None;
+    }
+
+    calc.price_to_ticks(limit_price).ok().map(|t| t.as_inner())
 }
 
 fn build_bracket(
@@ -448,24 +541,41 @@ async fn market_order(
         )));
     }
 
+    let slippage_bps = req.max_slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS);
+    let price_limit = compute_slippage_limit_ticks(&state, &metadata, &req.symbol, side, slippage_bps);
+
     let builder = PhoenixTxBuilder::new(&metadata);
+    let addrs = resolve_market_addresses(&metadata, &req.symbol)?;
+
+    let mut params_builder = MarketOrderParams::builder()
+        .trader(authority)
+        .trader_account(trader_pda)
+        .perp_asset_map(addrs.perp_asset_map)
+        .orderbook(addrs.orderbook)
+        .spline_collection(addrs.spline_collection)
+        .global_trader_index(addrs.global_trader_index)
+        .active_trader_buffer(addrs.active_trader_buffer)
+        .side(side)
+        .num_base_lots(req.size_lots)
+        .symbol(&req.symbol);
+
+    if let Some(limit) = price_limit {
+        params_builder = params_builder.price_in_ticks(limit);
+    }
+
+    let params = params_builder
+        .build()
+        .map_err(|e| AppError::Phoenix(format!("Failed to build market order params: {}", e)))?;
 
     let instructions = builder
-        .build_market_order(
-            authority,
-            trader_pda,
-            &req.symbol,
-            side,
-            req.size_lots,
-            bracket.as_ref(),
-        )
+        .build_market_order_with_params(params, bracket.as_ref())
         .map_err(|e| AppError::Phoenix(format!("Failed to build market order: {}", e)))?;
 
     Ok(Json(serialize_instructions(
         instructions,
         format!(
-            "Market {} order: {} lots on {}",
-            req.side, req.size_lots, req.symbol
+            "Market {} order: {} lots on {} (slippage cap: {}bps)",
+            req.side, req.size_lots, req.symbol, slippage_bps
         ),
     )))
 }
@@ -742,19 +852,36 @@ async fn isolated_market_order(
         all_instructions.extend(transfer_ixs);
     }
 
-    // Build the isolated market order using the local SDK builder.
-    // This bypasses the Phoenix HTTP pre-flight lookup that would otherwise
-    // 404 on any unregistered sub=N PDA before the TX is submitted.
+    // Build the isolated market order using the local SDK builder with slippage cap.
+    let slippage_bps = req.max_slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS);
+    let price_limit = compute_slippage_limit_ticks(&state, &metadata, &req.symbol, side, slippage_bps);
+
     let child_pda = TraderKey::derive_pda(&authority, 0, sub_idx);
+    let addrs = resolve_market_addresses(&metadata, &req.symbol)?;
+
+    let mut params_builder = MarketOrderParams::builder()
+        .trader(authority)
+        .trader_account(child_pda)
+        .perp_asset_map(addrs.perp_asset_map)
+        .orderbook(addrs.orderbook)
+        .spline_collection(addrs.spline_collection)
+        .global_trader_index(addrs.global_trader_index)
+        .active_trader_buffer(addrs.active_trader_buffer)
+        .side(side)
+        .num_base_lots(req.size_lots)
+        .symbol(&req.symbol)
+        .subaccount_index(sub_idx);
+
+    if let Some(limit) = price_limit {
+        params_builder = params_builder.price_in_ticks(limit);
+    }
+
+    let params = params_builder
+        .build()
+        .map_err(|e| AppError::Phoenix(format!("Failed to build isolated market order params: {}", e)))?;
+
     let market_ixs = builder
-        .build_market_order(
-            authority,
-            child_pda,
-            &req.symbol,
-            side,
-            req.size_lots,
-            None, // bracket legs appended separately below
-        )
+        .build_market_order_with_params(params, None)
         .map_err(|e| AppError::Phoenix(format!("Failed to build isolated market order: {}", e)))?;
     all_instructions.extend(market_ixs);
 
@@ -1007,7 +1134,7 @@ async fn close_all_positions(
 
     let mut all_instructions: Vec<Instruction> = Vec::new();
 
-    // Process cross-margin positions synchronously
+    // Process cross-margin positions synchronously (with close-all slippage cap)
     if !cross_positions.is_empty() {
         let metadata = state.metadata.read().await;
         let builder = PhoenixTxBuilder::new(&metadata);
@@ -1015,7 +1142,6 @@ async fn close_all_positions(
         for pos in cross_positions {
             validate_size_lots(pos.size_lots)?;
 
-            // Parse side and determine close side (opposite of position)
             let position_side = match pos.side.to_lowercase().as_str() {
                 "long" => Side::Bid,
                 "short" => Side::Ask,
@@ -1024,23 +1150,40 @@ async fn close_all_positions(
                 )),
             };
 
-            // Close on opposite side
             let close_side = match position_side {
                 Side::Bid => Side::Ask,
                 Side::Ask => Side::Bid,
             };
 
             let trader_pda = TraderKey::derive_pda(&authority, 0, pos.subaccount_index);
+            let price_limit = compute_slippage_limit_ticks(
+                &state, &metadata, &pos.symbol, close_side, CLOSE_ALL_SLIPPAGE_BPS,
+            );
+            let addrs = resolve_market_addresses(&metadata, &pos.symbol)?;
+
+            let mut params_builder = MarketOrderParams::builder()
+                .trader(authority)
+                .trader_account(trader_pda)
+                .perp_asset_map(addrs.perp_asset_map)
+                .orderbook(addrs.orderbook)
+                .spline_collection(addrs.spline_collection)
+                .global_trader_index(addrs.global_trader_index)
+                .active_trader_buffer(addrs.active_trader_buffer)
+                .side(close_side)
+                .num_base_lots(pos.size_lots)
+                .symbol(&pos.symbol)
+                .subaccount_index(pos.subaccount_index);
+
+            if let Some(limit) = price_limit {
+                params_builder = params_builder.price_in_ticks(limit);
+            }
+
+            let params = params_builder.build().map_err(|e| {
+                AppError::Phoenix(format!("Failed to build cross-margin close params for {}: {}", pos.symbol, e))
+            })?;
 
             let instructions = builder
-                .build_market_order(
-                    authority,
-                    trader_pda,
-                    &pos.symbol,
-                    close_side,
-                    pos.size_lots,
-                    None, // No bracket orders for closes
-                )
+                .build_market_order_with_params(params, None)
                 .map_err(|e| {
                     AppError::Phoenix(format!(
                         "Failed to build cross-margin close for {}: {}",
@@ -1052,9 +1195,7 @@ async fn close_all_positions(
         }
     }
 
-    // Process isolated positions using local SDK builder (no HTTP pre-flight).
-    // Positions already exist so the trader is registered, but using the local
-    // builder keeps the code path consistent with isolated_market_order.
+    // Process isolated positions (with close-all slippage cap)
     if !isolated_positions.is_empty() {
         let metadata = state.metadata.read().await;
         let builder = PhoenixTxBuilder::new(&metadata);
@@ -1076,15 +1217,34 @@ async fn close_all_positions(
             };
 
             let child_pda = TraderKey::derive_pda(&authority, 0, pos.subaccount_index);
+            let price_limit = compute_slippage_limit_ticks(
+                &state, &metadata, &pos.symbol, close_side, CLOSE_ALL_SLIPPAGE_BPS,
+            );
+            let addrs = resolve_market_addresses(&metadata, &pos.symbol)?;
+
+            let mut params_builder = MarketOrderParams::builder()
+                .trader(authority)
+                .trader_account(child_pda)
+                .perp_asset_map(addrs.perp_asset_map)
+                .orderbook(addrs.orderbook)
+                .spline_collection(addrs.spline_collection)
+                .global_trader_index(addrs.global_trader_index)
+                .active_trader_buffer(addrs.active_trader_buffer)
+                .side(close_side)
+                .num_base_lots(pos.size_lots)
+                .symbol(&pos.symbol)
+                .subaccount_index(pos.subaccount_index);
+
+            if let Some(limit) = price_limit {
+                params_builder = params_builder.price_in_ticks(limit);
+            }
+
+            let params = params_builder.build().map_err(|e| {
+                AppError::Phoenix(format!("Failed to build isolated close params for {}: {}", pos.symbol, e))
+            })?;
+
             let instructions = builder
-                .build_market_order(
-                    authority,
-                    child_pda,
-                    &pos.symbol,
-                    close_side,
-                    pos.size_lots,
-                    None, // No bracket orders for closes
-                )
+                .build_market_order_with_params(params, None)
                 .map_err(|e| {
                     AppError::Phoenix(format!(
                         "Failed to build isolated close for {}: {}",
