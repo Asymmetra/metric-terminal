@@ -18,6 +18,12 @@ A high-performance perpetuals trading terminal for [Phoenix](https://phoenix.tra
 | XRP-PERP | 3 | 15x | |
 | HYPE-PERP | 4 | 10x | |
 | SKR-PERP | 5 | 3x | **Isolated margin only** |
+| BNB-PERP | 6 | 10x | |
+| DOGE-PERP | 7 | 10x | |
+| AAVE-PERP | 8 | 10x | |
+| SUI-PERP | 9 | 10x | |
+| ZEC-PERP | 10 | 10x | |
+| TAO-PERP | 11 | 5x | |
 
 ## What It Does
 
@@ -112,6 +118,8 @@ All transaction endpoints are under `/api/tx/`:
 | `POST /api/tx/withdraw` | Withdraw USDC collateral |
 | `POST /api/tx/transfer-collateral` | Transfer collateral between subaccounts |
 | `POST /api/tx/register-subaccount` | Register a new isolated margin subaccount |
+| `POST /api/tx/place-multi-limit-orders` | Batch multiple limit orders (up to 10) in one transaction |
+| `POST /api/tx/cancel-stop-loss` | Cancel a specific TP/SL bracket leg by direction |
 
 > **Note:** `/api/tx/isolated-limit-order` and `/api/tx/isolated-market-order` require an explicit `subaccount_index` field (integer 1–100). Omitting it returns `400 Bad Request`.
 
@@ -285,7 +293,7 @@ After initial setup, both platforms auto-deploy on `git push origin main`. No ma
 
 ## Testing
 
-The automated E2E suite (`tests/e2e-expanded.mjs`) runs 24 tests against the live production backend using a funded test wallet. It covers the full trade lifecycle with real on-chain transactions.
+The automated E2E suite (`tests/e2e-expanded.mjs`) runs 30 tests against the live production backend using a funded test wallet. It covers the full trade lifecycle with real on-chain transactions across all 12 markets.
 
 ```bash
 cd tests
@@ -298,8 +306,9 @@ node e2e-expanded.mjs
 - Section B (tests 9–14): Isolated subaccount registration and SOL trading
 - Section C (tests 15–18): Cross↔isolated collateral transfers and sweep
 - Section D (tests 19–24): Edge cases — subaccount re-registration, isolated limit/cancel, required-field guards (400), SKR isolated-only enforcement, final state verification
+- Section E (tests 25–30): New market coverage (DOGE, AAVE, SUI, ZEC, TAO, BNB) — orderbook + limit order per market
 
-Expected output: `24/24 PASS`, wallet returns to its starting collateral balance, zero open orders/positions.
+Expected output: `30/30 PASS`, wallet returns to its starting collateral balance, zero open orders/positions.
 
 > **Note:** Tests use a pre-funded test wallet on Solana mainnet. Runs cost real gas. Do not run repeatedly in a tight loop.
 

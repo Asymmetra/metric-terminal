@@ -13,7 +13,7 @@ const BACKEND = "https://ember-backend-q4nf.onrender.com";
 
 async function buildAndSend(endpoint, body, label) {
   console.log(`\n--- ${label} ---`);
-  const res = await fetch(`${BACKEND}${endpoint}`, {
+  let res = await fetch(`${BACKEND}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -21,6 +21,19 @@ async function buildAndSend(endpoint, body, label) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
+  // Retry once on 502 (cold Render instance)
+  if (res.status === 502) {
+    console.log(`  Got 502, retrying after 2s...`);
+    await sleep(2000);
+    const retryRes = await fetch(`${BACKEND}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    const retryText = await retryRes.text();
+    try { data = JSON.parse(retryText); } catch { data = { error: retryText }; }
+    res = retryRes;
+  }
   console.log(`  HTTP ${res.status}: ${data.message || data.error || "no message"}`);
   if (res.status !== 200 || !data.instructions) return { ok: false, status: res.status, data };
 
@@ -58,6 +71,19 @@ console.log(`║  SKR SMOKE TESTS (Wave 5 addition)                     ║`);
 console.log(`╚══════════════════════════════════════════════════════════╝`);
 console.log(`Wallet: ${WALLET}`);
 console.log(`Backend: ${BACKEND}`);
+
+// Warmup: wake Render instance
+console.log('\nWarming up backend...');
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    const warmupRes = await fetch(`${BACKEND}/api/markets`);
+    if (warmupRes.ok) { console.log(`Warmup OK (attempt ${attempt})`); break; }
+    console.log(`Warmup attempt ${attempt}: HTTP ${warmupRes.status}`);
+  } catch (e) {
+    console.log(`Warmup attempt ${attempt}: ${e.message}`);
+  }
+  if (attempt < 3) await sleep(2000);
+}
 
 // =============================================================
 // TEST 24: SKR isolated limit order (isolatedOnly, subaccount_index=1)

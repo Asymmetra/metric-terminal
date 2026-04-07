@@ -63,7 +63,7 @@ async function buildAndSend(endpoint, body, label) {
   log(`\n--- ${label} ---`);
 
   const isRawBody = typeof body === "string";
-  const res = await fetch(`${BACKEND}${endpoint}`, {
+  let res = await fetch(`${BACKEND}${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: isRawBody ? body : JSON.stringify(body),
@@ -76,6 +76,23 @@ async function buildAndSend(endpoint, body, label) {
   } catch {
     log(`  Backend: ${res.status} — ${text.slice(0, 200)}`);
     return { ok: false, status: res.status, data: { error: text } };
+  }
+
+  // Retry once on 502 (cold Render instance)
+  if (res.status === 502) {
+    log(`  Got 502, retrying after 2s...`);
+    await sleep(2000);
+    const retryRes = await fetch(`${BACKEND}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: isRawBody ? body : JSON.stringify(body),
+    });
+    const retryText = await retryRes.text();
+    try { data = JSON.parse(retryText); } catch {
+      log(`  Backend retry: ${retryRes.status} — ${retryText.slice(0, 200)}`);
+      return { ok: false, status: retryRes.status, data: { error: retryText } };
+    }
+    res = retryRes;
   }
 
   log(`  Backend: ${res.status} — ${data.message || data.error || "no message"}`);
@@ -162,11 +179,24 @@ async function sleep(ms) {
 
 // ============================================================
 log("╔══════════════════════════════════════════════════════════╗");
-log("║   EMBER TERMINAL — EXPANDED E2E TEST (24 tests)        ║");
+log("║   EMBER TERMINAL — EXPANDED E2E TEST (30 tests)        ║");
 log("╚══════════════════════════════════════════════════════════╝");
 log(`Wallet: ${WALLET}`);
 log(`Backend: ${BACKEND}`);
 log(`Time: ${new Date().toISOString()}`);
+
+// Warmup: wake Render instance
+log('\nWarming up backend...');
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    const warmupRes = await fetch(`${BACKEND}/api/markets`);
+    if (warmupRes.ok) { log(`Warmup OK (attempt ${attempt})`); break; }
+    log(`Warmup attempt ${attempt}: HTTP ${warmupRes.status}`);
+  } catch (e) {
+    log(`Warmup attempt ${attempt}: ${e.message}`);
+  }
+  if (attempt < 3) await sleep(2000);
+}
 
 // Pre-check: trader state
 const preState = await getTraderState();
@@ -766,6 +796,79 @@ if (finalCollateral > 10 && totalOrders === 0 && positionSymbols.length === 0) {
   pass("Final state acceptable", `collateral=${finalCollateral}, orders=${totalOrders}, positions=${positionSymbols.length}`);
 } else {
   fail("Final state verification", `collateral=${finalCollateral}, orders=${totalOrders}, positions=${positionSymbols.length}`);
+}
+
+// ============================================================
+//  SECTION E: New Market Coverage (Tests 25–30)
+// ============================================================
+log("\n╔══════════════════════════════════════════════════════════╗");
+log("║  SECTION E: New Market Coverage (DOGE, AAVE, SUI, ZEC, ║");
+log("║             TAO, BNB)                                    ║");
+log("╚══════════════════════════════════════════════════════════╝");
+
+// Each new market: fetch orderbook + build one limit order (far below market)
+const newMarkets = [
+  { symbol: "DOGE", price: 0.01, label: "DOGE" },
+  { symbol: "AAVE", price: 10,   label: "AAVE" },
+  { symbol: "SUI",  price: 0.1,  label: "SUI"  },
+  { symbol: "ZEC",  price: 5,    label: "ZEC"  },
+  { symbol: "TAO",  price: 10,   label: "TAO"  },
+  { symbol: "BNB",  price: 50,   label: "BNB"  },
+];
+
+for (const mkt of newMarkets) {
+  await sleep(1000);
+
+  // Orderbook check
+  log(`\n--- TEST ${testNum + 1}: ${mkt.label} orderbook + limit order ---`);
+  const obRes = await fetch(`${BACKEND}/api/orderbook/${mkt.symbol}-PERP`);
+  // Retry on 502
+  let obOk = obRes.ok;
+  let obStatus = obRes.status;
+  if (obStatus === 502) {
+    await sleep(2000);
+    const retry = await fetch(`${BACKEND}/api/orderbook/${mkt.symbol}-PERP`);
+    obOk = retry.ok;
+    obStatus = retry.status;
+  }
+
+  if (!obOk && obStatus !== 404) {
+    fail(`${mkt.label} orderbook fetch`, `HTTP ${obStatus}`);
+    continue;
+  }
+
+  // Limit order build
+  const limitRes = await buildAndSend("/api/tx/limit-order", {
+    authority: WALLET,
+    symbol: mkt.symbol,
+    side: "buy",
+    price: mkt.price,
+    size_lots: 1,
+  }, `${mkt.label} limit buy @ $${mkt.price}`);
+
+  if (limitRes.ok) {
+    pass(`${mkt.label} orderbook + limit order`, `ob=${obStatus}, sig=${limitRes.sig}`);
+
+    // Cancel the order to leave state clean
+    await sleep(2000);
+    const cancelState = await getTraderState();
+    const mktOrders = getCrossMarginAccount(cancelState)?.limitOrders?.[mkt.symbol] || [];
+    if (mktOrders.length > 0) {
+      const orderEntries = mktOrders.map(o => {
+        const price = o.price?.ui ?? mkt.price;
+        const seq = String(o.orderSequenceNumber ?? o.order_sequence_number);
+        return `{"price":${price},"order_sequence_number":${seq}}`;
+      });
+      const rawBody = `{"authority":"${WALLET}","symbol":"${mkt.symbol}","order_ids":[${orderEntries.join(",")}]}`;
+      const cancelRes = await buildAndSend("/api/tx/cancel-orders", rawBody, `Cancel ${mkt.label} orders`);
+      if (cancelRes.ok) log(`  Cleanup cancel OK: ${cancelRes.sig}`);
+    }
+  } else if (limitRes.status === 400) {
+    // 400 from symbol validation is a failure — market should be recognized
+    fail(`${mkt.label} orderbook + limit order`, `HTTP 400: ${JSON.stringify(limitRes.data)}`);
+  } else {
+    fail(`${mkt.label} orderbook + limit order`, JSON.stringify(limitRes.data || limitRes.simError || limitRes.onChainErr));
+  }
 }
 
 // ============================================================

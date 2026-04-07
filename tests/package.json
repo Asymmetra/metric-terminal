@@ -1,0 +1,9 @@
+{
+  "name": "ember-e2e-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "ws": "^8.16.0"
+  }
+}

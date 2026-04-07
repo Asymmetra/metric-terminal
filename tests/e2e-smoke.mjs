@@ -35,13 +35,26 @@ async function apiCall(endpoint, options = {}) {
   const url = `${BACKEND_URL}${endpoint}`;
   verbose(`Calling: ${options.method || 'GET'} ${url}`);
 
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options.headers
     }
   });
+
+  // Retry once on 502 (cold Render instance)
+  if (response.status === 502) {
+    verbose('Got 502, retrying after 2s...');
+    await new Promise(r => setTimeout(r, 2000));
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+      }
+    });
+  }
 
   const data = await response.json().catch(() => null);
   return { status: response.status, ok: response.ok, data };
@@ -75,6 +88,20 @@ async function runTests() {
   log(`Backend: ${BACKEND_URL}`);
   log(`Test Wallet: ${TEST_WALLET_PUBKEY}`);
   log('=================================\n');
+
+  // Warmup: wake Render instance (may be cold-sleeping)
+  log('Warming up backend...');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/markets`);
+      if (res.ok) { log(`Warmup OK (attempt ${attempt})`); break; }
+      log(`Warmup attempt ${attempt}: HTTP ${res.status}`);
+    } catch (e) {
+      log(`Warmup attempt ${attempt}: ${e.message}`);
+    }
+    if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
+  }
+  log('');
 
   // Test 1: Health check - Markets endpoint
   await testCase('Health Check - Markets', async () => {

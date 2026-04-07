@@ -28,7 +28,7 @@ function skip(name, detail) { skipped++; log(`  ⏭️  SKIP: ${name}${detail ? 
 
 async function buildAndSend(endpoint, body, label) {
   log(`\n--- ${label} ---`);
-  const res = await fetch(`${BACKEND}${endpoint}`, {
+  let res = await fetch(`${BACKEND}${endpoint}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -37,6 +37,21 @@ async function buildAndSend(endpoint, body, label) {
   try { data = JSON.parse(text); } catch {
     log(`  Backend: ${res.status} — ${text.slice(0, 300)}`);
     return { ok: false, status: res.status, data: { error: text } };
+  }
+  // Retry once on 502 (cold Render instance)
+  if (res.status === 502) {
+    log(`  Got 502, retrying after 2s...`);
+    await sleep(2000);
+    const retryRes = await fetch(`${BACKEND}${endpoint}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const retryText = await retryRes.text();
+    try { data = JSON.parse(retryText); } catch {
+      log(`  Backend retry: ${retryRes.status} — ${retryText.slice(0, 300)}`);
+      return { ok: false, status: retryRes.status, data: { error: retryText } };
+    }
+    res = retryRes;
   }
   log(`  Backend: ${res.status} — ${data.message || data.error || 'no message'}`);
   if (res.status !== 200 || !data.instructions) return { ok: false, status: res.status, data };
@@ -78,6 +93,19 @@ log('║  BLOCK D: TP/SL Bracket Orders E2E Test         ║');
 log('╚══════════════════════════════════════════════════╝');
 log(`Wallet: ${WALLET}`);
 log(`Time: ${new Date().toISOString()}`);
+
+// Warmup: wake Render instance
+log('\nWarming up backend...');
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    const warmupRes = await fetch(`${BACKEND}/api/markets`);
+    if (warmupRes.ok) { log(`Warmup OK (attempt ${attempt})`); break; }
+    log(`Warmup attempt ${attempt}: HTTP ${warmupRes.status}`);
+  } catch (e) {
+    log(`Warmup attempt ${attempt}: ${e.message}`);
+  }
+  if (attempt < 3) await sleep(2000);
+}
 
 // Pre-state
 const preState = await fetch(`${BACKEND}/api/trader/${WALLET}`).then(r => r.json());

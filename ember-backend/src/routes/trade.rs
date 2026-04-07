@@ -1219,6 +1219,9 @@ async fn place_multi_limit_orders(
     let ask_tuples: Vec<(f64, u64)> = req.asks.iter().map(|o| (o.price, o.size_lots)).collect();
 
     let metadata = state.metadata.read().await;
+    let _ = metadata
+        .get_market(&req.symbol)
+        .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder
@@ -1261,6 +1264,9 @@ async fn cancel_stop_loss(
     let trader_pda = TraderKey::derive_pda(&authority, 0, subaccount_index);
 
     let metadata = state.metadata.read().await;
+    let _ = metadata
+        .get_market(&req.symbol)
+        .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder
