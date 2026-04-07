@@ -171,6 +171,46 @@ pub struct CloseAllPositionsRequest {
     pub positions: Vec<ClosePositionItem>,
 }
 
+/// A single order in a multi-limit-order batch: price in USD and size in base lots.
+#[derive(Deserialize)]
+pub struct OrderEntry {
+    pub price: f64,
+    pub size_lots: u64,
+}
+
+#[derive(Deserialize)]
+pub struct MultiLimitOrderRequest {
+    pub authority: String,
+    pub symbol: String,
+    /// Bid (buy) orders — each with a USD price and size in base lots.
+    #[serde(default)]
+    pub bids: Vec<OrderEntry>,
+    /// Ask (sell) orders — each with a USD price and size in base lots.
+    #[serde(default)]
+    pub asks: Vec<OrderEntry>,
+    /// Whether orders should slide to top of book if they would cross.
+    /// Defaults to true.
+    #[serde(default = "default_slide")]
+    pub slide: Option<bool>,
+}
+
+fn default_slide() -> Option<bool> {
+    Some(true)
+}
+
+#[derive(Deserialize)]
+pub struct CancelStopLossRequest {
+    pub authority: String,
+    pub symbol: String,
+    /// Which TP/SL leg to cancel: "less_than" or "greater_than".
+    /// For longs: "less_than" = stop-loss, "greater_than" = take-profit.
+    /// For shorts: reversed.
+    pub direction: String,
+    /// Subaccount index (0 for cross, 1–100 for isolated). Defaults to 0.
+    #[serde(default)]
+    pub subaccount_index: Option<u8>,
+}
+
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
@@ -693,6 +733,18 @@ async fn isolated_limit_order(
 
     validate_size_lots(req.size_lots)?;
     validate_price(req.price)?;
+
+    // TP/SL bracket orders are architecturally unsupported on limit orders:
+    // place_stop_loss requires an existing open position, but a resting limit
+    // order hasn't filled at TX time — Phoenix returns error 7002.
+    if req.take_profit_price.is_some() || req.stop_loss_price.is_some() {
+        return Err(AppError::BadRequest(
+            "Bracket orders (TP/SL) are not supported for limit orders. \
+             Use a market order for bracket functionality."
+                .to_string(),
+        ));
+    }
+
     let authority = parse_authority(&req.authority)?;
     let side = parse_side(&req.side)?;
     let _collateral = build_collateral(req.collateral_usdc)?; // validate; transfer built locally below
@@ -1102,6 +1154,129 @@ async fn register_subaccount(
 }
 
 // ---------------------------------------------------------------------------
+// Multi-limit & cancel stop-loss handlers
+// ---------------------------------------------------------------------------
+
+fn parse_direction(s: &str) -> Result<Direction, AppError> {
+    match s.to_lowercase().as_str() {
+        "less_than" | "lessthan" | "lt" => Ok(Direction::LessThan),
+        "greater_than" | "greaterthan" | "gt" => Ok(Direction::GreaterThan),
+        _ => Err(AppError::BadRequest(format!(
+            "Invalid direction: {}. Use less_than or greater_than",
+            s
+        ))),
+    }
+}
+
+async fn place_multi_limit_orders(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MultiLimitOrderRequest>,
+) -> Result<Json<TxResponse>, AppError> {
+    tracing::info!(
+        "Building multi-limit order: {} bids + {} asks on {}",
+        req.bids.len(),
+        req.asks.len(),
+        req.symbol
+    );
+
+    if req.bids.is_empty() && req.asks.is_empty() {
+        return Err(AppError::BadRequest(
+            "At least one bid or ask is required".to_string(),
+        ));
+    }
+
+    const MAX_ORDERS: usize = 20;
+    let total = req.bids.len() + req.asks.len();
+    if total > MAX_ORDERS {
+        return Err(AppError::BadRequest(format!(
+            "Too many orders: {} (max {}). Reduce to fit in a single Solana transaction.",
+            total, MAX_ORDERS
+        )));
+    }
+
+    for (i, bid) in req.bids.iter().enumerate() {
+        validate_price(bid.price).map_err(|_| {
+            AppError::BadRequest(format!("bids[{}]: price must be a positive finite number", i))
+        })?;
+        validate_size_lots(bid.size_lots).map_err(|_| {
+            AppError::BadRequest(format!("bids[{}]: size_lots must be greater than 0", i))
+        })?;
+    }
+    for (i, ask) in req.asks.iter().enumerate() {
+        validate_price(ask.price).map_err(|_| {
+            AppError::BadRequest(format!("asks[{}]: price must be a positive finite number", i))
+        })?;
+        validate_size_lots(ask.size_lots).map_err(|_| {
+            AppError::BadRequest(format!("asks[{}]: size_lots must be greater than 0", i))
+        })?;
+    }
+
+    let authority = parse_authority(&req.authority)?;
+    let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
+    let slide = req.slide.unwrap_or(true);
+
+    let bid_tuples: Vec<(f64, u64)> = req.bids.iter().map(|o| (o.price, o.size_lots)).collect();
+    let ask_tuples: Vec<(f64, u64)> = req.asks.iter().map(|o| (o.price, o.size_lots)).collect();
+
+    let metadata = state.metadata.read().await;
+    let builder = PhoenixTxBuilder::new(&metadata);
+
+    let instructions = builder
+        .build_multi_limit_order(
+            authority,
+            trader_pda,
+            &req.symbol,
+            &bid_tuples,
+            &ask_tuples,
+            slide,
+        )
+        .map_err(|e| AppError::Phoenix(format!("Failed to build multi-limit order: {}", e)))?;
+
+    Ok(Json(serialize_instructions(
+        instructions,
+        format!(
+            "Multi-limit order: {} bids + {} asks on {}",
+            req.bids.len(),
+            req.asks.len(),
+            req.symbol
+        ),
+    )))
+}
+
+async fn cancel_stop_loss(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CancelStopLossRequest>,
+) -> Result<Json<TxResponse>, AppError> {
+    tracing::info!(
+        "Building cancel stop-loss: {} direction {} on {}",
+        req.authority,
+        req.direction,
+        req.symbol
+    );
+
+    let authority = parse_authority(&req.authority)?;
+    let direction = parse_direction(&req.direction)?;
+    let subaccount_index = req.subaccount_index.unwrap_or(0);
+    validate_subaccount_index(subaccount_index)?;
+    let trader_pda = TraderKey::derive_pda(&authority, 0, subaccount_index);
+
+    let metadata = state.metadata.read().await;
+    let builder = PhoenixTxBuilder::new(&metadata);
+
+    let instructions = builder
+        .build_cancel_bracket_leg(authority, trader_pda, &req.symbol, direction)
+        .map_err(|e| AppError::Phoenix(format!("Failed to build cancel stop-loss: {}", e)))?;
+
+    Ok(Json(serialize_instructions(
+        instructions,
+        format!(
+            "Cancel {} bracket leg on {}",
+            req.direction, req.symbol
+        ),
+    )))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1121,4 +1296,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/register-subaccount", post(register_subaccount))
         // Batch operations
         .route("/close-all-positions", post(close_all_positions))
+        // Multi-limit & bracket management
+        .route("/place-multi-limit-orders", post(place_multi_limit_orders))
+        .route("/cancel-stop-loss", post(cancel_stop_loss))
 }
