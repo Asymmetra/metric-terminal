@@ -3,11 +3,12 @@
  * TEST 24: SKR isolated-limit-order (isolatedOnly market)
  * TEST 25: SKR cross-margin rejection check (informational — P3 guard may not be live)
  */
+import 'dotenv/config';
 import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { readFileSync } from "fs";
 
 const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(".keys/test-wallet.json", "utf8"))));
-const conn = new Connection("https://asymmetr-solanam-0245.mainnet.rpcpool.com", "confirmed");
+const conn = new Connection(process.env.RPC_URL, "confirmed");
 const WALLET = kp.publicKey.toBase58();
 const BACKEND = "https://ember-backend-q4nf.onrender.com";
 

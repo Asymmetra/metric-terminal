@@ -15,6 +15,13 @@ phoenix-rise-sdk/rust/target/
 # SDK docs (not needed for builds)
 phoenix-sdk-docs/
 
+# Environment / secrets
+tests/.env
+*.env.local
+
+# API key patterns
+*rpcpool.com*
+
 # Debug artifacts
 phoenix-api-debug.md
 .keys/

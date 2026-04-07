@@ -10,6 +10,7 @@
  *   5. Submit + confirm on-chain
  *   6. Verify both positions are gone
  */
+import 'dotenv/config';
 import { readFileSync } from "fs";
 import {
   Connection,
@@ -21,8 +22,7 @@ import {
 } from "@solana/web3.js";
 
 const BACKEND = "https://ember-backend-q4nf.onrender.com";
-const RPC_URL =
-  "https://asymmetr-solanam-0245.mainnet.rpcpool.com";
+const RPC_URL = process.env.RPC_URL;
 const KEYPAIR_PATH =
   "/Users/liamdig/Desktop/sandbox/ember-terminal/.keys/test-wallet.json";
 

@@ -44,6 +44,21 @@ async fn main() -> Result<()> {
     )
     .await;
 
+    // Periodic metadata refresh (every 5 minutes)
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                if let Err(e) = state.refresh_metadata().await {
+                    tracing::warn!("Metadata refresh failed: {}", e);
+                }
+            }
+        });
+    }
+
     let cors = {
         let allowed_origins = std::env::var("CORS_ORIGIN")
             .unwrap_or_else(|_| "http://localhost:3000".to_string());

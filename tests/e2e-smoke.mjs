@@ -6,6 +6,7 @@
  * Usage: node e2e-smoke.mjs [--verbose]
  */
 
+import 'dotenv/config';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -15,7 +16,7 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const BACKEND_URL = process.env.BACKEND_URL || 'https://ember-backend-q4nf.onrender.com';
-const RPC_URL = process.env.RPC_URL || 'https://api.devnet.solana.com';
+const RPC_URL = process.env.RPC_URL;
 const TEST_WALLET_PUBKEY = 'HP29cxeYsvErDq51zPmUdWp6j12GdLFQo97JJeQPC8x';
 
 const VERBOSE = process.argv.includes('--verbose');

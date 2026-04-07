@@ -532,6 +532,9 @@ async fn market_order(
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::BadRequest(format!("Unknown symbol: {}", req.symbol))
+    })?;
     let metadata = state.metadata.read().await;
 
     if metadata.is_isolated_only(&req.symbol) {
@@ -610,6 +613,9 @@ async fn limit_order(
     let trader_pda = TraderKey::derive_pda(&authority, 0, 0);
     let bracket = build_bracket(req.stop_loss_price, req.take_profit_price)?;
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::BadRequest(format!("Unknown symbol: {}", req.symbol))
+    })?;
     let metadata = state.metadata.read().await;
 
     if metadata.is_isolated_only(&req.symbol) {
@@ -668,6 +674,9 @@ async fn cancel_orders(
     validate_subaccount_index(subaccount_index)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, subaccount_index);
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::MarketNotFound(req.symbol.clone())
+    })?;
     let metadata = state.metadata.read().await;
 
     let calc = metadata
@@ -951,6 +960,9 @@ async fn isolated_limit_order(
             )
         })?;
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::BadRequest(format!("Unknown symbol: {}", req.symbol))
+    })?;
     let metadata = state.metadata.read().await;
     let builder = PhoenixTxBuilder::new(&metadata);
     let mut all_instructions: Vec<Instruction> = Vec::new();
@@ -1119,6 +1131,13 @@ async fn close_all_positions(
     }
 
     let authority = parse_authority(&req.authority)?;
+
+    // Ensure all position symbols are known (refresh-on-miss)
+    for pos in &req.positions {
+        state.ensure_market(&pos.symbol).await.map_err(|_| {
+            AppError::BadRequest(format!("Unknown symbol: {}", pos.symbol))
+        })?;
+    }
 
     // Separate positions by margin mode
     let mut cross_positions: Vec<&ClosePositionItem> = Vec::new();
@@ -1443,10 +1462,10 @@ async fn place_multi_limit_orders(
     let bid_tuples: Vec<(f64, u64)> = req.bids.iter().map(|o| (o.price, o.size_lots)).collect();
     let ask_tuples: Vec<(f64, u64)> = req.asks.iter().map(|o| (o.price, o.size_lots)).collect();
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::BadRequest(format!("Unknown symbol: {}", req.symbol))
+    })?;
     let metadata = state.metadata.read().await;
-    let _ = metadata
-        .get_market(&req.symbol)
-        .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder
@@ -1488,10 +1507,10 @@ async fn cancel_stop_loss(
     validate_subaccount_index(subaccount_index)?;
     let trader_pda = TraderKey::derive_pda(&authority, 0, subaccount_index);
 
+    state.ensure_market(&req.symbol).await.map_err(|_| {
+        AppError::BadRequest(format!("Unknown symbol: {}", req.symbol))
+    })?;
     let metadata = state.metadata.read().await;
-    let _ = metadata
-        .get_market(&req.symbol)
-        .ok_or_else(|| AppError::BadRequest(format!("Unknown symbol: {}", req.symbol)))?;
     let builder = PhoenixTxBuilder::new(&metadata);
 
     let instructions = builder

@@ -83,6 +83,45 @@ impl AppState {
         })
     }
 
+    /// Re-fetch exchange config from Phoenix API and update metadata + markets.
+    pub async fn refresh_metadata(&self) -> Result<()> {
+        let exchange = self.http_client.get_exchange().await?;
+        let new_markets = exchange.markets.clone();
+        let symbols: Vec<String> = new_markets.iter().map(|m| m.symbol.clone()).collect();
+        let new_metadata = PhoenixMetadata::new(exchange.into());
+
+        {
+            let mut metadata = self.metadata.write().await;
+            *metadata = new_metadata;
+        }
+        {
+            let mut markets = self.markets.write().await;
+            *markets = new_markets;
+        }
+
+        tracing::info!("Metadata refreshed — {} markets: {:?}", symbols.len(), symbols);
+        Ok(())
+    }
+
+    /// Look up a market symbol; if not found, refresh metadata once and retry.
+    pub async fn ensure_market(&self, symbol: &str) -> Result<()> {
+        {
+            let metadata = self.metadata.read().await;
+            if metadata.get_market(symbol).is_some() {
+                return Ok(());
+            }
+        }
+        tracing::info!("Market '{}' not found — refreshing metadata", symbol);
+        self.refresh_metadata().await?;
+        {
+            let metadata = self.metadata.read().await;
+            metadata
+                .get_market(symbol)
+                .ok_or_else(|| anyhow::anyhow!("Unknown symbol after refresh: {}", symbol))?;
+        }
+        Ok(())
+    }
+
     pub async fn shutdown(&self) {
         self.ws_client.shutdown();
         tracing::info!("AppState shutdown complete");

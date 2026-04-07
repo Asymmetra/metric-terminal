@@ -3,11 +3,12 @@
  * Block B v2: CANCEL-BUG-1 direct test
  * Fixed to find cross-margin account by traderSubaccountIndex=0, not array position.
  */
+import 'dotenv/config';
 import { readFileSync } from 'fs';
 import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 
 const BACKEND = 'https://ember-backend-q4nf.onrender.com';
-const RPC_URL = 'https://asymmetr-solanam-0245.mainnet.rpcpool.com';
+const RPC_URL = process.env.RPC_URL;
 const KEYPAIR_PATH = '/Users/liamdig/Desktop/sandbox/ember-terminal/.keys/test-wallet.json';
 
 const secret = JSON.parse(readFileSync(KEYPAIR_PATH, 'utf8'));
