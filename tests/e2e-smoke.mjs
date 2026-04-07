@@ -35,25 +35,22 @@ async function apiCall(endpoint, options = {}) {
   const url = `${BACKEND_URL}${endpoint}`;
   verbose(`Calling: ${options.method || 'GET'} ${url}`);
 
-  let response = await fetch(url, {
+  const fetchOpts = {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options.headers
     }
-  });
+  };
 
-  // Retry once on 502 (cold Render instance)
-  if (response.status === 502) {
-    verbose('Got 502, retrying after 2s...');
-    await new Promise(r => setTimeout(r, 2000));
-    response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
-    });
+  let response = await fetch(url, fetchOpts);
+
+  // Retry up to 3 times on 502 (cold Render instance)
+  for (let retry = 1; retry <= 3 && response.status === 502; retry++) {
+    const delay = retry * 3000; // 3s, 6s, 9s
+    verbose(`Got 502, retry ${retry}/3 after ${delay / 1000}s...`);
+    await new Promise(r => setTimeout(r, delay));
+    response = await fetch(url, fetchOpts);
   }
 
   const data = await response.json().catch(() => null);
@@ -91,7 +88,7 @@ async function runTests() {
 
   // Warmup: wake Render instance (may be cold-sleeping)
   log('Warming up backend...');
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const res = await fetch(`${BACKEND_URL}/api/markets`);
       if (res.ok) { log(`Warmup OK (attempt ${attempt})`); break; }
@@ -99,7 +96,7 @@ async function runTests() {
     } catch (e) {
       log(`Warmup attempt ${attempt}: ${e.message}`);
     }
-    if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
+    if (attempt < 5) await new Promise(r => setTimeout(r, 3000));
   }
   log('');
 
@@ -125,8 +122,8 @@ async function runTests() {
   });
 
   // Test 3: Orderbook data
-  await testCase('Orderbook Data - SOL-PERP', async () => {
-    const { ok, data, status } = await apiCall('/api/orderbook/SOL-PERP');
+  await testCase('Orderbook Data - SOL', async () => {
+    const { ok, data, status } = await apiCall('/api/orderbook/SOL');
     verbose(`Response status: ${status}`);
     verbose(`Orderbook bids: ${data?.bids?.length || 0}, asks: ${data?.asks?.length || 0}`);
     assert(ok || status === 404, `Orderbook endpoint failed with status ${status}`);
@@ -182,7 +179,7 @@ async function runTests() {
       method: 'POST',
       body: JSON.stringify({
         authority: TEST_WALLET_PUBKEY,
-        symbol: 'SOL-PERP',
+        symbol: 'SOL',
         side: 'buy',
         size_lots: 100000000
       })
@@ -200,7 +197,7 @@ async function runTests() {
       method: 'POST',
       body: JSON.stringify({
         authority: TEST_WALLET_PUBKEY,
-        symbol: 'SOL-PERP',
+        symbol: 'SOL',
         side: 'buy',
         price: 100.00,
         size_lots: 100000000
@@ -214,8 +211,8 @@ async function runTests() {
   });
 
   // Test 8: Candles data
-  await testCase('Candles Data - SOL-PERP', async () => {
-    const { ok, data, status } = await apiCall('/api/candles/SOL-PERP?timeframe=1m');
+  await testCase('Candles Data - SOL', async () => {
+    const { ok, data, status } = await apiCall('/api/candles/SOL?timeframe=1m');
     verbose(`Response status: ${status}`);
     verbose(`Candles count: ${data?.length || 0}`);
     assert(ok || status === 404, `Candles endpoint failed with status ${status}`);

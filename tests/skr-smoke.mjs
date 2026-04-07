@@ -21,10 +21,11 @@ async function buildAndSend(endpoint, body, label) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
-  // Retry once on 502 (cold Render instance)
-  if (res.status === 502) {
-    console.log(`  Got 502, retrying after 2s...`);
-    await sleep(2000);
+  // Retry up to 3 times on 502 (cold Render instance)
+  for (let retry = 1; retry <= 3 && res.status === 502; retry++) {
+    const delay = retry * 3000;
+    console.log(`  Got 502, retry ${retry}/3 after ${delay / 1000}s...`);
+    await sleep(delay);
     const retryRes = await fetch(`${BACKEND}${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

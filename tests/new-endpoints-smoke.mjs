@@ -24,10 +24,11 @@ async function apiCall(endpoint, options = {}) {
     headers: { 'Content-Type': 'application/json', ...options.headers }
   });
 
-  // Retry once on 502 (cold Render instance)
-  if (response.status === 502) {
-    verbose('Got 502, retrying after 2s...');
-    await new Promise(r => setTimeout(r, 2000));
+  // Retry up to 3 times on 502 (cold Render instance)
+  for (let retry = 1; retry <= 3 && response.status === 502; retry++) {
+    const delay = retry * 3000;
+    verbose(`Got 502, retry ${retry}/3 after ${delay / 1000}s...`);
+    await new Promise(r => setTimeout(r, delay));
     response = await fetch(url, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...options.headers }

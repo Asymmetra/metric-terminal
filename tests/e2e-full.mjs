@@ -76,10 +76,11 @@ async function buildAndSend(endpoint, body, label) {
     return { ok: false, status: res.status, data: { error: text } };
   }
 
-  // Retry once on 502 (cold Render instance)
-  if (res.status === 502) {
-    log(`  Got 502, retrying after 2s...`);
-    await sleep(2000);
+  // Retry up to 3 times on 502 (cold Render instance)
+  for (let retry = 1; retry <= 3 && res.status === 502; retry++) {
+    const delay = retry * 3000;
+    log(`  Got 502, retry ${retry}/3 after ${delay / 1000}s...`);
+    await sleep(delay);
     const retryRes = await fetch(`${BACKEND}${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -87,8 +88,10 @@ async function buildAndSend(endpoint, body, label) {
     });
     const retryText = await retryRes.text();
     try { data = JSON.parse(retryText); } catch {
-      log(`  Backend retry: ${retryRes.status} — ${retryText.slice(0, 200)}`);
-      return { ok: false, status: retryRes.status, data: { error: retryText } };
+      log(`  Backend retry ${retry}: ${retryRes.status} — ${retryText.slice(0, 200)}`);
+      if (retry === 3) return { ok: false, status: retryRes.status, data: { error: retryText } };
+      res = retryRes;
+      continue;
     }
     res = retryRes;
   }
