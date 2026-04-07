@@ -116,23 +116,24 @@ if (!limitResult.ok) {
 }
 pass('Place limit order on-chain', `sig=${limitResult.sig}`);
 
-// Step 2: Wait for Phoenix state cache to propagate
-log('\nWaiting 20s for Phoenix state cache to update...');
-await sleep(20000);
-
-// Step 3: Fetch trader state
-const stateRes = await fetch(`${BACKEND}/api/trader/${WALLET}`);
-const state = await stateRes.json();
-const solOrders = state.accounts?.[0]?.limitOrders?.SOL || [];
-log(`\nState after wait: ${solOrders.length} SOL order(s) in limitOrders.SOL`);
+// Step 2: Poll for Phoenix state cache propagation (up to 45s)
+log('\nPolling for Phoenix state cache to update...');
+let solOrders = [];
+let state;
+for (let attempt = 1; attempt <= 9; attempt++) {
+  await sleep(5000);
+  const stateRes = await fetch(`${BACKEND}/api/trader/${WALLET}`);
+  state = await stateRes.json();
+  solOrders = state.accounts?.[0]?.limitOrders?.SOL || [];
+  log(`  Poll ${attempt}/9 (${attempt * 5}s): ${solOrders.length} SOL order(s)`);
+  if (solOrders.length > 0) break;
+}
 
 if (solOrders.length === 0) {
-  // State still lagged — report and exit
   const allKeys = Object.keys(state.accounts?.[0]?.limitOrders || {});
   log(`limitOrders keys: ${JSON.stringify(allKeys)}`);
   log(`limitOrders.SOL raw: ${JSON.stringify(state.accounts?.[0]?.limitOrders?.SOL)}`);
-  fail('Read limit order from state (20s wait)', 'State cache still lagged — no order IDs visible. Limit TX confirmed on-chain but state not updated.');
-  log('\nNOTE: Backend Phoenix state cache lag prevents cancel test. Limit TX confirmed, cancel not testable this run.');
+  fail('Read limit order from state (45s poll)', 'State cache severely lagged — no order IDs visible after polling.');
   log(`Limit sig: ${limitResult.sig}`);
   process.exit(1);
 }

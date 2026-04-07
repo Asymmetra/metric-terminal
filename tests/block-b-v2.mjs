@@ -147,18 +147,21 @@ if (!limitResult.ok) {
 }
 pass('Place limit order on-chain', `sig=${limitResult.sig}`);
 
-// Step 4: Wait for state propagation
-log('\nWaiting 10s for state cache...');
-await sleep(10000);
-
-// Step 5: Read state, find cross-margin account by subaccountIndex=0
-const state2 = await fetch(`${BACKEND}/api/trader/${WALLET}`).then(r => r.json());
-const crossAcct2 = getCrossMarginAccount(state2);
-const solOrders = crossAcct2?.limitOrders?.SOL || [];
-log(`\nCross-margin (sub=0) orders after wait: ${solOrders.length}`);
+// Step 4: Poll for state propagation (up to 45s)
+log('\nPolling for state cache propagation...');
+let solOrders = [];
+let state2;
+for (let attempt = 1; attempt <= 9; attempt++) {
+  await sleep(5000);
+  state2 = await fetch(`${BACKEND}/api/trader/${WALLET}`).then(r => r.json());
+  const crossAcct2 = getCrossMarginAccount(state2);
+  solOrders = crossAcct2?.limitOrders?.SOL || [];
+  log(`  Poll ${attempt}/9 (${attempt * 5}s): ${solOrders.length} SOL order(s)`);
+  if (solOrders.length > 0) break;
+}
 
 if (solOrders.length === 0) {
-  fail('Read limit order from cross-margin account', 'No orders in sub=0 even with correct account lookup');
+  fail('Read limit order from cross-margin account', 'No orders after 45s polling — state cache severely lagged');
   process.exit(1);
 }
 
