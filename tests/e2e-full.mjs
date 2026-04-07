@@ -245,12 +245,17 @@ if (limitBuy.ok) {
 }
 
 // ============================================================
-// TEST 3: Verify order in trader state
+// TEST 3: Verify order in trader state (poll up to 30s)
 // ============================================================
-await sleep(2000);
-const stateAfterLimit = await getTraderState();
-const solOrders = getCrossMarginAccount(stateAfterLimit)?.limitOrders?.SOL || [];
 log(`\n--- TEST 3: Verify limit order exists ---`);
+let stateAfterLimit, solOrders = [];
+for (let attempt = 1; attempt <= 6; attempt++) {
+  await sleep(5000);
+  stateAfterLimit = await getTraderState();
+  solOrders = getCrossMarginAccount(stateAfterLimit)?.limitOrders?.SOL || [];
+  log(`  Poll ${attempt}/6 (${attempt * 5}s): ${solOrders.length} SOL order(s)`);
+  if (solOrders.length > 0) break;
+}
 
 if (solOrders.length > 0) {
   pass("Limit order visible in trader state", `${solOrders.length} order(s) found`);
@@ -296,16 +301,21 @@ if (ordersForCancel.length > 0) {
 }
 
 // ============================================================
-// TEST 5: Verify order cancelled
+// TEST 5: Verify order cancelled (poll up to 30s)
 // ============================================================
-await sleep(2000);
-const stateAfterCancel = await getTraderState();
-const solOrdersAfter = getCrossMarginAccount(stateAfterCancel)?.limitOrders?.SOL || [];
 log(`\n--- TEST 5: Verify order cancelled ---`);
+let solOrdersAfter;
+for (let attempt = 1; attempt <= 6; attempt++) {
+  await sleep(5000);
+  const stateAfterCancel = await getTraderState();
+  solOrdersAfter = getCrossMarginAccount(stateAfterCancel)?.limitOrders?.SOL || [];
+  log(`  Poll ${attempt}/6 (${attempt * 5}s): ${solOrdersAfter.length} SOL order(s)`);
+  if (solOrdersAfter.length === 0) break;
+}
 if (solOrdersAfter.length === 0) {
   pass("Order cancelled — no remaining SOL orders", "");
 } else {
-  fail("Order cancelled", `Still have ${solOrdersAfter.length} SOL orders`);
+  fail("Order cancelled", `Still have ${solOrdersAfter.length} SOL orders after 30s polling`);
 }
 
 // ============================================================
