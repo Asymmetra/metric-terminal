@@ -16,7 +16,7 @@ async function fetchApi<T>(path: string, options?: RequestInit & { signal?: Abor
         ...options,
       });
     } catch (networkErr: any) {
-      console.warn(`[fetchApi] Network error on ${url} (attempt ${attempt + 1}/${MAX_ATTEMPTS}):`, networkErr?.message);
+      console.warn(`[fetchApi] Network error on ${url} (attempt ${attempt + 1}/${MAX_ATTEMPTS}), API_BASE_URL: ${API_BASE_URL}`, networkErr?.message);
       lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
       if (attempt < MAX_ATTEMPTS - 1) {
         await new Promise((r) => setTimeout(r, BASE_DELAY_MS * 2 ** attempt));
@@ -32,6 +32,7 @@ async function fetchApi<T>(path: string, options?: RequestInit & { signal?: Abor
     (lastError as any).status = res.status;
 
     if (!RETRY_STATUS_CODES.includes(res.status) || attempt === MAX_ATTEMPTS - 1) {
+      console.warn(`[fetchApi] HTTP ${res.status} on ${url}, API_BASE_URL: ${API_BASE_URL}`);
       throw lastError;
     }
 
