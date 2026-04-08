@@ -1,17 +1,32 @@
 import { API_BASE_URL } from "./constants";
 
+const RETRY_STATUS_CODES = [502, 503];
+const MAX_ATTEMPTS = 3;
+const BASE_DELAY_MS = 500;
+
 async function fetchApi<T>(path: string, options?: RequestInit & { signal?: AbortSignal }): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
+  let lastError: Error & { status?: number } = new Error("fetch failed");
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+
+    if (res.ok) return res.json();
+
     const error = await res.json().catch(() => ({ error: res.statusText }));
-    const err = new Error(error.error || res.statusText) as Error & { status: number };
-    err.status = res.status;
-    throw err;
+    lastError = new Error(error.error || res.statusText) as Error & { status: number };
+    (lastError as any).status = res.status;
+
+    if (!RETRY_STATUS_CODES.includes(res.status) || attempt === MAX_ATTEMPTS - 1) {
+      throw lastError;
+    }
+
+    await new Promise((r) => setTimeout(r, BASE_DELAY_MS * 2 ** attempt));
   }
-  return res.json();
+
+  throw lastError;
 }
 
 export const api = {
