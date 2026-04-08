@@ -5,13 +5,25 @@ const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 500;
 
 async function fetchApi<T>(path: string, options?: RequestInit & { signal?: AbortSignal }): Promise<T> {
+  const url = `${API_BASE_URL}${path}`;
   let lastError: Error & { status?: number } = new Error("fetch failed");
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+    } catch (networkErr: any) {
+      console.warn(`[fetchApi] Network error on ${url} (attempt ${attempt + 1}/${MAX_ATTEMPTS}):`, networkErr?.message);
+      lastError = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
+      throw lastError;
+    }
 
     if (res.ok) return res.json();
 
