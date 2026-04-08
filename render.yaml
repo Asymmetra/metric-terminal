@@ -14,8 +14,8 @@ services:
       - key: RUST_LOG
         value: ember_backend=info
       - key: PHOENIX_API_URL
-        value: https://public-api.phoenix.trade
+        value: https://perp-api.phoenix.trade
       - key: PHOENIX_WS_URL
-        value: wss://public-api.phoenix.trade/ws
+        value: wss://perp-api.phoenix.trade/ws
       - key: PHOENIX_API_KEY
         sync: false

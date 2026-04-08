@@ -263,8 +263,8 @@ After initial setup, both platforms auto-deploy on `git push origin main`. No ma
 |----------|---------|-------------|
 | `PORT` | `3001` | Server port (Render uses 10000) |
 | `CORS_ORIGIN` | `http://localhost:3000` | Allowed origin(s), comma-separated |
-| `PHOENIX_API_URL` | `https://public-api.phoenix.trade` | Phoenix REST API |
-| `PHOENIX_WS_URL` | `wss://public-api.phoenix.trade/ws` | Phoenix WebSocket |
+| `PHOENIX_API_URL` | `https://perp-api.phoenix.trade` | Phoenix REST API |
+| `PHOENIX_WS_URL` | `wss://perp-api.phoenix.trade/ws` | Phoenix WebSocket |
 | `PHOENIX_API_KEY` | — | Optional API key |
 | `RUST_LOG` | `ember_backend=info` | Log level filter |
 
