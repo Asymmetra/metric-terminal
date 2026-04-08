@@ -52,6 +52,7 @@ export function useWebSocket() {
       .then((candles) => {
         if (candles?.[0]) {
           useStatsStore.getState().setOpen24h(candles[0].open);
+          wsClient.lastMessageAt["candles"] = Date.now();
         }
       })
       .catch((err) => {
@@ -69,6 +70,20 @@ export function useWebSocket() {
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("[REST] Orderbook fetch failed:", err);
+      });
+
+    // Fetch initial recent trades via REST
+    api.getRecentTrades(selectedSymbol, signal)
+      .then((data) => {
+        if (data.trades?.length) {
+          addTrades(data.trades);
+          wsClient.lastMessageAt["trades"] = Date.now();
+        }
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        // Endpoint may not exist on older backend — non-fatal
+        console.debug("[REST] Recent trades fetch failed:", err);
       });
 
     const unsubOrderbook = wsClient.subscribe(

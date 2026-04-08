@@ -116,6 +116,57 @@ async fn main() -> Result<()> {
                 }
             }
         }))
+        .route("/health/relay", get({
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                async move {
+                    let markets = state.markets.read().await;
+                    let symbols: Vec<String> = markets.iter().map(|m| m.symbol.clone()).collect();
+                    drop(markets);
+
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+
+                    let statuses = state.market_cache.relay_status(&symbols);
+                    let mut dead_channels: Vec<serde_json::Value> = Vec::new();
+                    for s in &statuses {
+                        for (ch, ts) in [
+                            ("orderbook", s.orderbook_last_ms),
+                            ("trades", s.trades_last_ms),
+                            ("stats", s.stats_last_ms),
+                            ("candles", s.candles_last_ms),
+                        ] {
+                            match ts {
+                                Some(t) if (now_ms - t) > 300_000 => {
+                                    dead_channels.push(serde_json::json!({
+                                        "symbol": s.symbol, "channel": ch,
+                                        "age_secs": (now_ms - t) / 1000
+                                    }));
+                                }
+                                None => {
+                                    dead_channels.push(serde_json::json!({
+                                        "symbol": s.symbol, "channel": ch,
+                                        "age_secs": null
+                                    }));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let status = if dead_channels.is_empty() { "ok" } else { "degraded" };
+                    axum::Json(serde_json::json!({
+                        "status": status,
+                        "dead_channels": dead_channels.len(),
+                        "dead": dead_channels,
+                        "all": statuses,
+                    }))
+                }
+            }
+        }))
         .nest("/api", routes::api_router())
         .route("/ws", get(ws::handler::ws_upgrade))
         .with_state(state.clone())

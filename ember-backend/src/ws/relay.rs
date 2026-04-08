@@ -94,6 +94,7 @@ async fn start_market_relay(
                                 .collect();
 
                             mcache.update_orderbook(&sym, bids.clone(), asks.clone());
+                            mcache.touch_relay("orderbook", &sym);
 
                             let msg = WsServerMessage {
                                 channel: "orderbook".to_string(),
@@ -129,6 +130,7 @@ async fn start_market_relay(
     {
         let ws = ws_client.clone();
         let bcast = broadcast.clone();
+        let cache = cache.clone();
         let sym = symbol.to_string();
         let known = known_traders.clone();
         tokio::spawn(async move {
@@ -194,6 +196,8 @@ async fn start_market_relay(
                                 .collect();
 
                             if !trades.is_empty() {
+                                cache.touch_relay("trades", &sym);
+                                cache.push_trades(&sym, &trades);
                                 let msg = WsServerMessage {
                                     channel: "trades".to_string(),
                                     symbol: Some(sym.clone()),
@@ -226,6 +230,7 @@ async fn start_market_relay(
     {
         let ws = ws_client.clone();
         let bcast = broadcast.clone();
+        let cache = cache.clone();
         let sym = symbol.to_string();
         tokio::spawn(async move {
             let mut backoff_secs = 1u64;
@@ -254,6 +259,7 @@ async fn start_market_relay(
                     .await
                     {
                         Ok(Some(update)) => {
+                            cache.touch_relay("stats", &sym);
                             let msg = WsServerMessage {
                                 channel: "stats".to_string(),
                                 symbol: Some(sym.clone()),
@@ -292,6 +298,7 @@ async fn start_market_relay(
     {
         let ws = ws_client.clone();
         let bcast = broadcast.clone();
+        let cache = cache.clone();
         let sym = symbol.to_string();
         tokio::spawn(async move {
             let mut backoff_secs = 1u64;
@@ -321,6 +328,7 @@ async fn start_market_relay(
                     .await
                     {
                         Ok(Some(candle)) => {
+                            cache.touch_relay("candles", &sym);
                             let msg = WsServerMessage {
                                 channel: "candles".to_string(),
                                 symbol: Some(sym.clone()),

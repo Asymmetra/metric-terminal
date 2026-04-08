@@ -48,6 +48,8 @@ export const api = {
   getOrderbook: (symbol: string, signal?: AbortSignal) => fetchApi<any>(`/api/orderbook/${symbol}`, { signal }),
   getCandles: (symbol: string, timeframe = "1m", limit = 300, signal?: AbortSignal) =>
     fetchApi<any[]>(`/api/candles/${symbol}?timeframe=${timeframe}&limit=${limit}`, { signal }),
+  getRecentTrades: (symbol: string, signal?: AbortSignal) =>
+    fetchApi<{ trades: any[] }>(`/api/trades/${symbol}/recent`, { signal }),
   getTrader: (pubkey: string) => fetchApi<any>(`/api/trader/${pubkey}`),
   getTraderOrders: (pubkey: string, opts?: { cursor?: string; limit?: number }) => {
     const params = new URLSearchParams();
