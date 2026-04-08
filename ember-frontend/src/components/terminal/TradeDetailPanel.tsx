@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { useStatsStore } from "@/stores/statsStore";
+import { useTraderStore } from "@/stores/traderStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { formatPrice, formatSize, formatUsd } from "@/lib/format";
 import clsx from "clsx";
@@ -110,10 +111,17 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
     }
   };
 
-  // Derived values
-  const collateral = data.allocated_collateral > 0
-    ? data.allocated_collateral
-    : data.initial_margin > 0 ? data.initial_margin : 0;
+  // Derived values — use actual account collateral for leverage, not initial_margin
+  // (initial_margin = notional / max_leverage, so it always yields max_leverage)
+  const crossCollateral = useTraderStore((s) => s.collateral);
+  const allAccounts = useTraderStore((s) => s.allAccounts);
+  const isoAccount = data.margin_mode === "isolated"
+    ? allAccounts.find((a) => a.traderSubaccountIndex === data.subaccount_index)
+    : null;
+  const isoCollateral = isoAccount?.effectiveCollateral;
+  const collateral = data.margin_mode === "isolated" && isoCollateral
+    ? parseFloat(typeof isoCollateral === "object" && isoCollateral.ui != null ? isoCollateral.ui : String(isoCollateral)) || 0
+    : crossCollateral;
   const notional = data.position_value > 0 ? data.position_value : data.size * liveMarkPrice;
   const effLeverage = collateral > 0 ? notional / collateral : 0;
   const roi = collateral > 0 ? (data.unrealized_pnl / collateral) * 100 : 0;

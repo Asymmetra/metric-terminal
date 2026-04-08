@@ -65,6 +65,8 @@ export function Positions() {
   const rawPositions = useTraderStore((s) => s.positions);
   const limitOrders = useTraderStore((s) => s.limitOrders);
   const lastRefresh = useTraderStore((s) => s.lastRefresh);
+  const crossCollateral = useTraderStore((s) => s.collateral);
+  const allAccounts = useTraderStore((s) => s.allAccounts);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
@@ -99,7 +101,7 @@ export function Positions() {
   // Inject live mark_price and recompute unrealized PnL from current prices.
   // The REST snapshot PnL freezes at fetch time — this keeps it live.
   const positions = useMemo(() =>
-    rawPositions.map((pos) => {
+    rawPositions.filter((pos) => pos.size > 0).map((pos) => {
       const liveMarkPrice = markPrices[pos.symbol] ?? pos.mark_price;
       const isLong = pos.side.toLowerCase() === "long";
       // Recompute PnL: (mark - entry) * size for longs, (entry - mark) * size for shorts
@@ -176,8 +178,9 @@ export function Positions() {
       const lotSize = 10 ** -(market.baseLotsDecimals || 2);
       const sizeLots = Math.round(pos.size / lotSize);
       const closeSide = pos.side.toLowerCase() === "long" ? "ask" : "bid";
-      const closeParams = { symbol: pos.symbol, side: closeSide, size_lots: sizeLots };
+      const closeParams: any = { symbol: pos.symbol, side: closeSide, size_lots: sizeLots };
       if (pos.margin_mode === "isolated") {
+        closeParams.subaccount_index = pos.subaccount_index;
         await submitIsolatedOrder("market", closeParams);
       } else {
         await submitOrder("market", closeParams);
@@ -311,10 +314,15 @@ export function Positions() {
                     const isLong = pos.side.toLowerCase() === "long";
                     const posKey = `${pos.symbol}-${pos.subaccount_index}`;
 
-                    // Collateral: use initial_margin (available for all positions from SDK)
-                    const collateral = pos.allocated_collateral > 0
-                      ? pos.allocated_collateral
-                      : pos.initial_margin > 0 ? pos.initial_margin : 0;
+                    // Collateral: for isolated positions use the subaccount's effective collateral;
+                    // for cross-margin use the total cross collateral pool.
+                    const isoAccount = pos.margin_mode === "isolated"
+                      ? allAccounts.find((a) => a.traderSubaccountIndex === pos.subaccount_index)
+                      : null;
+                    const isoCollateral = isoAccount?.effectiveCollateral;
+                    const collateral = pos.margin_mode === "isolated" && isoCollateral
+                      ? parseFloat(typeof isoCollateral === "object" && isoCollateral.ui != null ? isoCollateral.ui : String(isoCollateral)) || 0
+                      : crossCollateral;
 
                     // ROI%: PnL / collateral backing this position
                     const roi = collateral > 0
@@ -327,7 +335,8 @@ export function Positions() {
                       ? Math.abs((pos.mark_price - liqPrice) / pos.mark_price) * 100
                       : null;
 
-                    // Effective leverage
+                    // Effective leverage: notional / actual collateral backing the position.
+                    // For cross-margin, this is portfolio leverage (total notional / total collateral).
                     const notional = pos.position_value > 0 ? pos.position_value : pos.size * pos.mark_price;
                     const effLeverage = collateral > 0 ? notional / collateral : 0;
 
