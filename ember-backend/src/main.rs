@@ -75,6 +75,47 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/health/ws", get({
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                async move {
+                    let markets = state.markets.read().await;
+                    let symbols: Vec<String> = markets.iter().map(|m| m.symbol.clone()).collect();
+                    drop(markets);
+
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+
+                    let mut stale = Vec::new();
+                    let mut fresh = Vec::new();
+                    for sym in &symbols {
+                        if let Some(snap) = state.market_cache.get_orderbook(sym) {
+                            let age_secs = (now_ms - snap.timestamp) / 1000;
+                            if age_secs > 120 {
+                                stale.push(serde_json::json!({"symbol": sym, "age_secs": age_secs}));
+                            } else {
+                                fresh.push(serde_json::json!({"symbol": sym, "age_secs": age_secs}));
+                            }
+                        } else {
+                            stale.push(serde_json::json!({"symbol": sym, "age_secs": null}));
+                        }
+                    }
+
+                    let healthy = stale.is_empty();
+                    let status = if healthy { "ok" } else { "degraded" };
+
+                    axum::Json(serde_json::json!({
+                        "status": status,
+                        "fresh": fresh.len(),
+                        "stale": stale.len(),
+                        "stale_markets": stale,
+                    }))
+                }
+            }
+        }))
         .nest("/api", routes::api_router())
         .route("/ws", get(ws::handler::ws_upgrade))
         .with_state(state.clone())

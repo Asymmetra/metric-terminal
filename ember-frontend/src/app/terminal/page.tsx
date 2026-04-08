@@ -15,6 +15,7 @@ import { TradeDetailPanel } from "@/components/terminal/TradeDetailPanel";
 import { KeyboardShortcutOverlay } from "@/components/terminal/KeyboardShortcutOverlay";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { DepthChart } from "@/components/terminal/DepthChart";
+import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useUiStore } from "@/stores/uiStore";
 import { useStatsStore } from "@/stores/statsStore";
@@ -89,14 +90,16 @@ function MobileTerminal() {
         mobileTab === "trade" ? "overflow-y-auto" : "overflow-hidden"
       )}>
         {mobileTab === "book" && (
-          <MarketDataPanel
-            orderbook={<Orderbook />}
-            tradeHistory={<TradeHistory />}
-            depthChart={<DepthChart />}
-          />
+          <ErrorBoundary name="Orderbook">
+            <MarketDataPanel
+              orderbook={<Orderbook />}
+              tradeHistory={<TradeHistory />}
+              depthChart={<DepthChart />}
+            />
+          </ErrorBoundary>
         )}
-        {mobileTab === "trade" && <OrderEntry />}
-        {mobileTab === "positions" && <Positions />}
+        {mobileTab === "trade" && <ErrorBoundary name="Order Entry"><OrderEntry /></ErrorBoundary>}
+        {mobileTab === "positions" && <ErrorBoundary name="Positions"><Positions /></ErrorBoundary>}
       </div>
 
       {/* Bottom tab bar */}
@@ -140,15 +143,17 @@ function Terminal() {
       <MarketHeader />
       <TerminalGrid
         marketData={
-          <MarketDataPanel
-            orderbook={<Orderbook />}
-            tradeHistory={<TradeHistory />}
-            depthChart={<DepthChart />}
-          />
+          <ErrorBoundary name="Orderbook">
+            <MarketDataPanel
+              orderbook={<Orderbook />}
+              tradeHistory={<TradeHistory />}
+              depthChart={<DepthChart />}
+            />
+          </ErrorBoundary>
         }
-        chart={<Chart />}
-        orderEntry={<OrderEntry />}
-        positions={<Positions />}
+        chart={<ErrorBoundary name="Chart"><Chart /></ErrorBoundary>}
+        orderEntry={<ErrorBoundary name="Order Entry"><OrderEntry /></ErrorBoundary>}
+        positions={<ErrorBoundary name="Positions"><Positions /></ErrorBoundary>}
       />
       <Toasts />
       <TradeDetailPanel />

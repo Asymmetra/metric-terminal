@@ -7,6 +7,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Timeout (seconds) for relay receive loops. If no message arrives within this
+/// window, assume the upstream subscription is dead and reconnect.
+const RELAY_RECV_TIMEOUT_SECS: u64 = 120;
+
 /// Start the relay that feeds data from Phoenix SDK WS into broadcast channels.
 /// Subscribes to real orderbook, trades, stats, and candles for each market.
 pub async fn start_relay(
@@ -68,31 +72,48 @@ async fn start_market_relay(
                         continue;
                     }
                 };
-                while let Some(update) = rx.recv().await {
-                    let bids: Vec<OrderbookLevel> = update
-                        .orderbook
-                        .bids
-                        .iter()
-                        .map(|&(price, size)| OrderbookLevel { price, size })
-                        .collect();
-                    let asks: Vec<OrderbookLevel> = update
-                        .orderbook
-                        .asks
-                        .iter()
-                        .map(|&(price, size)| OrderbookLevel { price, size })
-                        .collect();
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_secs(RELAY_RECV_TIMEOUT_SECS),
+                        rx.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(update)) => {
+                            let bids: Vec<OrderbookLevel> = update
+                                .orderbook
+                                .bids
+                                .iter()
+                                .map(|&(price, size)| OrderbookLevel { price, size })
+                                .collect();
+                            let asks: Vec<OrderbookLevel> = update
+                                .orderbook
+                                .asks
+                                .iter()
+                                .map(|&(price, size)| OrderbookLevel { price, size })
+                                .collect();
 
-                    mcache.update_orderbook(&sym, bids.clone(), asks.clone());
+                            mcache.update_orderbook(&sym, bids.clone(), asks.clone());
 
-                    let msg = WsServerMessage {
-                        channel: "orderbook".to_string(),
-                        symbol: Some(sym.clone()),
-                        data: serde_json::json!({
-                            "bids": bids,
-                            "asks": asks,
-                        }),
-                    };
-                    bcast.send(&format!("orderbook:{}", sym), msg);
+                            let msg = WsServerMessage {
+                                channel: "orderbook".to_string(),
+                                symbol: Some(sym.clone()),
+                                data: serde_json::json!({
+                                    "bids": bids,
+                                    "asks": asks,
+                                }),
+                            };
+                            bcast.send(&format!("orderbook:{}", sym), msg);
+                        }
+                        Ok(None) => break, // channel closed
+                        Err(_) => {
+                            tracing::warn!(
+                                "Orderbook relay for {} timed out after {}s with no data — reconnecting",
+                                sym, RELAY_RECV_TIMEOUT_SECS
+                            );
+                            break;
+                        }
+                    }
                 }
                 tracing::warn!(
                     "Orderbook subscription ended for {}, reconnecting in {}s",
@@ -129,49 +150,66 @@ async fn start_market_relay(
                         continue;
                     }
                 };
-                while let Some(update) = rx.recv().await {
-                    let trades: Vec<serde_json::Value> = update
-                        .trades
-                        .iter()
-                        .map(|t| {
-                            if let Some(ref known) = known {
-                                if !t.taker.is_empty()
-                                    && Pubkey::from_str(&t.taker).is_ok()
-                                    && known.insert(t.taker.clone())
-                                {
-                                    tracing::debug!(
-                                        "Discovered new trader from trade stream: {}",
-                                        t.taker
-                                    );
-                                    let all: Vec<String> =
-                                        known.iter().map(|r| r.clone()).collect();
-                                    if let Ok(json) = serde_json::to_string_pretty(&all) {
-                                        let _ = std::fs::write("known_traders.json", json);
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_secs(RELAY_RECV_TIMEOUT_SECS),
+                        rx.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(update)) => {
+                            let trades: Vec<serde_json::Value> = update
+                                .trades
+                                .iter()
+                                .map(|t| {
+                                    if let Some(ref known) = known {
+                                        if !t.taker.is_empty()
+                                            && Pubkey::from_str(&t.taker).is_ok()
+                                            && known.insert(t.taker.clone())
+                                        {
+                                            tracing::debug!(
+                                                "Discovered new trader from trade stream: {}",
+                                                t.taker
+                                            );
+                                            let all: Vec<String> =
+                                                known.iter().map(|r| r.clone()).collect();
+                                            if let Ok(json) = serde_json::to_string_pretty(&all) {
+                                                let _ = std::fs::write("known_traders.json", json);
+                                            }
+                                        }
                                     }
-                                }
+
+                                    let price = if t.base_amount > 0.0 {
+                                        t.quote_amount / t.base_amount
+                                    } else {
+                                        0.0
+                                    };
+                                    serde_json::json!({
+                                        "price": price,
+                                        "size": t.base_amount,
+                                        "side": format!("{:?}", t.side).to_lowercase(),
+                                        "timestamp": t.timestamp.timestamp(),
+                                    })
+                                })
+                                .collect();
+
+                            if !trades.is_empty() {
+                                let msg = WsServerMessage {
+                                    channel: "trades".to_string(),
+                                    symbol: Some(sym.clone()),
+                                    data: serde_json::json!({ "trades": trades }),
+                                };
+                                bcast.send(&format!("trades:{}", sym), msg);
                             }
-
-                            let price = if t.base_amount > 0.0 {
-                                t.quote_amount / t.base_amount
-                            } else {
-                                0.0
-                            };
-                            serde_json::json!({
-                                "price": price,
-                                "size": t.base_amount,
-                                "side": format!("{:?}", t.side).to_lowercase(),
-                                "timestamp": t.timestamp.timestamp(),
-                            })
-                        })
-                        .collect();
-
-                    if !trades.is_empty() {
-                        let msg = WsServerMessage {
-                            channel: "trades".to_string(),
-                            symbol: Some(sym.clone()),
-                            data: serde_json::json!({ "trades": trades }),
-                        };
-                        bcast.send(&format!("trades:{}", sym), msg);
+                        }
+                        Ok(None) => break, // channel closed
+                        Err(_) => {
+                            tracing::warn!(
+                                "Trades relay for {} timed out after {}s with no data — reconnecting",
+                                sym, RELAY_RECV_TIMEOUT_SECS
+                            );
+                            break;
+                        }
                     }
                 }
                 tracing::warn!(
@@ -208,20 +246,37 @@ async fn start_market_relay(
                         continue;
                     }
                 };
-                while let Some(update) = rx.recv().await {
-                    let msg = WsServerMessage {
-                        channel: "stats".to_string(),
-                        symbol: Some(sym.clone()),
-                        data: serde_json::json!({
-                            "mark_price": update.mark_price,
-                            "index_price": update.oracle_price,
-                            "last_price": update.mid_price,
-                            "funding_rate": update.funding_rate,
-                            "open_interest": update.open_interest,
-                            "volume_24h": update.day_volume_usd,
-                        }),
-                    };
-                    bcast.send(&format!("stats:{}", sym), msg);
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_secs(RELAY_RECV_TIMEOUT_SECS),
+                        rx.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(update)) => {
+                            let msg = WsServerMessage {
+                                channel: "stats".to_string(),
+                                symbol: Some(sym.clone()),
+                                data: serde_json::json!({
+                                    "mark_price": update.mark_price,
+                                    "index_price": update.oracle_price,
+                                    "last_price": update.mid_price,
+                                    "funding_rate": update.funding_rate,
+                                    "open_interest": update.open_interest,
+                                    "volume_24h": update.day_volume_usd,
+                                }),
+                            };
+                            bcast.send(&format!("stats:{}", sym), msg);
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            tracing::warn!(
+                                "Stats relay for {} timed out after {}s with no data — reconnecting",
+                                sym, RELAY_RECV_TIMEOUT_SECS
+                            );
+                            break;
+                        }
+                    }
                 }
                 tracing::warn!(
                     "Stats subscription ended for {}, reconnecting in {}s",
@@ -258,23 +313,40 @@ async fn start_market_relay(
                             continue;
                         }
                     };
-                while let Some(candle) = rx.recv().await {
-                    let msg = WsServerMessage {
-                        channel: "candles".to_string(),
-                        symbol: Some(sym.clone()),
-                        data: serde_json::json!({
-                            "timeframe": "1m",
-                            "candle": {
-                                "time": candle.candle.time,
-                                "open": candle.candle.open,
-                                "high": candle.candle.high,
-                                "low": candle.candle.low,
-                                "close": candle.candle.close,
-                                "volume": candle.candle.volume,
-                            }
-                        }),
-                    };
-                    bcast.send(&format!("candles:{}", sym), msg);
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_secs(RELAY_RECV_TIMEOUT_SECS),
+                        rx.recv(),
+                    )
+                    .await
+                    {
+                        Ok(Some(candle)) => {
+                            let msg = WsServerMessage {
+                                channel: "candles".to_string(),
+                                symbol: Some(sym.clone()),
+                                data: serde_json::json!({
+                                    "timeframe": "1m",
+                                    "candle": {
+                                        "time": candle.candle.time,
+                                        "open": candle.candle.open,
+                                        "high": candle.candle.high,
+                                        "low": candle.candle.low,
+                                        "close": candle.candle.close,
+                                        "volume": candle.candle.volume,
+                                    }
+                                }),
+                            };
+                            bcast.send(&format!("candles:{}", sym), msg);
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            tracing::warn!(
+                                "Candles relay for {} timed out after {}s with no data — reconnecting",
+                                sym, RELAY_RECV_TIMEOUT_SECS
+                            );
+                            break;
+                        }
+                    }
                 }
                 tracing::warn!(
                     "Candles subscription ended for {}, reconnecting in {}s",

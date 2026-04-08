@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { api } from "@/lib/api";
 import { deserializeInstructions, buildAndSignTransaction, TxStatus, TxResult } from "@/lib/solana";
 import { useTraderStore } from "@/stores/traderStore";
 import { useToastStore } from "@/stores/toastStore";
+
+const TX_TIMEOUT_MS = 30_000;
 
 const STATUS_LABELS: Record<TxStatus, string> = {
   simulating: "Simulating...",
@@ -44,6 +46,26 @@ export function useTransactionBuilder() {
   const { connection } = useConnection();
   const addToast = useToastStore((s) => s.addToast);
   const updateToast = useToastStore((s) => s.updateToast);
+  const [isPending, setIsPending] = useState(false);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const acquireLock = useCallback((): boolean => {
+    if (isPending) return false;
+    setIsPending(true);
+    pendingTimerRef.current = setTimeout(() => {
+      setIsPending(false);
+      pendingTimerRef.current = null;
+    }, TX_TIMEOUT_MS);
+    return true;
+  }, [isPending]);
+
+  const releaseLock = useCallback(() => {
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+    setIsPending(false);
+  }, []);
 
   // Refresh trader data from REST after a confirmed transaction
   const refreshTraderData = useCallback(async () => {
@@ -61,6 +83,7 @@ export function useTransactionBuilder() {
   const submitOrder = useCallback(
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const label = type === "market" ? "Market Order" : "Limit Order";
       const summary = formatOrderSummary(type, params);
@@ -90,14 +113,18 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: `${label} Failed`, detail: decodeOrderError(e?.message ?? "") });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const cancelOrders = useCallback(
     async (symbol: string, orderIds: { price: number; order_sequence_number: number }[], subaccountIndex?: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const toastId = addToast("loading", "Building Cancel", `${orderIds.length} order${orderIds.length !== 1 ? "s" : ""} on ${symbol}`);
 
@@ -126,14 +153,18 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Cancel Failed", detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const deposit = useCallback(
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const toastId = addToast("loading", "Building Deposit", `$${amountUsdc.toFixed(2)} USDC`);
 
@@ -160,14 +191,18 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Deposit Failed", detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const withdraw = useCallback(
     async (amountUsdc: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const toastId = addToast("loading", "Building Withdrawal", `$${amountUsdc.toFixed(2)} USDC`);
 
@@ -194,14 +229,17 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Withdrawal Failed", detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const submitIsolatedOrder = useCallback(
     async (type: "market" | "limit", params: any, onStatus?: (status: TxStatus) => void): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const label = type === "market" ? "Isolated Market Order" : "Isolated Limit Order";
       const summary = formatOrderSummary(type, params) + " · Isolated";
@@ -231,9 +269,11 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: `${label} Failed`, detail: decodeOrderError(e?.message ?? "") });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const transferCollateral = useCallback(
@@ -242,6 +282,8 @@ export function useTransactionBuilder() {
 
       const fromLabel = fromSubaccountIndex === 0 ? "Cross" : `Isolated #${fromSubaccountIndex}`;
       const toLabel = toSubaccountIndex === 0 ? "Cross" : `Isolated #${toSubaccountIndex}`;
+      if (!acquireLock()) throw new Error("Transaction already in progress");
+
       const transferSummary = `$${amountUsdc.toFixed(2)} USDC · ${fromLabel} → ${toLabel}`;
       const toastId = addToast("loading", "Building Transfer", transferSummary);
 
@@ -270,14 +312,18 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Transfer Failed", detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const closeAllPositions = useCallback(
     async (positions: Array<{ symbol: string; side: string; size_lots: number; margin_mode: string; subaccount_index: number }>): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const toastId = addToast("loading", "Building Close All", `${positions.length} position${positions.length !== 1 ? "s" : ""}`);
 
@@ -304,9 +350,11 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Close All Failed", detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const submitMultiLimitOrders = useCallback(
@@ -317,6 +365,8 @@ export function useTransactionBuilder() {
       onStatus?: (status: TxStatus) => void,
     ): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const total = bids.length + asks.length;
       const bidRange = bids.length > 0 ? `${bids.length} bid${bids.length !== 1 ? "s" : ""}` : "";
@@ -352,14 +402,18 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: "Multi-Order Failed", detail: decodeOrderError(e?.message ?? "") });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
   const cancelStopLoss = useCallback(
     async (symbol: string, leg: "tp" | "sl", subaccountIndex?: number): Promise<TxResult> => {
       if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+
+      if (!acquireLock()) throw new Error("Transaction already in progress");
 
       const isTP = leg === "tp";
       const label = isTP ? "Take Profit" : "Stop Loss";
@@ -394,10 +448,12 @@ export function useTransactionBuilder() {
       } catch (e: any) {
         updateToast(toastId, { type: "error", title: `Cancel ${label} Failed`, detail: e?.message });
         throw e;
+      } finally {
+        releaseLock();
       }
     },
-    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast]
+    [publicKey, sendTransaction, connection, refreshTraderData, addToast, updateToast, acquireLock, releaseLock]
   );
 
-  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, submitMultiLimitOrders, cancelStopLoss, connected: !!publicKey };
+  return { submitOrder, submitIsolatedOrder, cancelOrders, deposit, withdraw, transferCollateral, closeAllPositions, submitMultiLimitOrders, cancelStopLoss, isPending, connected: !!publicKey };
 }
