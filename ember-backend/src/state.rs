@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dashmap::DashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use phoenix_sdk::{ExchangeMarketConfig, PhoenixHttpClient, PhoenixMetadata, PhoenixWSClient};
+use phoenix_sdk::{ExchangeMarketConfig, PhoenixClient, PhoenixHttpClient, PhoenixMetadata};
 
 use crate::services::broadcast::BroadcastHub;
 use crate::services::market_cache::MarketCache;
@@ -17,7 +17,7 @@ pub struct LeaderboardSnapshot {
 
 pub struct AppState {
     pub http_client: PhoenixHttpClient,
-    pub ws_client: Arc<PhoenixWSClient>,
+    pub ws_client: PhoenixClient,
     pub metadata: Arc<RwLock<PhoenixMetadata>>,
     pub market_cache: Arc<MarketCache>,
     pub broadcast: Arc<BroadcastHub>,
@@ -46,8 +46,13 @@ impl AppState {
         // Build metadata for tx builder
         let metadata = PhoenixMetadata::new(exchange.into());
 
-        // Create SDK WS client (auto-reconnect built in)
-        let ws_client = PhoenixWSClient::new_from_env()?;
+        // Create SDK high-level client — manages the WS connection with
+        // auto-reconnect and automatic resubscription. The low-level
+        // PhoenixWSClient has no reconnect; using it directly left us
+        // zombied after the first upstream disconnect.
+        let ws_client = PhoenixClient::new_from_env()
+            .await
+            .map_err(|e| anyhow!("PhoenixClient init failed: {:?}", e))?;
 
         let market_cache = Arc::new(MarketCache::new());
         let broadcast = Arc::new(BroadcastHub::new(&symbols));
@@ -72,7 +77,7 @@ impl AppState {
 
         Ok(Self {
             http_client,
-            ws_client: Arc::new(ws_client),
+            ws_client,
             metadata: Arc::new(RwLock::new(metadata)),
             market_cache,
             broadcast,
