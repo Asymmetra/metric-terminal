@@ -219,11 +219,23 @@ export function OrderEntry() {
         await submitIsolatedOrder(orderType, params, (status) => setTxPhase(status));
       } else {
         await submitOrder(orderType, params, (status) => setTxPhase(status));
-        // Persist slider intent for cross-mode display. Phoenix doesn't
-        // store per-position leverage for cross; without this the
-        // positions tray shows notional / total_cross_collateral which
-        // drifts with unrelated account activity.
-        setLeveragePref(selectedSymbol, leverage);
+        // Persist slider intent for cross-mode display — but ONLY when the
+        // order opens or adds to a position in the slider's direction.
+        // Reduces, closes, and flips leave the stored pref alone: the
+        // slider often sits at its default (1x) when the user submits a
+        // reduce, and overwriting would make the remaining position show
+        // the wrong leverage until they next open something.
+        const existingCrossPos = positions.find(
+          (p) => p.symbol === selectedSymbol && p.margin_mode === "cross"
+        );
+        const existingSide = existingCrossPos?.side.toLowerCase();
+        const openingOrAdding =
+          !existingCrossPos ||
+          (side === "buy" && existingSide === "long") ||
+          (side === "sell" && existingSide === "short");
+        if (openingOrAdding) {
+          setLeveragePref(selectedSymbol, leverage);
+        }
       }
       setCollateralInput("");
       setTpPrice("");
