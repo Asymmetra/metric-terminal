@@ -225,36 +225,46 @@ export function Chart() {
     };
   }, [selectedSymbol, activeTimeframe, handleCandleUpdate]);
 
-  // Real-time price tick: update current candle's close from mark_price
-  // This bridges the gap between infrequent WS candle events and the
+  // Real-time price tick: update current candle's close from mark_price,
+  // and roll to a new candle when the time bucket changes.
+  // Bridges the gap between infrequent WS candle events and the
   // continuously-updating mark price from the stats channel.
   useEffect(() => {
+    const tfSeconds: Record<string, number> = {
+      "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400,
+    };
     let lastPrice = 0;
     const unsub = useStatsStore.subscribe((state) => {
       const markPrice = state.stats?.mark_price;
       if (!markPrice || markPrice === lastPrice || !candleSeriesRef.current) return;
       lastPrice = markPrice;
 
+      const interval = tfSeconds[activeTimeframeRef.current] || 60;
+      const bucketTime = Math.floor(Date.now() / 1000 / interval) * interval;
       const current = currentCandleRef.current;
-      if (!current) {
-        // No candle yet — compute the current candle time bucket
-        const tfSeconds: Record<string, number> = {
-          "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400,
-        };
-        const interval = tfSeconds[activeTimeframeRef.current] || 60;
-        const now = Math.floor(Date.now() / 1000);
-        const time = Math.floor(now / interval) * interval;
+
+      if (!current || current.time !== bucketTime) {
+        // Either no candle yet, or the time bucket just rolled over.
+        // Start a fresh bar anchored at markPrice instead of stretching
+        // the previous one — lightweight-charts treats series.update()
+        // with a new timestamp as an append.
         currentCandleRef.current = {
-          time: time as any,
+          time: bucketTime as any,
           open: markPrice,
           high: markPrice,
           low: markPrice,
           close: markPrice,
         };
         candleSeriesRef.current.update(currentCandleRef.current);
+        if (volumeSeriesRef.current) {
+          volumeSeriesRef.current.update({
+            time: bucketTime as any,
+            value: 0,
+            color: "rgba(46,226,155,0.15)",
+          });
+        }
         return;
       }
-      // Update the current candle with the latest price tick
       current.close = markPrice;
       if (markPrice > current.high) current.high = markPrice;
       if (markPrice < current.low) current.low = markPrice;
@@ -263,7 +273,14 @@ export function Chart() {
     return unsub;
   }, [selectedSymbol, activeTimeframe]);
 
-  // Trade markers: overlay user's buy/sell trades on chart
+  // Trade markers: overlay the user's historical fills on this market's chart.
+  // Encodes each fill along four dimensions so a glance is enough:
+  //   • color          — green = action on the long side, red = short side
+  //   • brightness     — full saturation = open/add, dimmed = close/reduce
+  //   • arrow direction — matches the direction of the trade (buy up, sell down)
+  //   • text prefix    — "Long" / "Short" / "Close" / "Cover" / "+" / "−"
+  // `baseLotsBefore` and `baseLotsAfter` (signed) tell us whether the fill
+  // grew the position (open/add) or shrank it (close/reduce).
   useEffect(() => {
     if (!publicKey || !candleSeriesRef.current || !showMarkers) {
       if (candleSeriesRef.current) candleSeriesRef.current.setMarkers([]);
@@ -280,13 +297,51 @@ export function Chart() {
           .map((t: any) => {
             const ts = new Date(t.timestamp);
             const time = Math.floor(ts.getTime() / 1000);
-            const isBuy = parseFloat(t.baseQty) > 0;
+            const before = parseFloat(t.baseLotsBefore || "0");
+            const after = parseFloat(t.baseLotsAfter || "0");
+            const delta = parseFloat(t.baseLotsDelta || "0");
+            const absDelta = Math.abs(delta);
+            const absBefore = Math.abs(before);
+            const absAfter = Math.abs(after);
+            const isBuy = delta > 0;
+
+            // Classify the fill. Default to open-long if data is missing,
+            // so we never render an empty/NaN label again.
+            let verb: string;
+            let longSide: boolean;
+            let opening: boolean;
+            if (absBefore === 0 && absAfter > 0) {
+              opening = true;
+              longSide = after > 0;
+              verb = longSide ? "Long" : "Short";
+            } else if (absAfter === 0 && absBefore > 0) {
+              opening = false;
+              longSide = before > 0;
+              verb = longSide ? "Close" : "Cover";
+            } else if (absAfter > absBefore) {
+              // Adding to an existing position in the same direction.
+              opening = true;
+              longSide = (after || delta) > 0;
+              verb = "+";
+            } else {
+              // Partial reduce in the same direction.
+              opening = false;
+              longSide = before > 0;
+              verb = "−";
+            }
+
+            // Color by side, dim on close/reduce so the eye separates
+            // "taking on risk" from "bleeding it off".
+            const color = longSide
+              ? opening ? COLORS.emberGreen : "rgba(46,226,155,0.55)"
+              : opening ? COLORS.emberRed : "rgba(242,59,78,0.55)";
+
             return {
               time,
               position: isBuy ? ("belowBar" as const) : ("aboveBar" as const),
-              color: isBuy ? COLORS.emberGreen : COLORS.emberRed,
+              color,
               shape: isBuy ? ("arrowUp" as const) : ("arrowDown" as const),
-              text: `${isBuy ? "B" : "S"} ${Math.abs(parseFloat(t.baseQty)).toFixed(2)}`,
+              text: `${verb} ${absDelta.toFixed(2)}`,
             };
           })
           .sort((a: any, b: any) => a.time - b.time);

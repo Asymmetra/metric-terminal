@@ -267,6 +267,141 @@ function FundingCountdown({ intervalSeconds }: { intervalSeconds: number }) {
   );
 }
 
+// Combined Funding-rate + countdown — paired stats that only make sense together.
+function FundingStat({
+  rate,
+  intervalSeconds,
+}: {
+  rate: number;
+  intervalSeconds: number | null;
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] leading-none text-text-secondary/60">Funding / 1h</span>
+      <span className="font-mono text-xs leading-none">
+        <span className={rate >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {formatPercent(rate)}
+        </span>
+        {intervalSeconds != null && (
+          <>
+            <span className="text-text-secondary/40"> · </span>
+            <FundingCountdownInline intervalSeconds={intervalSeconds} />
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function FundingCountdownInline({ intervalSeconds }: { intervalSeconds: number }) {
+  const [remaining, setRemaining] = useState("");
+  useEffect(() => {
+    function update() {
+      const now = Math.floor(Date.now() / 1000);
+      const next = Math.ceil(now / intervalSeconds) * intervalSeconds;
+      const diff = next - now;
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      setRemaining(`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+    }
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [intervalSeconds]);
+  return <span className="text-text-secondary/70">{remaining}</span>;
+}
+
+// Hover popover revealing secondary market stats (Last / Index / OI / Volume).
+// Anchored to a subtle info glyph so the always-visible row stays tight.
+function MarketInfoPopover({
+  lastPrice,
+  indexPrice,
+  openInterest,
+  volume24h,
+}: {
+  lastPrice: number;
+  indexPrice: number;
+  openInterest: number;
+  volume24h: number;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <span
+        className={clsx(
+          "cursor-help font-mono text-[10px] leading-none transition-colors",
+          hover ? "text-ember-orange" : "text-text-secondary/50"
+        )}
+        aria-label="Market details"
+      >
+        ⓘ
+      </span>
+      {hover && (
+        <div className="absolute left-0 top-full z-[200] mt-1 min-w-[170px] border border-ember-border bg-[#1A1B20] p-2 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
+          <PopoverRow label="Last" value={`$${formatPrice(lastPrice)}`} />
+          <PopoverRow label="Index" value={`$${formatPrice(indexPrice)}`} />
+          <PopoverRow label="Open Int." value={`$${abbreviateNumber(openInterest)}`} />
+          <PopoverRow label="24h Vol." value={`$${abbreviateNumber(volume24h)}`} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PopoverRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-0.5">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
+        {label}
+      </span>
+      <span className="font-mono text-[11px] text-text-secondary">{value}</span>
+    </div>
+  );
+}
+
+// Combined Portfolio + Unreal PnL into a single two-line stat.
+function PortfolioStat({ portfolioValue, unrealizedPnl }: { portfolioValue: number; unrealizedPnl: number }) {
+  const positive = unrealizedPnl >= 0;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] leading-none text-text-secondary/60">Portfolio</span>
+      <span className="font-mono text-xs leading-none">
+        <span className="text-text-primary">{formatUsd(portfolioValue)}</span>
+        <span className={clsx("ml-1.5", positive ? "text-ember-green" : "text-ember-red")}>
+          {positive ? "+" : ""}{formatUsd(unrealizedPnl)}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+// Combined Available + total Collateral, with a single "0.65 / 12.00" display.
+// Available is the actionable number, shown first; collateral is context.
+function AvailableStat({
+  available,
+  collateral,
+}: {
+  available: number;
+  collateral: number;
+}) {
+  const tight = collateral > 0 && available < collateral * 0.1;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] leading-none text-text-secondary/60">Available</span>
+      <span className="font-mono text-xs leading-none">
+        <span className={tight ? "text-ember-orange" : "text-text-secondary"}>
+          {formatUsd(available)}
+        </span>
+        <span className="text-text-secondary/40"> / {formatUsd(collateral)}</span>
+      </span>
+    </div>
+  );
+}
+
 export function MarketHeader() {
   useWebSocket();
   useMarkets();
@@ -380,74 +515,49 @@ export function MarketHeader() {
         </span>
       )}
 
-      <StatSeparator />
-
-      {/* Stats row */}
+      {/* 24h change + info popover — the essential price-action summary.
+         Secondary market stats (Last, Index, Open Int, 24h Vol) live in the
+         popover so the always-visible row stays tight. */}
       {stats && (
         <>
-          <Stat label="Last" value={`$${formatPrice(stats.last_price)}`} />
-
           {open24h != null && open24h > 0 && (() => {
             const change = stats.mark_price - open24h;
             const changePct = (change / open24h) * 100;
             const positive = change >= 0;
             return (
-              <>
-                <Stat
-                  label="24h Change"
-                  value={`${positive ? "+" : ""}${formatPrice(change)} (${positive ? "+" : ""}${changePct.toFixed(2)}%)`}
-                  colorClass={positive ? "text-ember-green" : "text-ember-red"}
-                />
-              </>
+              <span
+                className={clsx(
+                  "font-mono text-xs",
+                  positive ? "text-ember-green" : "text-ember-red"
+                )}
+              >
+                {positive ? "+" : ""}{changePct.toFixed(2)}%
+              </span>
             );
           })()}
 
-          <StatSeparator />
-
-          <Stat label="Index" value={`$${formatPrice(stats.index_price)}`} />
-
-          <StatSeparator />
-
-          <Stat
-            label="Funding / 1h"
-            value={formatPercent(stats.funding_rate)}
-            colorClass={stats.funding_rate >= 0 ? "text-ember-green" : "text-ember-red"}
+          <MarketInfoPopover
+            lastPrice={stats.last_price}
+            indexPrice={stats.index_price}
+            openInterest={stats.open_interest}
+            volume24h={stats.volume_24h}
           />
 
-          {marketConfig && (
-            <FundingCountdown intervalSeconds={marketConfig.fundingIntervalSeconds} />
-          )}
-
           <StatSeparator />
 
-          <Stat label="Open Interest" value={`$${abbreviateNumber(stats.open_interest)}`} />
-
-          <StatSeparator />
-
-          <Stat label="24h Volume" value={`$${abbreviateNumber(stats.volume_24h)}`} />
+          <FundingStat
+            rate={stats.funding_rate}
+            intervalSeconds={marketConfig?.fundingIntervalSeconds ?? null}
+          />
         </>
       )}
 
-      {/* Portfolio info (wallet connected) */}
+      {/* Account info (wallet connected) */}
       {traderConnected && (
         <>
           <StatSeparator />
-          <Stat label="Portfolio" value={formatUsd(portfolioValue)} colorClass="text-text-primary" />
-          <Stat
-            label="Unreal. PnL"
-            value={`${unrealizedPnl >= 0 ? "+" : ""}${formatUsd(unrealizedPnl)}`}
-            colorClass={unrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
-          />
-          <Stat label="Collateral" value={formatUsd(collateral)} />
-          <Stat
-            label="Available"
-            value={formatUsd(availableCollateral)}
-            colorClass={
-              collateral > 0 && availableCollateral < collateral * 0.1
-                ? "text-ember-orange"
-                : undefined
-            }
-          />
+          <PortfolioStat portfolioValue={portfolioValue} unrealizedPnl={unrealizedPnl} />
+          <AvailableStat available={availableCollateral} collateral={collateral} />
         </>
       )}
 
