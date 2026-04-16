@@ -282,7 +282,9 @@ export function MarketHeader() {
   const traderConnected = useTraderStore((s) => s.connected);
   const account = useTraderStore((s) => s.account);
   const collateral = useTraderStore((s) => s.collateral);
+  const initialMargin = useTraderStore((s) => s.initialMargin);
   const positions = useTraderStore((s) => s.positions);
+  const availableCollateral = Math.max(0, collateral - initialMargin);
   const markPrices = useStatsStore((s) => s.markPrices);
   const hasAccount = account != null;
 
@@ -437,6 +439,15 @@ export function MarketHeader() {
             colorClass={unrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}
           />
           <Stat label="Collateral" value={formatUsd(collateral)} />
+          <Stat
+            label="Available"
+            value={formatUsd(availableCollateral)}
+            colorClass={
+              collateral > 0 && availableCollateral < collateral * 0.1
+                ? "text-ember-orange"
+                : undefined
+            }
+          />
         </>
       )}
 
