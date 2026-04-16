@@ -571,17 +571,28 @@ export function MarketHeader() {
       >
         Terminal
       </Link>
-      {["Profile", "Leaderboard"].map((label) => (
-        <span
-          key={label}
-          className="group relative cursor-default font-mono text-[10px] uppercase tracking-wider text-text-secondary/30"
-        >
-          {label}
-          <span className="pointer-events-none absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-surface-l2 px-2 py-0.5 font-mono text-[9px] text-text-secondary opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-            Coming Soon
-          </span>
-        </span>
-      ))}
+      <Link
+        href="/profile"
+        className={clsx(
+          "font-mono text-[10px] uppercase tracking-wider transition-colors",
+          pathname === "/profile"
+            ? "text-ember-orange"
+            : "text-text-secondary/60 hover:text-text-secondary"
+        )}
+      >
+        Profile
+      </Link>
+      <Link
+        href="/leaderboard"
+        className={clsx(
+          "font-mono text-[10px] uppercase tracking-wider transition-colors",
+          pathname === "/leaderboard"
+            ? "text-ember-orange"
+            : "text-text-secondary/60 hover:text-text-secondary"
+        )}
+      >
+        Leaderboard
+      </Link>
 
       <StatSeparator />
 
