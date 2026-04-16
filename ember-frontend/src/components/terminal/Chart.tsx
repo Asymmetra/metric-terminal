@@ -19,12 +19,20 @@ const TIMEFRAMES = [
   { label: "1D", value: "1d" },
 ] as const;
 
+type Candle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
+
 export function Chart() {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const candleSeriesRef = useRef<any>(null);
   const volumeSeriesRef = useRef<any>(null);
   const currentCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
+  // Full candle dataset (ascending by time). Kept in a ref so the scroll-back
+  // loader can prepend older pages without forcing a re-render cascade.
+  const allCandlesRef = useRef<Candle[]>([]);
+  const loadingOlderRef = useRef(false);
+  const noMoreOlderRef = useRef(false);
+  const [earliestTime, setEarliestTime] = useState<number | null>(null);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState("1m");
   const [chartError, setChartError] = useState<string | null>(null);
@@ -147,7 +155,12 @@ export function Chart() {
       });
       volumeSeriesRef.current = volumeSeries;
 
-      // Fetch historical candles from REST
+      // Reset scroll-back state whenever symbol or timeframe changes.
+      allCandlesRef.current = [];
+      loadingOlderRef.current = false;
+      noMoreOlderRef.current = false;
+
+      // Fetch historical candles from REST (latest page).
       try {
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/candles/${selectedSymbol}?timeframe=${activeTimeframe}&limit=300`,
@@ -155,15 +168,15 @@ export function Chart() {
         );
         if (res.ok) {
           const candles = await res.json();
-          // Bug fix #1: Backend sends ms timestamps, Lightweight Charts expects seconds
-          const normalized = candles.map((c: any) => ({
+          const normalized: Candle[] = candles.map((c: any) => ({
             ...c,
             time: c.time > 1e12 ? Math.floor(c.time / 1000) : c.time,
           }));
           candleSeries.setData(normalized);
           setChartError(null);
+          allCandlesRef.current = normalized;
+          setEarliestTime(normalized.length > 0 ? normalized[0].time : null);
 
-          // Seed the current candle ref from the last historical candle
           if (normalized.length > 0) {
             const last = normalized[normalized.length - 1];
             currentCandleRef.current = {
@@ -190,6 +203,63 @@ export function Chart() {
         console.error("Failed to fetch candles:", e);
         setChartError("Failed to load chart data");
       }
+
+      // Scroll-back loader: when the user pans the visible window near the
+      // left edge of what we've loaded, request the page of candles
+      // immediately older than the current earliest one.
+      async function loadOlder() {
+        if (loadingOlderRef.current || noMoreOlderRef.current) return;
+        if (allCandlesRef.current.length === 0) return;
+        loadingOlderRef.current = true;
+        try {
+          const earliestSec = allCandlesRef.current[0].time;
+          const before = earliestSec * 1000;
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/candles/${selectedSymbol}?timeframe=${activeTimeframe}&limit=300&before=${before}`,
+            { signal: abortController.signal }
+          );
+          if (!res.ok) return;
+          const older = await res.json();
+          const normalizedOlder: Candle[] = (older as any[])
+            .map((c) => ({
+              ...c,
+              time: c.time > 1e12 ? Math.floor(c.time / 1000) : c.time,
+            }))
+            .filter((c: Candle) => c.time < earliestSec);
+          if (normalizedOlder.length === 0) {
+            noMoreOlderRef.current = true;
+            return;
+          }
+          normalizedOlder.sort((a, b) => a.time - b.time);
+          const merged = [...normalizedOlder, ...allCandlesRef.current];
+          allCandlesRef.current = merged;
+          candleSeries.setData(merged);
+          volumeSeries.setData(
+            merged.map((c) => ({
+              time: c.time as any,
+              value: c.volume || 0,
+              color:
+                c.close >= c.open
+                  ? "rgba(46,226,155,0.15)"
+                  : "rgba(242,59,78,0.15)",
+            }))
+          );
+          setEarliestTime(merged[0].time);
+        } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") return;
+          console.error("Failed to fetch older candles:", e);
+        } finally {
+          loadingOlderRef.current = false;
+        }
+      }
+
+      chart
+        .timeScale()
+        .subscribeVisibleLogicalRangeChange((range: any) => {
+          if (!range) return;
+          const barsInfo = candleSeries.barsInLogicalRange(range);
+          if (barsInfo && barsInfo.barsBefore < 15) loadOlder();
+        });
 
       // Subscribe to real-time candle updates via WebSocket
       unsubCandles = wsClient.subscribe(
@@ -289,12 +359,20 @@ export function Chart() {
     }
 
     let cancelled = false;
+    // Only render markers whose time falls inside the loaded candle range.
+    // Otherwise lightweight-charts snaps out-of-range markers to the
+    // earliest loaded bar, producing a cosmetic pile-up on scroll-back.
+    const minTime = earliestTime ?? 0;
     api.getTraderTrades(publicKey.toBase58(), { limit: 200 })
       .then((result) => {
         if (cancelled || !candleSeriesRef.current) return;
         const trades = result.trades || [];
         const markers = trades
           .filter((t: any) => t.marketSymbol === selectedSymbol)
+          .filter((t: any) => {
+            const ts = new Date(t.timestamp).getTime() / 1000;
+            return ts >= minTime;
+          })
           .map((t: any) => {
             const ts = new Date(t.timestamp);
             const time = Math.floor(ts.getTime() / 1000);
@@ -350,7 +428,7 @@ export function Chart() {
       .catch(() => {});
 
     return () => { cancelled = true; };
-  }, [publicKey, selectedSymbol, activeTimeframe, showMarkers, lastRefresh]);
+  }, [publicKey, selectedSymbol, activeTimeframe, showMarkers, lastRefresh, earliestTime]);
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-hidden">

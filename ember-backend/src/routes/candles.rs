@@ -13,6 +13,9 @@ use crate::state::AppState;
 pub struct CandleQuery {
     pub timeframe: Option<String>,
     pub limit: Option<u32>,
+    /// Upper bound (exclusive) in ms for the returned candles. Used by the
+    /// client to page backward through history when the user scrolls left.
+    pub before: Option<i64>,
 }
 
 async fn get_candles(
@@ -29,7 +32,10 @@ async fn get_candles(
     let timeframe = Timeframe::from_str(&tf_str)
         .map_err(|e| AppError::BadRequest(format!("Invalid timeframe: {}", e)))?;
 
-    let params = CandlesQueryParams::new(&symbol, timeframe).with_limit(limit);
+    let mut params = CandlesQueryParams::new(&symbol, timeframe).with_limit(limit);
+    if let Some(before_ms) = query.before {
+        params = params.with_end_time(before_ms);
+    }
 
     let candles = state
         .http_client
