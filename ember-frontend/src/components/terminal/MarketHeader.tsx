@@ -311,37 +311,56 @@ function FundingCountdownInline({ intervalSeconds }: { intervalSeconds: number }
   return <span className="text-text-secondary/70">{remaining}</span>;
 }
 
-// Hover popover revealing secondary market stats (Last / Index / OI / Volume).
-// Anchored to a subtle info glyph so the always-visible row stays tight.
-function MarketInfoPopover({
+// Mark price + 24h change as a single hover group. Hovering the whole block
+// reveals secondary market stats (Last / Index / OI / Volume). Matches the
+// HealthDot pattern — the value IS the affordance, no dedicated icon.
+function PriceBlock({
+  markPrice,
+  open24h,
   lastPrice,
   indexPrice,
   openInterest,
   volume24h,
 }: {
+  markPrice: number;
+  open24h: number | null;
   lastPrice: number;
   indexPrice: number;
   openInterest: number;
   volume24h: number;
 }) {
   const [hover, setHover] = useState(false);
+  const change = open24h != null && open24h > 0 ? markPrice - open24h : 0;
+  const changePct = open24h != null && open24h > 0 ? (change / open24h) * 100 : 0;
+  const positive = change >= 0;
+  const showChange = open24h != null && open24h > 0;
   return (
     <div
-      className="relative inline-flex items-center"
+      className="relative flex items-center gap-2"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
       <span
         className={clsx(
-          "cursor-help font-mono text-[10px] leading-none transition-colors",
-          hover ? "text-ember-orange" : "text-text-secondary/50"
+          "cursor-help font-mono text-lg font-semibold transition-colors",
+          hover ? "text-ember-orange" : "text-text-primary"
         )}
-        aria-label="Market details"
+        style={{ letterSpacing: "-0.02em" }}
       >
-        ⓘ
+        ${formatPrice(markPrice)}
       </span>
+      {showChange && (
+        <span
+          className={clsx(
+            "cursor-help font-mono text-xs",
+            positive ? "text-ember-green" : "text-ember-red"
+          )}
+        >
+          {positive ? "+" : ""}{changePct.toFixed(2)}%
+        </span>
+      )}
       {hover && (
-        <div className="absolute left-0 top-full z-[200] mt-1 min-w-[170px] border border-ember-border bg-[#1A1B20] p-2 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
+        <div className="absolute left-0 top-full z-[200] mt-1 min-w-[180px] border border-ember-border bg-[#1A1B20] p-2 shadow-[0_8px_32px_rgba(0,0,0,0.6)]">
           <PopoverRow label="Last" value={`$${formatPrice(lastPrice)}`} />
           <PopoverRow label="Index" value={`$${formatPrice(indexPrice)}`} />
           <PopoverRow label="Open Int." value={`$${abbreviateNumber(openInterest)}`} />
@@ -505,38 +524,14 @@ export function MarketHeader() {
       {/* Market selector */}
       <MarketSelector />
 
-      {/* Mark price — prominent */}
-      {stats && (
-        <span
-          className="font-mono text-lg font-semibold text-text-primary"
-          style={{ letterSpacing: "-0.02em" }}
-        >
-          ${formatPrice(stats.mark_price)}
-        </span>
-      )}
-
-      {/* 24h change + info popover — the essential price-action summary.
-         Secondary market stats (Last, Index, Open Int, 24h Vol) live in the
-         popover so the always-visible row stays tight. */}
+      {/* Mark price + 24h change as one hover group — hovering reveals
+         secondary market stats (Last / Index / OI / 24h Vol). No info icon;
+         the value itself is the affordance. */}
       {stats && (
         <>
-          {open24h != null && open24h > 0 && (() => {
-            const change = stats.mark_price - open24h;
-            const changePct = (change / open24h) * 100;
-            const positive = change >= 0;
-            return (
-              <span
-                className={clsx(
-                  "font-mono text-xs",
-                  positive ? "text-ember-green" : "text-ember-red"
-                )}
-              >
-                {positive ? "+" : ""}{changePct.toFixed(2)}%
-              </span>
-            );
-          })()}
-
-          <MarketInfoPopover
+          <PriceBlock
+            markPrice={stats.mark_price}
+            open24h={open24h}
             lastPrice={stats.last_price}
             indexPrice={stats.index_price}
             openInterest={stats.open_interest}

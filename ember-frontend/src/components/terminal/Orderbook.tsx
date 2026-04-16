@@ -342,14 +342,11 @@ export function Orderbook() {
           <span className="text-right">Size</span>
           <span className="text-right">Total</span>
         </div>
-        <span className="ml-1 font-mono text-[9px] uppercase tracking-wider text-text-secondary/50">
-          Group
-        </span>
         <select
           value={grouping}
           onChange={(e) => setGrouping(parseFloat(e.target.value))}
           title="Price grouping — rows aggregate levels within this USDC increment"
-          className="ml-1 bg-surface-l2 border border-ember-border/50 px-1 py-0.5 font-mono text-[9px] text-text-secondary/70 focus:outline-none focus:border-ember-orange/40 cursor-pointer"
+          className="ml-2 bg-surface-l2 border border-ember-border/50 px-1 py-0.5 font-mono text-[9px] text-text-secondary/70 focus:outline-none focus:border-ember-orange/40 cursor-pointer"
         >
           {GROUPING_OPTIONS.map((g) => (
             <option key={g} value={g}>
