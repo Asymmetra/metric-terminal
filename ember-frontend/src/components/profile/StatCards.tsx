@@ -86,9 +86,17 @@ export function StatCards({ authority, period }: Props) {
       />
       <StatCard
         label="Funding"
-        value={formatSigned(funding, "usd")}
-        tone={tone(-funding)} /* funding paid is a cost; positive means you paid */
-        sub={loading ? "…" : funding >= 0 ? "paid" : "received"}
+        value={funding === 0 ? "$0.00" : formatSigned(funding, "usd")}
+        tone={funding === 0 ? "neutral" : tone(-funding)} /* funding paid is a cost; positive means you paid */
+        sub={
+          loading
+            ? "…"
+            : funding === 0
+              ? "no events"
+              : funding > 0
+                ? "paid"
+                : "received"
+        }
       />
       <StatCard
         label="Volume"
@@ -109,19 +117,31 @@ export function StatCards({ authority, period }: Props) {
       <StatCard
         label="Profit factor"
         value={
-          stats
-            ? stats.profitFactor === Infinity
+          !stats
+            ? "—"
+            : stats.profitFactor === Infinity
               ? "∞"
-              : stats.profitFactor.toFixed(2)
-            : "—"
+              : stats.profitFactor === 0
+                ? "—"
+                : stats.profitFactor.toFixed(2)
         }
-        tone={stats ? (stats.profitFactor >= 1 ? "pos" : stats.profitFactor > 0 ? "neg" : "neutral") : "neutral"}
+        tone={
+          !stats || stats.profitFactor === 0
+            ? "neutral"
+            : stats.profitFactor >= 1
+              ? "pos"
+              : "neg"
+        }
         sub={
           loading
             ? "…"
-            : stats && stats.expectancy !== 0
-              ? `${formatSigned(stats.expectancy, "usd")} / trade`
-              : undefined
+            : !stats || stats.total === 0
+              ? "no trades"
+              : stats.profitFactor === Infinity
+                ? `${stats.wins}W / 0L`
+                : stats.expectancy !== 0
+                  ? `${formatSigned(stats.expectancy, "usd")} / trade`
+                  : "—"
         }
       />
     </div>

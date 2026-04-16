@@ -2,8 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { formatPrice, formatUsd } from "@/lib/format";
-import { normalizeTrade, sdkNum, type NormalizedTrade } from "@/lib/tradeStats";
+import { formatPrice, formatUsd, formatUsdPrecise } from "@/lib/format";
+import {
+  filterByPeriod,
+  normalizeTrade,
+  sdkNum,
+  type NormalizedTrade,
+  type Period,
+} from "@/lib/tradeStats";
+import { useProfileDetailStore } from "@/stores/profileDetailStore";
 import clsx from "clsx";
 
 type Tab = "trades" | "orders" | "funding" | "collateral";
@@ -16,20 +23,21 @@ const TABS: { key: Tab; label: string }[] = [
 
 interface Props {
   authority: string;
+  period: Period;
 }
 
-export function HistoryTabs({ authority }: Props) {
+export function HistoryTabs({ authority, period }: Props) {
   const [tab, setTab] = useState<Tab>("trades");
 
   return (
     <div className="border border-ember-border bg-surface-l1">
-      <div className="flex items-center border-b border-ember-border/60">
+      <div className="flex items-center border-b border-ember-border/60 overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={clsx(
-              "px-4 py-2 font-mono text-[10px] uppercase tracking-wider transition-colors",
+              "px-4 py-2 font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors",
               tab === t.key
                 ? "border-b border-ember-orange text-ember-orange"
                 : "text-text-secondary/60 hover:text-text-secondary"
@@ -41,7 +49,7 @@ export function HistoryTabs({ authority }: Props) {
       </div>
 
       <div className="min-h-[200px]">
-        {tab === "trades" && <TradesTable authority={authority} />}
+        {tab === "trades" && <TradesTable authority={authority} period={period} />}
         {tab === "orders" && <OrdersTable authority={authority} />}
         {tab === "funding" && <FundingTable authority={authority} />}
         {tab === "collateral" && <CollateralTable authority={authority} />}
@@ -79,14 +87,25 @@ function useFetch<T>(fetcher: () => Promise<T>, deps: unknown[]): { data: T | nu
 
 /* ─── Trades ─── */
 
-function TradesTable({ authority }: { authority: string }) {
+function TradesTable({ authority, period }: { authority: string; period: Period }) {
   const { data, loading } = useFetch<NormalizedTrade[]>(
-    () => api.getTraderTrades(authority, { limit: 200 }).then((r: any) => (r?.trades ?? []).map(normalizeTrade)),
+    () => api.getTraderTrades(authority, { limit: 500 }).then((r: any) => (r?.trades ?? []).map(normalizeTrade)),
     [authority]
   );
-  const rows = (data ?? []).slice().sort((a, b) => b.time - a.time);
+  const openDetail = useProfileDetailStore((s) => s.openTrade);
+  const all = (data ?? []).slice().sort((a, b) => b.time - a.time);
+  const rows = filterByPeriod(all, period);
+  const hiddenByPeriod = all.length - rows.length;
   return (
-    <TableFrame loading={loading} empty={!loading && rows.length === 0} emptyMsg="No trades yet.">
+    <TableFrame
+      loading={loading}
+      empty={!loading && rows.length === 0}
+      emptyMsg={
+        hiddenByPeriod > 0
+          ? `No trades in the selected window. ${hiddenByPeriod} older trade${hiddenByPeriod === 1 ? "" : "s"} hidden.`
+          : "No trades yet."
+      }
+    >
       <thead>
         <tr className="text-text-secondary/50">
           <Th>Time</Th>
@@ -100,21 +119,27 @@ function TradesTable({ authority }: { authority: string }) {
         </tr>
       </thead>
       <tbody>
-        {rows.slice(0, 100).map((t, i) => {
+        {rows.slice(0, 200).map((t, i) => {
           const buy = t.delta > 0;
           const pnlPos = t.realizedPnl >= 0;
           const liq = t.tradeType === "liquidation";
           return (
-            <tr key={i} className="border-t border-ember-border/40 font-mono">
+            <tr
+              key={i}
+              onClick={() => openDetail(t)}
+              className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+            >
               <Td>{timeAgo(t.time)}</Td>
               <Td>{t.symbol}-PERP</Td>
               <Td colored={buy ? "green" : "red"}>{buy ? "BUY" : "SELL"}</Td>
               <Td right>{Math.abs(t.delta).toFixed(4)}</Td>
               <Td right>${formatPrice(t.price)}</Td>
               <Td right colored={pnlPos ? "green" : t.realizedPnl < 0 ? "red" : undefined}>
-                {t.realizedPnl === 0 ? "—" : `${pnlPos ? "+" : ""}${formatUsd(t.realizedPnl)}`}
+                {t.realizedPnl === 0
+                  ? "—"
+                  : `${pnlPos ? "+" : ""}${formatUsdPrecise(t.realizedPnl)}`}
               </Td>
-              <Td right>{formatUsd(t.fees)}</Td>
+              <Td right>{t.fees === 0 ? "—" : formatUsdPrecise(t.fees)}</Td>
               <Td>
                 <span
                   className={clsx(
@@ -141,9 +166,10 @@ function TradesTable({ authority }: { authority: string }) {
 
 function OrdersTable({ authority }: { authority: string }) {
   const { data, loading } = useFetch<any[]>(
-    () => api.getTraderOrders(authority, { limit: 100 }).then((r: any) => r?.orders ?? []),
+    () => api.getTraderOrders(authority, { limit: 200 }).then((r: any) => r?.orders ?? []),
     [authority]
   );
+  const openDetail = useProfileDetailStore((s) => s.openOrder);
   const rows = (data ?? [])
     .slice()
     .sort((a: any, b: any) => new Date(b.placedAt).getTime() - new Date(a.placedAt).getTime());
@@ -168,7 +194,11 @@ function OrdersTable({ authority }: { authority: string }) {
           const pct = base > 0 ? (filled / base) * 100 : 0;
           const status = String(o.status ?? "").toLowerCase();
           return (
-            <tr key={i} className="border-t border-ember-border/40 font-mono">
+            <tr
+              key={i}
+              onClick={() => openDetail(o)}
+              className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+            >
               <Td>{timeAgoIso(o.placedAt)}</Td>
               <Td>{String(o.marketSymbol ?? "")}-PERP</Td>
               <Td colored={buy ? "green" : "red"}>{buy ? "BUY" : "SELL"}</Td>
@@ -205,13 +235,14 @@ function OrdersTable({ authority }: { authority: string }) {
 function FundingTable({ authority }: { authority: string }) {
   const { data, loading } = useFetch<any[]>(
     () =>
-      api.getTraderFunding(authority, { limit: 100 }).then((r: any) => {
+      api.getTraderFunding(authority, { limit: 200 }).then((r: any) => {
         const f = r?.funding;
         if (Array.isArray(f)) return f;
         return f?.data ?? f?.events ?? [];
       }),
     [authority]
   );
+  const openDetail = useProfileDetailStore((s) => s.openFunding);
   const rows = (data ?? [])
     .slice()
     .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -235,7 +266,11 @@ function FundingTable({ authority }: { authority: string }) {
           const long = sideStr.includes("long");
           const short = sideStr.includes("short");
           return (
-            <tr key={i} className="border-t border-ember-border/40 font-mono">
+            <tr
+              key={i}
+              onClick={() => openDetail(f)}
+              className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+            >
               <Td>{timeAgoIso(f.timestamp)}</Td>
               <Td>{String(f.symbol ?? "")}-PERP</Td>
               <Td colored={long ? "green" : short ? "red" : undefined}>
@@ -247,8 +282,8 @@ function FundingTable({ authority }: { authority: string }) {
                 {payment === 0
                   ? "—"
                   : received
-                    ? `+${formatUsd(Math.abs(payment))}`
-                    : `-${formatUsd(payment)}`}
+                    ? `+${formatUsdPrecise(Math.abs(payment))}`
+                    : `-${formatUsdPrecise(payment)}`}
               </Td>
             </tr>
           );
@@ -262,9 +297,10 @@ function FundingTable({ authority }: { authority: string }) {
 
 function CollateralTable({ authority }: { authority: string }) {
   const { data, loading } = useFetch<any[]>(
-    () => api.getTraderCollateralHistory(authority, 100).then((r: any) => r?.data ?? []),
+    () => api.getTraderCollateralHistory(authority, 200).then((r: any) => r?.data ?? []),
     [authority]
   );
+  const openDetail = useProfileDetailStore((s) => s.openCollateral);
   const rows = (data ?? [])
     .slice()
     .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -293,7 +329,11 @@ function CollateralTable({ authority }: { authority: string }) {
             type === "withdraw" ? "red" :
             undefined;
           return (
-            <tr key={i} className="border-t border-ember-border/40 font-mono">
+            <tr
+              key={i}
+              onClick={() => openDetail(e)}
+              className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+            >
               <Td>{timeAgoIso(e.timestamp)}</Td>
               <Td>
                 <span

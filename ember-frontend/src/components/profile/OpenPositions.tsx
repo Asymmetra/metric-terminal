@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd } from "@/lib/format";
 import { sdkNum } from "@/lib/tradeStats";
+import { useProfileDetailStore } from "@/stores/profileDetailStore";
 import clsx from "clsx";
 
 interface Props {
@@ -127,6 +128,7 @@ function SubaccountCard({ account }: { account: Subaccount }) {
     account.collateral > 0 ? (account.initialMargin / account.collateral) * 100 : 0;
   const risky = marginUsage >= 85 || account.riskState.toLowerCase().includes("risk");
   const upnlPositive = account.unrealizedPnl >= 0;
+  const openDetail = useProfileDetailStore((s) => s.openPosition);
 
   return (
     <div className="bg-surface-l1">
@@ -199,7 +201,25 @@ function SubaccountCard({ account }: { account: Subaccount }) {
                 const isLong = p.size >= 0;
                 const upnl = p.unrealizedPnl;
                 return (
-                  <tr key={`${account.index}-${p.symbol}`} className="border-t border-ember-border/40 font-mono">
+                  <tr
+                    key={`${account.index}-${p.symbol}`}
+                    onClick={() =>
+                      openDetail({
+                        symbol: p.symbol,
+                        size: p.size,
+                        entry: p.entry,
+                        positionValue: p.positionValue,
+                        unrealizedPnl: p.unrealizedPnl,
+                        liqPrice: p.liqPrice,
+                        initialMargin: p.initialMargin,
+                        tp: p.tp,
+                        sl: p.sl,
+                        subaccountIndex: account.index,
+                        isolated: account.isolated,
+                      })
+                    }
+                    className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+                  >
                     <td className="px-4 py-1.5 text-text-primary">{p.symbol}-PERP</td>
                     <td className={clsx("px-4 py-1.5 font-medium", isLong ? "text-ember-green" : "text-ember-red")}>
                       {isLong ? "LONG" : "SHORT"}

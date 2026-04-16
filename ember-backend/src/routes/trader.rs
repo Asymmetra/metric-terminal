@@ -41,15 +41,27 @@ async fn get_trader(
     })))
 }
 
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+    pub market_symbol: Option<String>,
+}
+
 /// GET /api/trader/:pubkey/orders — Order history
 async fn get_orders(
     State(state): State<Arc<AppState>>,
     Path(pubkey): Path<String>,
+    Query(q): Query<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let authority = Pubkey::from_str(&pubkey)
         .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
 
-    let params = OrderHistoryQueryParams::new(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let mut params = OrderHistoryQueryParams::new(limit);
+    if let Some(c) = q.cursor { params = params.with_cursor(c); }
+    if let Some(m) = q.market_symbol { params = params.with_market_symbol(m); }
+
     let response = state
         .http_client
         .get_order_history(&authority, params)
@@ -68,11 +80,16 @@ async fn get_orders(
 async fn get_trades(
     State(state): State<Arc<AppState>>,
     Path(pubkey): Path<String>,
+    Query(q): Query<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let authority = Pubkey::from_str(&pubkey)
         .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
 
-    let params = TradeHistoryQueryParams::new().with_limit(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let mut params = TradeHistoryQueryParams::new().with_limit(limit);
+    if let Some(c) = q.cursor { params = params.with_cursor(c); }
+    if let Some(m) = q.market_symbol { params = params.with_market_symbol(m); }
+
     let response = state
         .http_client
         .get_trade_history(&authority, params)
@@ -111,11 +128,16 @@ async fn get_subaccounts(
 async fn get_funding(
     State(state): State<Arc<AppState>>,
     Path(pubkey): Path<String>,
+    Query(q): Query<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let authority = Pubkey::from_str(&pubkey)
         .map_err(|e| AppError::BadRequest(format!("Invalid pubkey: {}", e)))?;
 
-    let params = FundingHistoryQueryParams::new().with_limit(100);
+    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let mut params = FundingHistoryQueryParams::new().with_limit(limit);
+    if let Some(c) = q.cursor { params = params.with_cursor(c); }
+    if let Some(m) = q.market_symbol { params = params.with_symbol(m); }
+
     let response = state
         .http_client
         .get_funding_history(&authority, params)

@@ -14,6 +14,14 @@ import clsx from "clsx";
 
 type Overlay = "pnl" | "drawdown";
 
+const WINDOWS: Period[] = ["24h", "7d", "30d", "all"];
+const WINDOW_LABELS: Record<Period, string> = {
+  "24h": "1D",
+  "7d": "7D",
+  "30d": "30D",
+  all: "All",
+};
+
 interface Props {
   authority: string;
   period: Period;
@@ -28,15 +36,23 @@ export function EquityChart({ authority, period }: Props) {
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<any>(null);
   const [overlay, setOverlay] = useState<Overlay>("pnl");
+  const [chartWindow, setChartWindow] = useState<Period>(period);
   const [summary, setSummary] = useState<{ start: number; end: number; max: number; drawdown: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [points, setPoints] = useState<PnlPoint[]>([]);
 
-  // Fetch PnL for the selected period.
+  // Keep chart window in sync when page period changes — but only if the user
+  // hasn't explicitly overridden it. We do this by resetting on period prop
+  // change; any subsequent setChartWindow by the user wins until the next prop change.
+  useEffect(() => {
+    setChartWindow(period);
+  }, [period]);
+
+  // Fetch PnL for the chart's own window (independent from page period).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const { resolution, limit } = pnlResolutionForPeriod(period);
+    const { resolution, limit } = pnlResolutionForPeriod(chartWindow);
     api
       .getTraderPnl(authority, resolution, limit)
       .then((res: any) => {
@@ -93,7 +109,27 @@ export function EquityChart({ authority, period }: Props) {
           horzLine: { color: "rgba(255,85,0,0.3)", width: 1, style: LineStyle.Dashed, labelBackgroundColor: COLORS.surfaceL2 },
         },
         rightPriceScale: { borderColor: COLORS.emberBorder, textColor: COLORS.textSecondary, entireTextOnly: true },
-        timeScale: { borderColor: COLORS.emberBorder, timeVisible: true, secondsVisible: false },
+        timeScale: {
+          borderColor: COLORS.emberBorder,
+          timeVisible: true,
+          secondsVisible: false,
+          rightOffset: 4,
+          fixLeftEdge: true,
+          fixRightEdge: true,
+          lockVisibleTimeRangeOnResize: true,
+          shiftVisibleRangeOnNewBar: false,
+        },
+        handleScroll: {
+          mouseWheel: true,
+          pressedMouseMove: true,
+          horzTouchDrag: true,
+          vertTouchDrag: false,
+        },
+        handleScale: {
+          axisPressedMouseMove: { time: true, price: false },
+          mouseWheel: true,
+          pinch: true,
+        },
         localization: {
           priceFormatter: (v: number) => formatUsd(v),
           timeFormatter: (t: number) =>
@@ -127,6 +163,12 @@ export function EquityChart({ authority, period }: Props) {
       seriesRef.current = null;
     };
   }, []);
+
+  // Refetch when authority changes.
+  useEffect(() => {
+    setChartWindow(period);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authority]);
 
   // Paint the series when points / overlay change.
   useEffect(() => {
@@ -193,9 +235,21 @@ export function EquityChart({ authority, period }: Props) {
                   : "—"}
           </span>
         </div>
-        <div className="flex items-center gap-px border border-ember-border/60 bg-ember-black">
-          <OverlayBtn label="PnL" active={overlay === "pnl"} onClick={() => setOverlay("pnl")} />
-          <OverlayBtn label="Drawdown" active={overlay === "drawdown"} onClick={() => setOverlay("drawdown")} />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-px border border-ember-border/60 bg-ember-black">
+            {WINDOWS.map((w) => (
+              <OverlayBtn
+                key={w}
+                label={WINDOW_LABELS[w]}
+                active={chartWindow === w}
+                onClick={() => setChartWindow(w)}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-px border border-ember-border/60 bg-ember-black">
+            <OverlayBtn label="PnL" active={overlay === "pnl"} onClick={() => setOverlay("pnl")} />
+            <OverlayBtn label="Drawdown" active={overlay === "drawdown"} onClick={() => setOverlay("drawdown")} />
+          </div>
         </div>
       </div>
       <div ref={containerRef} className="relative h-[260px] w-full">

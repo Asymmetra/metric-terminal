@@ -7,10 +7,19 @@ import {
   computePerMarket,
   filterByPeriod,
   normalizeTrade,
+  type NormalizedTrade,
   type PerMarketStats,
   type Period,
 } from "@/lib/tradeStats";
+import { useProfileDetailStore } from "@/stores/profileDetailStore";
 import clsx from "clsx";
+
+const PERIOD_LABEL: Record<Period, string> = {
+  "24h": "24h",
+  "7d": "7d",
+  "30d": "30d",
+  all: "all time",
+};
 
 interface Props {
   authority: string;
@@ -22,7 +31,10 @@ interface Props {
 // the trader is most active in lead.
 export function MarketBreakdownGrid({ authority, period }: Props) {
   const [rows, setRows] = useState<PerMarketStats[] | null>(null);
+  const [allRows, setAllRows] = useState<PerMarketStats[] | null>(null);
+  const [trades, setTrades] = useState<NormalizedTrade[]>([]);
   const [loading, setLoading] = useState(true);
+  const openDetail = useProfileDetailStore((s) => s.openPerMarket);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,13 +43,16 @@ export function MarketBreakdownGrid({ authority, period }: Props) {
       .getTraderTrades(authority, { limit: 500 })
       .then((res: any) => {
         if (cancelled) return;
-        const trades = (res?.trades ?? []).map(normalizeTrade);
-        setRows(computePerMarket(filterByPeriod(trades, period)));
+        const ts: NormalizedTrade[] = (res?.trades ?? []).map(normalizeTrade);
+        setTrades(ts);
+        setRows(computePerMarket(filterByPeriod(ts, period)));
+        setAllRows(computePerMarket(ts));
         setLoading(false);
       })
       .catch(() => {
         if (cancelled) return;
         setRows([]);
+        setAllRows([]);
         setLoading(false);
       });
     return () => {
@@ -45,16 +60,30 @@ export function MarketBreakdownGrid({ authority, period }: Props) {
     };
   }, [authority, period]);
 
+  // Recompute the period-filtered rows when the period changes without refetching.
+  useEffect(() => {
+    if (trades.length === 0) return;
+    setRows(computePerMarket(filterByPeriod(trades, period)));
+  }, [period, trades]);
+
   const maxVolume = rows?.reduce((m, r) => (r.volume > m ? r.volume : m), 0) ?? 0;
+  const hiddenMarkets =
+    allRows && rows ? Math.max(0, allRows.length - rows.length) : 0;
 
   return (
     <div className="border border-ember-border bg-surface-l1">
       <div className="flex items-center justify-between border-b border-ember-border/60 px-4 py-2.5">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
-          Per market
-        </span>
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
+            Per market
+          </span>
+          <span className="font-mono text-[9px] text-text-secondary/40">
+            · {PERIOD_LABEL[period]}
+          </span>
+        </div>
         <span className="font-mono text-[10px] text-text-secondary/40">
           {rows?.length ?? 0} {rows?.length === 1 ? "market" : "markets"}
+          {hiddenMarkets > 0 ? ` · ${hiddenMarkets} hidden` : ""}
         </span>
       </div>
 
@@ -92,7 +121,11 @@ export function MarketBreakdownGrid({ authority, period }: Props) {
                 const netPositive = net >= 0;
                 const sharePct = maxVolume > 0 ? (r.volume / maxVolume) * 100 : 0;
                 return (
-                  <tr key={r.symbol} className="border-t border-ember-border/40 font-mono">
+                  <tr
+                    key={r.symbol}
+                    onClick={() => openDetail(r, period)}
+                    className="cursor-pointer border-t border-ember-border/40 font-mono transition-colors hover:bg-surface-l2/40"
+                  >
                     <td className="px-4 py-1.5 text-text-primary">{r.symbol}-PERP</td>
                     <td className="px-4 py-1.5 text-right tabular-nums text-text-secondary/80">{r.trades}</td>
                     <td className="px-4 py-1.5 text-right tabular-nums text-text-secondary/80">{compactUsd(r.volume)}</td>

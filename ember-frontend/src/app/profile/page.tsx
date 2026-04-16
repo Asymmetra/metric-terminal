@@ -11,6 +11,7 @@ import { EquityChart } from "@/components/profile/EquityChart";
 import { OpenPositions } from "@/components/profile/OpenPositions";
 import { MarketBreakdownGrid } from "@/components/profile/MarketBreakdownGrid";
 import { HistoryTabs } from "@/components/profile/HistoryTabs";
+import { ProfileDetailPanel } from "@/components/profile/ProfileDetailPanel";
 import type { Period } from "@/lib/tradeStats";
 
 export default function ProfilePage() {
@@ -68,9 +69,11 @@ function ProfileContent() {
         </div>
 
         <div className="mt-4">
-          <HistoryTabs authority={authority} />
+          <HistoryTabs authority={authority} period={period} />
         </div>
       </div>
+
+      <ProfileDetailPanel />
     </div>
   );
 }
