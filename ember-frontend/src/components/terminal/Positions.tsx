@@ -9,6 +9,7 @@ import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
 import { wsClient } from "@/lib/ws";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
+import { getLeveragePref } from "@/lib/leveragePref";
 import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
@@ -335,10 +336,30 @@ export function Positions() {
                       ? Math.abs((pos.mark_price - liqPrice) / pos.mark_price) * 100
                       : null;
 
-                    // Effective leverage: notional / actual collateral backing the position.
-                    // For cross-margin, this is portfolio leverage (total notional / total collateral).
+                    // Effective leverage:
+                    // - Isolated: notional / subaccount collateral — denominator is the
+                    //   per-position allocation, preserving user intent by construction.
+                    // - Cross: Phoenix doesn't store a per-position leverage on-chain and
+                    //   the total-collateral denominator drifts with unrelated account
+                    //   activity, so notional/total_collateral rarely matches the slider
+                    //   the user dragged at order time. Prefer the intent stored at order
+                    //   submission; fall back to notional / position_initial_margin
+                    //   (contract-level leverage) for positions opened before this fix
+                    //   or from another device.
                     const notional = pos.position_value > 0 ? pos.position_value : pos.size * pos.mark_price;
-                    const effLeverage = collateral > 0 ? notional / collateral : 0;
+                    let effLeverage: number;
+                    if (pos.margin_mode === "isolated") {
+                      effLeverage = collateral > 0 ? notional / collateral : 0;
+                    } else {
+                      const savedLev = getLeveragePref(pos.symbol);
+                      if (savedLev != null) {
+                        effLeverage = savedLev;
+                      } else if (pos.initial_margin > 0) {
+                        effLeverage = notional / pos.initial_margin;
+                      } else {
+                        effLeverage = collateral > 0 ? notional / collateral : 0;
+                      }
+                    }
 
                     return (
                       <tr

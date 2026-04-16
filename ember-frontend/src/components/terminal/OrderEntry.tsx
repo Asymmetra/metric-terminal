@@ -12,6 +12,7 @@ import { formatUsd, formatPrice } from "@/lib/format";
 import { MarginMode } from "@/types/trader";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import { MultiOrderPanel } from "@/components/terminal/MultiOrderPanel";
+import { setLeveragePref } from "@/lib/leveragePref";
 import clsx from "clsx";
 
 export function OrderEntry() {
@@ -218,6 +219,11 @@ export function OrderEntry() {
         await submitIsolatedOrder(orderType, params, (status) => setTxPhase(status));
       } else {
         await submitOrder(orderType, params, (status) => setTxPhase(status));
+        // Persist slider intent for cross-mode display. Phoenix doesn't
+        // store per-position leverage for cross; without this the
+        // positions tray shows notional / total_cross_collateral which
+        // drifts with unrelated account activity.
+        setLeveragePref(selectedSymbol, leverage);
       }
       setCollateralInput("");
       setTpPrice("");
