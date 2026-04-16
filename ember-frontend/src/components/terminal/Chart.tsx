@@ -274,13 +274,14 @@ export function Chart() {
   }, [selectedSymbol, activeTimeframe]);
 
   // Trade markers: overlay the user's historical fills on this market's chart.
-  // Encodes each fill along four dimensions so a glance is enough:
-  //   • color          — green = action on the long side, red = short side
-  //   • brightness     — full saturation = open/add, dimmed = close/reduce
-  //   • arrow direction — matches the direction of the trade (buy up, sell down)
-  //   • text prefix    — "Long" / "Short" / "Close" / "Cover" / "+" / "−"
-  // `baseLotsBefore` and `baseLotsAfter` (signed) tell us whether the fill
-  // grew the position (open/add) or shrank it (close/reduce).
+  // Pure-icon encoding, no text — so candles never cover labels:
+  //   • arrow (▲/▼)    — OPENING or adding to a position (taking on risk)
+  //   • circle (●)     — CLOSING or reducing a position (bleeding off risk)
+  //   • green          — long-side action
+  //   • red            — short-side action
+  //   • position       — above bar = sold at top, below bar = bought at bottom
+  //   • dimmed color on reduces vs fully-closing / opening
+  // Exact size/price/time is still available in the Trade History panel.
   useEffect(() => {
     if (!publicKey || !candleSeriesRef.current || !showMarkers) {
       if (candleSeriesRef.current) candleSeriesRef.current.setMarkers([]);
@@ -300,48 +301,47 @@ export function Chart() {
             const before = parseFloat(t.baseLotsBefore || "0");
             const after = parseFloat(t.baseLotsAfter || "0");
             const delta = parseFloat(t.baseLotsDelta || "0");
-            const absDelta = Math.abs(delta);
             const absBefore = Math.abs(before);
             const absAfter = Math.abs(after);
             const isBuy = delta > 0;
 
-            // Classify the fill. Default to open-long if data is missing,
-            // so we never render an empty/NaN label again.
-            let verb: string;
-            let longSide: boolean;
+            // Classify: opening/adding vs closing/reducing, and which side.
             let opening: boolean;
+            let longSide: boolean;
             if (absBefore === 0 && absAfter > 0) {
               opening = true;
               longSide = after > 0;
-              verb = longSide ? "Long" : "Short";
             } else if (absAfter === 0 && absBefore > 0) {
               opening = false;
               longSide = before > 0;
-              verb = longSide ? "Close" : "Cover";
             } else if (absAfter > absBefore) {
-              // Adding to an existing position in the same direction.
               opening = true;
               longSide = (after || delta) > 0;
-              verb = "+";
             } else {
-              // Partial reduce in the same direction.
               opening = false;
               longSide = before > 0;
-              verb = "−";
             }
 
-            // Color by side, dim on close/reduce so the eye separates
-            // "taking on risk" from "bleeding it off".
             const color = longSide
-              ? opening ? COLORS.emberGreen : "rgba(46,226,155,0.55)"
-              : opening ? COLORS.emberRed : "rgba(242,59,78,0.55)";
+              ? opening ? COLORS.emberGreen : "rgba(46,226,155,0.6)"
+              : opening ? COLORS.emberRed : "rgba(242,59,78,0.6)";
+
+            // Shape encodes action, not trade direction:
+            //   open/add  → arrow (entering risk)
+            //   close/red → circle (exiting risk)
+            let shape: "arrowUp" | "arrowDown" | "circle";
+            if (opening) {
+              shape = isBuy ? "arrowUp" : "arrowDown";
+            } else {
+              shape = "circle";
+            }
 
             return {
               time,
               position: isBuy ? ("belowBar" as const) : ("aboveBar" as const),
               color,
-              shape: isBuy ? ("arrowUp" as const) : ("arrowDown" as const),
-              text: `${verb} ${absDelta.toFixed(2)}`,
+              shape,
+              text: "",
             };
           })
           .sort((a: any, b: any) => a.time - b.time);

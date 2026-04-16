@@ -417,19 +417,18 @@ export function Orderbook() {
         </div>
       </div>
 
-      {/* Depth stats footer */}
+      {/* Depth stats footer — compact 3-column grid so the two rows
+          line up cleanly and never collide on narrow widths. */}
       {depthStats && (
-        <div className="flex items-center justify-between border-t border-ember-border/50 bg-ember-black/50 px-2" style={{ height: "22px" }}>
-          <span className="font-mono text-[9px] text-text-secondary/50">
-            1%: <span className="text-ember-green">${abbreviateNumber(depthStats.bid1)}</span>
-            {" / "}
-            <span className="text-ember-red">${abbreviateNumber(depthStats.ask1)}</span>
-          </span>
-          <span className="font-mono text-[9px] text-text-secondary/50">
-            2%: <span className="text-ember-green">${abbreviateNumber(depthStats.bid2)}</span>
-            {" / "}
-            <span className="text-ember-red">${abbreviateNumber(depthStats.ask2)}</span>
-          </span>
+        <div
+          className="grid grid-cols-[auto_1fr_1fr] items-center gap-x-2 border-t border-ember-border/50 bg-ember-black/50 px-2 py-1 font-mono text-[9px]"
+        >
+          <span className="text-text-secondary/50">1%</span>
+          <span className="text-right text-ember-green">${abbreviateNumber(depthStats.bid1)}</span>
+          <span className="text-right text-ember-red">${abbreviateNumber(depthStats.ask1)}</span>
+          <span className="text-text-secondary/50">2%</span>
+          <span className="text-right text-ember-green">${abbreviateNumber(depthStats.bid2)}</span>
+          <span className="text-right text-ember-red">${abbreviateNumber(depthStats.ask2)}</span>
         </div>
       )}
 
