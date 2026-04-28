@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use phoenix_sdk::{CandlesQueryParams, Timeframe};
+use phoenix_rise::{CandlesQueryParams, Timeframe};
 use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -39,6 +39,7 @@ async fn get_candles(
 
     let candles = state
         .http_client
+        .candles()
         .get_candles(params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch candles: {}", e)))?;

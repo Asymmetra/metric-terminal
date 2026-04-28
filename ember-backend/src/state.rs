@@ -3,7 +3,7 @@ use dashmap::DashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use phoenix_sdk::{ExchangeMarketConfig, PhoenixClient, PhoenixHttpClient, PhoenixMetadata};
+use phoenix_rise::{ExchangeMarketConfig, PhoenixClient, PhoenixHttpClient, PhoenixMetadata};
 
 use crate::services::broadcast::BroadcastHub;
 use crate::services::market_cache::MarketCache;
@@ -35,10 +35,11 @@ impl AppState {
         tracing::info!("Connecting to Phoenix via SDK...");
 
         // SDK reads PHOENIX_API_URL, PHOENIX_WS_URL, PHOENIX_API_KEY from env
-        let http_client = PhoenixHttpClient::new_from_env();
+        let http_client = PhoenixHttpClient::new_from_env()
+            .map_err(|e| anyhow!("PhoenixHttpClient init failed: {:?}", e))?;
 
         // Fetch exchange config to verify connectivity and get market metadata
-        let exchange = http_client.get_exchange().await?;
+        let exchange = http_client.exchange().get_exchange().await?;
         let markets = exchange.markets.clone();
         let symbols: Vec<String> = markets.iter().map(|m| m.symbol.clone()).collect();
         tracing::info!("Found {} markets: {:?}", symbols.len(), symbols);
@@ -90,7 +91,7 @@ impl AppState {
 
     /// Re-fetch exchange config from Phoenix API and update metadata + markets.
     pub async fn refresh_metadata(&self) -> Result<()> {
-        let exchange = self.http_client.get_exchange().await?;
+        let exchange = self.http_client.exchange().get_exchange().await?;
         let new_markets = exchange.markets.clone();
         let symbols: Vec<String> = new_markets.iter().map(|m| m.symbol.clone()).collect();
         let new_metadata = PhoenixMetadata::new(exchange.into());

@@ -14,9 +14,7 @@ If your tooling or workflow attempts to create a worktree, override it. Work in-
 ## Repository Structure
 
 - `ember-frontend/` — Next.js frontend (TypeScript, Tailwind)
-- `ember-backend/` — Rust/Axum backend
-- `phoenix-rise-sdk/` — **READ-ONLY** — Do not edit
-- `phoenix-sdk-docs/` — **READ-ONLY** — Do not edit
+- `ember-backend/` — Rust/Axum backend (depends on `phoenix-rise` crate from crates.io)
 - `.keys/test-wallet.json` — Test wallet keypair (pubkey: HP29cxeYsvErDq51zPmUdWp6j12GdLFQo97JJeQPC8x)
 
 ## Production Endpoints
@@ -47,7 +45,7 @@ Data endpoints:
 ## Rules
 
 1. **No simulated/fake data** — real API calls only
-2. **No editing SDK or docs** — `phoenix-rise-sdk/` and `phoenix-sdk-docs/` are read-only
+2. **Phoenix SDK is upstream** — depend on the `phoenix-rise` crate from crates.io; do not vendor it back into the repo. Public docs live at https://docs.phoenix.trade/sdk/rise.
 3. **Run `tsc --noEmit` before committing** frontend changes
 4. **Run `cargo clippy -- -D warnings` before committing** backend changes
 5. **All testing must be automated** — no browser interaction, no human intervention required

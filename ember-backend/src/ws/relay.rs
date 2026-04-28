@@ -1,12 +1,13 @@
 use crate::phoenix::types::{OrderbookLevel, WsServerMessage};
 use crate::services::broadcast::BroadcastHub;
 use crate::services::market_cache::MarketCache;
-use phoenix_sdk::{
+use phoenix_rise::{
     PhoenixClient, PhoenixClientEvent, PhoenixSubscription, SubscriptionKey, Timeframe,
 };
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 /// Start the relay that feeds data from Phoenix SDK WS into broadcast channels.
 /// Uses the high-level `PhoenixClient` which manages WS connection,
@@ -142,11 +143,16 @@ async fn start_market_relay(
                         } else {
                             0.0
                         };
+                        let ts_secs = t
+                            .timestamp
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
                         serde_json::json!({
                             "price": price,
                             "size": t.base_amount,
                             "side": format!("{:?}", t.side).to_lowercase(),
-                            "timestamp": t.timestamp.timestamp(),
+                            "timestamp": ts_secs,
                         })
                     })
                     .collect();

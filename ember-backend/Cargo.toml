@@ -4,11 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Phoenix Rise SDK (local path dependencies)
-phoenix-sdk = { path = "../phoenix-rise-sdk/rust/sdk" }
-phoenix-types = { path = "../phoenix-rise-sdk/rust/types" }
-phoenix-ix = { path = "../phoenix-rise-sdk/rust/ix" }
-phoenix-math-utils = { path = "../phoenix-rise-sdk/rust/math" }
+# Phoenix Rise SDK (public crate). Pinned until we explicitly bump.
+phoenix-rise = "=0.1.2"
 
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
@@ -39,3 +36,6 @@ solana-instruction = { version = "~2.3", default-features = false, features = ["
 
 # Encoding
 base64 = "0.22"
+
+# HTTP (for proxying perp-api endpoints the SDK doesn't wrap, e.g. /v1/invite/check)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -1,7 +1,7 @@
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use phoenix_sdk::{PnlQueryParams, PnlResolution};
+use phoenix_rise::{PnlQueryParams, PnlResolution};
 use serde::Deserialize;
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
@@ -112,7 +112,7 @@ async fn get_leaderboard(
         };
 
         let params = PnlQueryParams::new(resolution).with_limit(pnl_limit);
-        match state.http_client.get_pnl(&authority, params).await {
+        match state.http_client.traders().get_trader_pnl(&authority, params).await {
             Ok(pnl_data) => {
                 let data = serde_json::to_value(&pnl_data).unwrap_or_default();
                 let points = data.as_array().cloned().unwrap_or_default();

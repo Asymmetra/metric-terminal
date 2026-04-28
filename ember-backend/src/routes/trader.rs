@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use phoenix_sdk::{
+use phoenix_rise::{
     CollateralHistoryQueryParams, FundingHistoryQueryParams, OrderHistoryQueryParams,
     PhoenixHttpError, PnlQueryParams, PnlResolution, TradeHistoryQueryParams,
 };
@@ -23,7 +23,8 @@ async fn get_trader(
 
     let mut traders = state
         .http_client
-        .get_traders(&authority)
+        .traders()
+        .get_trader(&authority)
         .await
         .map_err(|e| match e {
             PhoenixHttpError::ApiError { status: 404, .. } => {
@@ -64,7 +65,8 @@ async fn get_orders(
 
     let response = state
         .http_client
-        .get_order_history(&authority, params)
+        .orders()
+        .get_trader_order_history(&authority, params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch order history: {}", e)))?;
 
@@ -92,7 +94,8 @@ async fn get_trades(
 
     let response = state
         .http_client
-        .get_trade_history(&authority, params)
+        .trades()
+        .get_trader_trade_history(&authority, params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch trade history: {}", e)))?;
 
@@ -114,7 +117,8 @@ async fn get_subaccounts(
 
     let traders = state
         .http_client
-        .get_traders(&authority)
+        .traders()
+        .get_trader(&authority)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch subaccounts: {}", e)))?;
 
@@ -140,7 +144,8 @@ async fn get_funding(
 
     let response = state
         .http_client
-        .get_funding_history(&authority, params)
+        .funding()
+        .get_user_funding_history(&authority, params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch funding history: {}", e)))?;
 
@@ -179,7 +184,8 @@ async fn get_pnl(
     let params = PnlQueryParams::new(resolution).with_limit(limit);
     let pnl = state
         .http_client
-        .get_pnl(&authority, params)
+        .traders()
+        .get_trader_pnl(&authority, params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch PnL: {}", e)))?;
 
@@ -204,7 +210,8 @@ async fn get_collateral_history(
     let params = CollateralHistoryQueryParams::new(limit);
     let response = state
         .http_client
-        .get_collateral_history(&authority, params)
+        .collateral()
+        .get_user_collateral_history(&authority, params)
         .await
         .map_err(|e| AppError::Phoenix(format!("Failed to fetch collateral history: {}", e)))?;
 

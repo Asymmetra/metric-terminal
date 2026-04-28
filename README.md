@@ -46,6 +46,9 @@ Ember Terminal connects directly to Phoenix's on-chain perpetuals markets and pr
 - **Multi-market switching** with instant data refresh (no stale state)
 - **Resizable panels** — drag to resize any section, layout persists across sessions
 - **WebSocket streaming** — orderbook, trades, stats, and trader state update in real time
+- **Slippage protection** — configurable max slippage (200bps default, 500bps for close-all) on all 4 market order paths
+- **Error boundaries** — independent crash isolation for Chart, Orderbook, Order Entry, and Positions sections with retry
+- **Trade deduplication** — 30-second guard preventing duplicate transaction submissions across all 9 TX paths
 - **Wallet connect** with Phantom
 
 ## Architecture
@@ -74,8 +77,7 @@ Ember Terminal connects directly to Phoenix's on-chain perpetuals markets and pr
 │         │                │                              │
 │         ▼                ▼                              │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │            Phoenix Rise SDK (Rust)               │    │
-│  │  phoenix-sdk · phoenix-types · phoenix-ix        │    │
+│  │      Phoenix Rise SDK (crates.io: phoenix-rise)  │    │
 │  └──────────────────────┬──────────────────────────┘    │
 └─────────────────────────┼───────────────────────────────┘
                           │
@@ -132,7 +134,7 @@ All transaction endpoints are under `/api/tx/`:
 | Charts | Lightweight Charts 4 (TradingView engine) |
 | Wallet | Phantom via @solana/wallet-adapter-react |
 | Backend | Rust, Axum 0.8, Tokio, Tower-HTTP |
-| SDK | Phoenix Rise SDK (local Rust crate — phoenix-sdk, phoenix-types, phoenix-ix) |
+| SDK | [`phoenix-rise`](https://crates.io/crates/phoenix-rise) (Rust crate from crates.io) |
 | Chain | Solana mainnet |
 | Layout | react-resizable-panels with localStorage persistence |
 
@@ -177,12 +179,6 @@ ember-terminal/
 │       ├── stores/             # Zustand state management
 │       ├── hooks/              # Custom hooks (WS, trader sync, tx builder)
 │       └── lib/                # Utilities (API client, WS client, formatting)
-│
-├── phoenix-rise-sdk/           # Phoenix SDK (Rust, local dependency)
-│   └── rust/
-│       ├── sdk/                # Core SDK crate
-│       ├── types/              # Protocol type definitions
-│       └── ix/                 # Instruction builders
 │
 ├── Dockerfile                  # Multi-stage Rust build for production
 ├── render.yaml                 # Render Blueprint (backend deployment)
@@ -324,14 +320,13 @@ Expected output: `30/30 PASS`, wallet returns to its starting collateral balance
 
 Features planned but not yet implemented, roughly by priority:
 
-- **Activation onboarding flow** — guide unactivated users through the full Phoenix registration → invite code → deposit → active sequence in-product
+- **Invite code registration flow** — modal for new wallets to enter invite/referral code before trading (SDK support confirmed, proposal drafted)
 - **Testnet toggle** — switch between mainnet and Phoenix devnet without code changes
 - **Sub-account dashboard** — dedicated `/accounts` page showing per-subaccount collateral, positions, and transfer UI
 - **Advanced orders** — trailing stops, bracket orders with multiple TP levels, OCO
 - **Copy trading** — follow and mirror another trader's positions in real time
 - **Competitions** — time-boxed PnL leaderboards with opt-in entry
 - **PWA / mobile** — installable app with responsive layout for mobile trading
-- **WebSocket reconnection hardening** — exponential backoff with jitter; stale-data indicator on prolonged disconnect
 
 ## License
 
