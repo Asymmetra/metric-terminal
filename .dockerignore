@@ -1,7 +1,5 @@
 ember-frontend/
-phoenix-sdk-docs/
 ember-backend/target/
-phoenix-rise-sdk/rust/target/
 .git/
 .DS_Store
 *.md

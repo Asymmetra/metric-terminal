@@ -8,10 +8,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Copy SDK first (changes less frequently → better layer caching)
-COPY phoenix-rise-sdk/rust/ phoenix-rise-sdk/rust/
-
-# Copy backend source + lockfile
+# phoenix-rise SDK is fetched from crates.io — no longer vendored.
 COPY ember-backend/ ember-backend/
 
 WORKDIR /build/ember-backend
