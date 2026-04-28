@@ -17,6 +17,7 @@ export function useTraderSync() {
   const setConnected = useTraderStore((s) => s.setConnected);
   const setFetchingAccount = useTraderStore((s) => s.setFetchingAccount);
   const setNoAccount = useTraderStore((s) => s.setNoAccount);
+  const setInviteActivated = useTraderStore((s) => s.setInviteActivated);
   const reset = useTraderStore((s) => s.reset);
   const prevPubkey = useRef<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
@@ -40,6 +41,24 @@ export function useTraderSync() {
 
     prevPubkey.current = pubkeyStr;
     setConnected(true, pubkeyStr);
+    // Reset invite state to unknown while we check; modal stays hidden until this resolves.
+    setInviteActivated(null);
+
+    // When we confirm the wallet has no Phoenix account, ask perp-api whether
+    // the wallet has already activated an invite. That distinguishes
+    // "fresh wallet → show referral modal" from "activated but never deposited
+    // → just show the deposit banner."
+    async function checkInviteStatus() {
+      try {
+        const res = await api.checkOnboardingStatus(pubkeyStr!);
+        setInviteActivated(!!res.activated);
+      } catch (e) {
+        // On error, leave inviteActivated null so the modal doesn't flash —
+        // user can retry by reconnecting. Still log for diagnostics.
+        console.warn("Onboarding status check failed:", e);
+        setInviteActivated(null);
+      }
+    }
 
     // Fetch initial trader state from REST
     async function fetchTraderData() {
@@ -49,15 +68,18 @@ export function useTraderSync() {
         if (data?.accounts?.length > 0) {
           setAccounts(data.accounts);
           setNoAccount(false);
+          // setAccounts already flips inviteActivated=true (clearly onboarded)
         } else {
           // Empty accounts array — backend has no account for this wallet
           setNoAccount(true);
+          checkInviteStatus();
         }
       } catch (e: any) {
         const status = (e as any)?.status as number | undefined;
         if (status === 404 || status === 502) {
           // Backend confirmed: no Phoenix account for this wallet
           setNoAccount(true);
+          checkInviteStatus();
         } else {
           // Network/server error — don't show the Phoenix warning; leave state unchanged
           console.warn("Trader data fetch failed:", e);
@@ -85,5 +107,5 @@ export function useTraderSync() {
       unsubRef.current?.();
       unsubRef.current = null;
     };
-  }, [connected, publicKey, setAccounts, setConnected, setFetchingAccount, setNoAccount, reset]);
+  }, [connected, publicKey, setAccounts, setConnected, setFetchingAccount, setNoAccount, setInviteActivated, reset]);
 }

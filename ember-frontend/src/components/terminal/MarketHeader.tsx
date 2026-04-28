@@ -9,7 +9,6 @@ import { useTraderStore } from "@/stores/traderStore";
 import { formatPrice, formatPercent, formatUsd, abbreviateNumber } from "@/lib/format";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useMarkets } from "@/hooks/useMarkets";
-import { useTraderSync } from "@/hooks/useTraderSync";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -424,7 +423,9 @@ function AvailableStat({
 export function MarketHeader() {
   useWebSocket();
   useMarkets();
-  useTraderSync();
+  // useTraderSync() now runs in the root-layout <OnboardingGate />, so every
+  // page (terminal, profile, leaderboard) gets consistent trader state and
+  // the invite-gate modal without each page wiring it in itself.
 
   const isMobile = useIsMobile();
   const [showDepositModal, setShowDepositModal] = useState(false);

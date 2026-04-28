@@ -11,6 +11,9 @@ export function PortfolioSummaryBar() {
   const connected = useTraderStore((s) => s.connected);
   const fetchingAccount = useTraderStore((s) => s.fetchingAccount);
   const noAccount = useTraderStore((s) => s.noAccount);
+  // Don't stack the "no trading account" banner on top of the onboarding
+  // modal — only surface it once the user has cleared the invite gate.
+  const inviteActivated = useTraderStore((s) => s.inviteActivated);
   const collateral = useTraderStore((s) => s.collateral);
   const positions = useTraderStore((s) => s.positions);
   const initialMargin = useTraderStore((s) => s.initialMargin);
@@ -41,8 +44,10 @@ export function PortfolioSummaryBar() {
 
   if (!connected) return null;
 
-  // Show warning if wallet is connected but no Phoenix account exists
-  if (noAccount && !fetchingAccount) {
+  // Show warning if wallet is connected but no Phoenix account exists.
+  // Require inviteActivated === true so the banner doesn't double up with the
+  // onboarding modal when we're still waiting on activation.
+  if (noAccount && !fetchingAccount && inviteActivated === true) {
     return (
       <>
         <div className="flex items-center justify-center gap-2 border-b border-ember-orange/30 bg-ember-orange/10 px-3 py-1.5">

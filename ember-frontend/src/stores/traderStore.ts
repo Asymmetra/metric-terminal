@@ -70,6 +70,11 @@ interface TraderStore {
   allAccounts: TraderAccount[]; // all registered subaccounts — preserved for per-subaccount balance queries
   fetchingAccount: boolean; // true while REST fetch is in-flight; gates no-account warning
   noAccount: boolean; // true only when backend confirmed 502/404 (no Phoenix account)
+  // Invite/referral onboarding state (Phoenix off-chain gate).
+  //   null  — we haven't checked yet; modals/banners stay hidden
+  //   false — checked and the wallet has not activated a referral yet
+  //   true  — wallet has either activated OR already has Phoenix accounts
+  inviteActivated: boolean | null;
   activationState: ActivationState; // derived from primary account flags: uninitialized | inactive | active
   activationFlags: number; // raw flags value when activationState === "inactive"
   collateral: number;
@@ -85,6 +90,7 @@ interface TraderStore {
   setConnected: (connected: boolean, authority?: string) => void;
   setFetchingAccount: (fetching: boolean) => void;
   setNoAccount: (noAccount: boolean) => void;
+  setInviteActivated: (v: boolean | null) => void;
   reset: () => void;
 }
 
@@ -96,6 +102,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   allAccounts: [],
   fetchingAccount: false,
   noAccount: false,
+  inviteActivated: null,
   activationState: "uninitialized",
   activationFlags: 0,
   collateral: 0,
@@ -136,6 +143,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       account: primary,
       allAccounts: accounts,
       noAccount: false,
+      inviteActivated: true,
       activationState,
       activationFlags: flags,
       collateral: sdkNum(primary.effectiveCollateral),
@@ -153,6 +161,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
     set({ connected, authority: authority || null }),
   setFetchingAccount: (fetching) => set({ fetchingAccount: fetching }),
   setNoAccount: (noAccount) => set({ noAccount, ...(noAccount && { activationState: "uninitialized" as ActivationState, activationFlags: 0 }) }),
+  setInviteActivated: (v) => set({ inviteActivated: v }),
   reset: () =>
     set({
       connected: false,
@@ -161,6 +170,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       allAccounts: [],
       fetchingAccount: false,
       noAccount: false,
+      inviteActivated: null,
       activationState: "uninitialized",
       activationFlags: 0,
       collateral: 0,

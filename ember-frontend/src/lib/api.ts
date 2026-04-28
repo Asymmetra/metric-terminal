@@ -108,4 +108,17 @@ export const api = {
     }),
   getLeaderboard: (period = "1d", limit = 50) =>
     fetchApi<any>(`/api/leaderboard?period=${period}&limit=${limit}`),
+  // Onboarding / invite gate
+  checkOnboardingStatus: (pubkey: string) =>
+    fetchApi<{ activated: boolean; whitelisted_at: string | null; invite_code_used: string | null }>(
+      `/api/onboard/check/${pubkey}`
+    ),
+  activateReferral: (authority: string, referralCode: string) =>
+    fetchApi<{ trader_pda: string | null; already_activated: boolean }>(
+      "/api/onboard/activate-referral",
+      {
+        method: "POST",
+        body: JSON.stringify({ authority, referral_code: referralCode }),
+      }
+    ),
 };
