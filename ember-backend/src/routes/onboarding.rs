@@ -14,10 +14,13 @@ use crate::state::AppState;
 //
 // The Phoenix invite system is NOT an on-chain gate — any wallet can register,
 // deposit, and trade without activating an invite. We enforce the gate at the
-// UI layer: new wallets must either activate with a referral code or choose
-// "view only" (which disconnects the wallet). These routes just let the
-// frontend ask Phoenix "is this wallet activated?" and "activate this wallet
-// with this code."
+// UI layer: new wallets either activate (referral or access code) or browse
+// the terminal in view-only mode.
+//
+// Per the SDK README, the two activation routes are NOT interchangeable:
+//   /v1/invite/activate                — access code / allowlist code  (field: code)
+//   /v1/invite/activate-with-referral  — referral code from another trader (field: referral_code)
+// We expose one route each so callers explicitly pick which they have.
 
 #[derive(Deserialize)]
 pub struct ActivateReferralRequest {
@@ -25,9 +28,51 @@ pub struct ActivateReferralRequest {
     pub referral_code: String,
 }
 
+#[derive(Deserialize)]
+pub struct ActivateAccessCodeRequest {
+    pub authority: String,
+    pub code: String,
+}
+
 fn perp_api_url() -> String {
     std::env::var("PHOENIX_API_URL")
         .unwrap_or_else(|_| "https://perp-api.phoenix.trade".to_string())
+}
+
+/// Map a `Result<String, PhoenixHttpError>` from the SDK invite client into the
+/// frontend's expected `{ trader_pda, already_activated }` shape, bucketing
+/// errors as `invalid_code:...` or `upstream_error:...`.
+fn map_activation_result(
+    result: Result<String, PhoenixHttpError>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    match result {
+        Ok(trader_pda) => Ok(Json(serde_json::json!({
+            "trader_pda": trader_pda,
+            "already_activated": false,
+        }))),
+        Err(err) => {
+            if let PhoenixHttpError::ApiError { status, message, .. } = &err {
+                let msg_lower = message.to_lowercase();
+                // "Already activated" / "already whitelisted" → success from the
+                // user's POV. The frontend flips inviteActivated=true and closes
+                // the modal so users who activated previously but never deposited
+                // aren't blocked again on reconnect.
+                if msg_lower.contains("already")
+                    && (msg_lower.contains("activ") || msg_lower.contains("whitelist"))
+                {
+                    return Ok(Json(serde_json::json!({
+                        "trader_pda": null,
+                        "already_activated": true,
+                    })));
+                }
+                // 400/404 + anything mentioning "invalid" → recoverable user error.
+                if *status == 400 || *status == 404 || msg_lower.contains("invalid") {
+                    return Err(AppError::BadRequest(format!("invalid_code:{}", message)));
+                }
+            }
+            Err(AppError::Phoenix(format!("upstream_error:{err}")))
+        }
+    }
 }
 
 // POST /api/onboard/activate-referral
@@ -51,41 +96,41 @@ async fn activate_referral(
         ));
     }
 
-    match state.http_client.invite().activate_referral(&authority, code).await {
-        Ok(body) => {
-            // SDK returns the response body as a String; parse out trader_pda if present.
-            let trader_pda = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("trader_pda").and_then(|t| t.as_str()).map(str::to_string));
-            Ok(Json(serde_json::json!({
-                "trader_pda": trader_pda,
-                "already_activated": false,
-            })))
-        }
-        Err(err) => {
-            // Phoenix returns non-2xx bodies with varying error shapes. We look
-            // at status + message to bucket the error into invalid_code or
-            // already_activated; anything else becomes upstream_error.
-            if let PhoenixHttpError::ApiError { status, message, .. } = &err {
-                let msg_lower = message.to_lowercase();
-                if msg_lower.contains("already") && (msg_lower.contains("activ") || msg_lower.contains("whitelist")) {
-                    // Treat already-activated as success from the caller's POV —
-                    // the frontend will flip inviteActivated=true and close the modal.
-                    return Ok(Json(serde_json::json!({
-                        "trader_pda": null,
-                        "already_activated": true,
-                    })));
-                }
-                if *status == 400 || *status == 404 || msg_lower.contains("invalid") {
-                    return Err(AppError::BadRequest(format!(
-                        "invalid_code:{}",
-                        message
-                    )));
-                }
-            }
-            Err(AppError::Phoenix(format!("upstream_error:{err}")))
-        }
+    map_activation_result(
+        state
+            .http_client
+            .invite()
+            .activate_referral(&authority, code)
+            .await,
+    )
+}
+
+// POST /api/onboard/activate-access-code
+// Body: { authority, code }
+// Same response/error shape as activate_referral. Wraps Phoenix's
+// /v1/invite/activate route (allowlist / access-code activation) which is
+// distinct from the referral route per the rise-public SDK README.
+async fn activate_access_code(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ActivateAccessCodeRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let authority = Pubkey::from_str(&req.authority).map_err(|e| {
+        AppError::BadRequest(format!("invalid_code:invalid authority pubkey: {e}"))
+    })?;
+    let code = req.code.trim();
+    if code.is_empty() {
+        return Err(AppError::BadRequest(
+            "invalid_code:code is required".to_string(),
+        ));
     }
+
+    map_activation_result(
+        state
+            .http_client
+            .invite()
+            .activate_invite(&authority, code)
+            .await,
+    )
 }
 
 // GET /api/onboard/check/:pubkey
@@ -107,8 +152,8 @@ async fn check_onboarding_status(
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
-        // If perp-api returns 404, treat as "not activated" — this matches
-        // the shape the frontend expects and avoids showing an error state.
+        // 404 → wallet hasn't activated. Match the activated=false shape so the
+        // frontend doesn't treat this as an error.
         if status == 404 {
             return Ok(Json(serde_json::json!({
                 "activated": false,
@@ -149,5 +194,6 @@ async fn check_onboarding_status(
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/activate-referral", post(activate_referral))
+        .route("/activate-access-code", post(activate_access_code))
         .route("/check/{pubkey}", get(check_onboarding_status))
 }

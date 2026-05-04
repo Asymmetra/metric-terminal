@@ -110,6 +110,29 @@ async function bracketSemantics() {
   }
 }
 
+// ---------- Onboarding routes (both invite paths) ----------
+async function onboardingMatrix() {
+  console.log("\n=== Onboarding (referral + access code) ===");
+  // Both routes should reject bogus codes with 400 invalid_code:* — and route
+  // to their distinct upstream Phoenix endpoints (visible in the error body).
+  const ref = await post("/api/onboard/activate-referral", { authority: PUB, referral_code: "NOPE-XYZ" });
+  ref.status === 400 && JSON.stringify(ref.body).includes("invalid_referral_code")
+    ? ok("activate-referral routes to /v1/invite/activate-with-referral", "rejected with invalid_referral_code")
+    : ko("activate-referral routes correctly", `status=${ref.status} body=${JSON.stringify(ref.body).slice(0, 120)}`);
+
+  const acc = await post("/api/onboard/activate-access-code", { authority: PUB, code: "NOPE-XYZ" });
+  acc.status === 400 && JSON.stringify(acc.body).includes("invalid_invite_code")
+    ? ok("activate-access-code routes to /v1/invite/activate", "rejected with invalid_invite_code")
+    : ko("activate-access-code routes correctly", `status=${acc.status} body=${JSON.stringify(acc.body).slice(0, 120)}`);
+
+  // Negative validation
+  const empty = await post("/api/onboard/activate-access-code", { authority: PUB, code: "  " });
+  empty.status === 400 ? ok("access-code rejects empty/whitespace", `status=${empty.status}`) : ko("access-code rejects empty", `status=${empty.status}`);
+
+  const badAuth = await post("/api/onboard/activate-referral", { authority: "not-a-pubkey", referral_code: "X" });
+  badAuth.status === 400 ? ok("referral rejects bad authority", `status=${badAuth.status}`) : ko("referral rejects bad authority", `status=${badAuth.status}`);
+}
+
 // ---------- Validation guardrails (negative tests) ----------
 async function guardrails() {
   console.log("\n=== Validation guardrails (expect 4xx) ===");
@@ -175,6 +198,7 @@ async function wsChannels() {
   await restMatrix();
   await txMatrix();
   await bracketSemantics();
+  await onboardingMatrix();
   await guardrails();
   await wsChannels();
 
