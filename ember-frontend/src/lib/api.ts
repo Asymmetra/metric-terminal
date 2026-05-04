@@ -121,4 +121,12 @@ export const api = {
         body: JSON.stringify({ authority, referral_code: referralCode }),
       }
     ),
+  activateAccessCode: (authority: string, code: string) =>
+    fetchApi<{ trader_pda: string | null; already_activated: boolean }>(
+      "/api/onboard/activate-access-code",
+      {
+        method: "POST",
+        body: JSON.stringify({ authority, code }),
+      }
+    ),
 };
