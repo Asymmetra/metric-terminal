@@ -117,35 +117,57 @@ async fn get_leaderboard(
                 let data = serde_json::to_value(&pnl_data).unwrap_or_default();
                 let points = data.as_array().cloned().unwrap_or_default();
 
+                // Phoenix's `cumulative_pnl` is **already net of fees and funding**
+                // (it represents realized PnL net of all costs). Subtracting fees
+                // a second time on the client would double-count, so we surface a
+                // single `net_pnl` field. We keep `gross_fees` (taker + maker, the
+                // SDK exposes them separately) and `cumulative_funding` for
+                // attribution / display, but they are NOT to be re-applied to the
+                // headline number.
                 if let Some(last) = points.last() {
-                    let cumulative_pnl = last
+                    let last_cum_pnl = last
                         .get("cumulative_pnl")
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0);
-                    let cumulative_fees = last
-                        .get("cumulative_taker_fee")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-                    let first_pnl = points
+                    let last_taker = last.get("cumulative_taker_fee").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let last_maker = last.get("cumulative_maker_fee").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let last_funding = last.get("cumulative_funding_payment").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let first_cum_pnl = points
                         .first()
                         .and_then(|p| p.get("cumulative_pnl"))
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0);
+                    let first_taker = points.first().and_then(|p| p.get("cumulative_taker_fee")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let first_maker = points.first().and_then(|p| p.get("cumulative_maker_fee")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let first_funding = points.first().and_then(|p| p.get("cumulative_funding_payment")).and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-                    let period_pnl = cumulative_pnl - first_pnl;
+                    let period_net_pnl = last_cum_pnl - first_cum_pnl;
+                    let period_fees = (last_taker - first_taker) + (last_maker - first_maker);
+                    let period_funding = last_funding - first_funding;
 
                     entries.push(serde_json::json!({
                         "authority": pubkey_str,
-                        "pnl": period_pnl,
-                        "cumulative_pnl": cumulative_pnl,
-                        "fees": cumulative_fees,
+                        // Net PnL over the period (already net of fees + funding).
+                        // The `pnl` field is kept as an alias for short-term
+                        // backward compat with older frontend builds and will be
+                        // removed once the rename is fully rolled out.
+                        "net_pnl": period_net_pnl,
+                        "pnl": period_net_pnl,
+                        "cumulative_pnl": last_cum_pnl,
+                        "gross_fees": period_fees,
+                        "cumulative_funding": period_funding,
+                        // Keep `fees` as alias for the same reason as `pnl` above.
+                        "fees": period_fees,
                     }));
                 } else {
                     // PnL returned OK but no data points — include trader with zero values
                     entries.push(serde_json::json!({
                         "authority": pubkey_str,
+                        "net_pnl": 0.0,
                         "pnl": 0.0,
                         "cumulative_pnl": 0.0,
+                        "gross_fees": 0.0,
+                        "cumulative_funding": 0.0,
                         "fees": 0.0,
                     }));
                 }
@@ -155,8 +177,11 @@ async fn get_leaderboard(
                 // Still include the trader so they appear on the leaderboard
                 entries.push(serde_json::json!({
                     "authority": pubkey_str,
+                    "net_pnl": 0.0,
                     "pnl": 0.0,
                     "cumulative_pnl": 0.0,
+                    "gross_fees": 0.0,
+                    "cumulative_funding": 0.0,
                     "fees": 0.0,
                 }));
             }
@@ -165,8 +190,18 @@ async fn get_leaderboard(
 
     // Sort by period PnL descending
     entries.sort_by(|a, b| {
-        let a_pnl = a.get("pnl").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let b_pnl = b.get("pnl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        // Sort by net_pnl (the new canonical field). Falls back to legacy
+        // `pnl` alias for any old shape that may still surface.
+        let a_pnl = a
+            .get("net_pnl")
+            .or_else(|| a.get("pnl"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let b_pnl = b
+            .get("net_pnl")
+            .or_else(|| b.get("pnl"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         b_pnl
             .partial_cmp(&a_pnl)
             .unwrap_or(std::cmp::Ordering::Equal)
