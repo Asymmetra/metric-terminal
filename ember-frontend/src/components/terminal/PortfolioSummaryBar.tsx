@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
+import { getLivePositionPnl } from "@/hooks/useLivePositionPnl";
 import { formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -22,22 +23,12 @@ export function PortfolioSummaryBar() {
   const markPrices = useStatsStore((s) => s.markPrices);
   const [showDepositModal, setShowDepositModal] = useState(false);
 
-  // Compute live unrealized PnL from current mark prices (not stale REST snapshot)
-  const liveUnrealizedPnl = useMemo(() => {
-    let total = 0;
-    for (const pos of positions) {
-      const mark = markPrices[pos.symbol] ?? pos.mark_price;
-      if (mark > 0 && pos.entry_price > 0) {
-        const isLong = pos.side.toLowerCase() === "long";
-        total += isLong
-          ? (mark - pos.entry_price) * pos.size
-          : (pos.entry_price - mark) * pos.size;
-      } else {
-        total += pos.unrealized_pnl;
-      }
-    }
-    return total;
-  }, [positions, markPrices]);
+  // Live unrealized PnL = sum of per-position mark-to-market via the shared
+  // hook (single source of truth — see hooks/useLivePositionPnl.ts).
+  const liveUnrealizedPnl = useMemo(
+    () => positions.reduce((sum, pos) => sum + getLivePositionPnl(pos, markPrices[pos.symbol]).markToMarket, 0),
+    [positions, markPrices],
+  );
 
   // Live portfolio value = collateral + live unrealized PnL
   const livePortfolioValue = collateral + liveUnrealizedPnl;

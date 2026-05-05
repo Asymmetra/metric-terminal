@@ -10,6 +10,7 @@ import { wsClient } from "@/lib/ws";
 import { api } from "@/lib/api";
 import { formatPrice, formatUsd, formatSize } from "@/lib/format";
 import { getLeveragePref } from "@/lib/leveragePref";
+import { getLivePositionPnl } from "@/hooks/useLivePositionPnl";
 import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { LimitOrder, TradeHistoryItem, TraderPosition } from "@/types/trader";
 import clsx from "clsx";
@@ -108,25 +109,17 @@ export function Positions() {
     return () => { unsubs.forEach((unsub) => unsub()); };
   }, [positionSymbols, selectedSymbol, setMarkPrice]);
 
-  // Inject live mark_price and recompute unrealized PnL from current prices.
-  // The REST snapshot PnL freezes at fetch time — this keeps it live.
+  // Inject live mark + live PnL via the shared hook so this component matches
+  // every other live-PnL consumer (PortfolioSummaryBar / MarketHeader /
+  // TradeDetailPanel). See ember-frontend/src/hooks/useLivePositionPnl.ts.
   const positions = useMemo(() =>
     rawPositions.filter((pos) => pos.size > 0).map((pos) => {
-      const liveMarkPrice = markPrices[pos.symbol] ?? pos.mark_price;
-      const isLong = pos.side.toLowerCase() === "long";
-      // Recompute PnL: (mark - entry) * size for longs, (entry - mark) * size for shorts
-      const livePnl = liveMarkPrice > 0 && pos.entry_price > 0
-        ? isLong
-          ? (liveMarkPrice - pos.entry_price) * pos.size
-          : (pos.entry_price - liveMarkPrice) * pos.size
-        : pos.unrealized_pnl;
-      // Recompute notional from live mark price
-      const liveNotional = liveMarkPrice > 0 ? pos.size * liveMarkPrice : pos.position_value;
+      const live = getLivePositionPnl(pos, markPrices[pos.symbol]);
       return {
         ...pos,
-        mark_price: liveMarkPrice,
-        unrealized_pnl: livePnl,
-        position_value: liveNotional,
+        mark_price: live.mark,
+        unrealized_pnl: live.markToMarket,
+        position_value: live.notional,
       };
     }),
     [rawPositions, markPrices]

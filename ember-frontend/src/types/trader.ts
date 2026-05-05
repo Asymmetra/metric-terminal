@@ -24,6 +24,14 @@ export interface TraderPosition {
   liquidation_price: number | null;
   position_value: number;
   initial_margin: number;
+  // Funding (separate from mark-to-market unrealized PnL).
+  // unsettled_funding: this epoch, not yet paid; jumps to ~0 at the 8h boundary
+  //   when settlement folds it into accumulated_funding.
+  // accumulated_funding: lifetime funding for this position (signed; negative
+  //   = paid). Used in cumulative PnL accounting; should NOT be added to the
+  //   headline mark-to-market unrealized PnL.
+  unsettled_funding: number;
+  accumulated_funding: number;
   tp_price: number | null;
   sl_price: number | null;
   subaccount_index: number; // 0 = cross-margin, 1-100 = isolated

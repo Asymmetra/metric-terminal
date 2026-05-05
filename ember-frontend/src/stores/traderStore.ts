@@ -38,6 +38,11 @@ function transformPosition(sdkPos: any, subaccountIndex: number): TraderPosition
     liquidation_price: liqPrice && liqPrice > 0 ? liqPrice : null,
     position_value: sdkNum(sdkPos.positionValue),
     initial_margin: sdkNum(sdkPos.initialMargin || sdkPos.positionInitialMargin),
+    // Funding (Phoenix tracks both fields per-position; both are realized PnL
+    // components and are intentionally NOT added into the headline
+    // unrealized_pnl above — that field is mark-to-market only.)
+    unsettled_funding: sdkNum(sdkPos.unsettledFunding ?? sdkPos.unsettled_funding),
+    accumulated_funding: sdkNum(sdkPos.accumulatedFunding ?? sdkPos.accumulated_funding),
     tp_price: sdkPos.tpPrice != null ? sdkNum(sdkPos.tpPrice) : (sdkPos.tp_price != null ? sdkNum(sdkPos.tp_price) : null),
     sl_price: sdkPos.slPrice != null ? sdkNum(sdkPos.slPrice) : (sdkPos.sl_price != null ? sdkNum(sdkPos.sl_price) : null),
     subaccount_index: subaccountIndex,
@@ -86,7 +91,8 @@ interface TraderStore {
   collateral: number; // effectiveCollateral — already net of unrealized PnL
   collateralBalance: number; // raw collateralBalance — useful for ROI denominator
   portfolioValue: number;
-  unrealizedPnl: number;
+  unrealizedPnl: number; // sum across all subaccounts (cross + isolated)
+  discountedUnrealizedPnl: number; // risk-haircut version, used for margin checks
   initialMargin: number;
   maintenanceMargin: number;
   riskState: string;
@@ -118,6 +124,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   collateralBalance: 0,
   portfolioValue: 0,
   unrealizedPnl: 0,
+  discountedUnrealizedPnl: 0,
   initialMargin: 0,
   maintenanceMargin: 0,
   riskState: "",
@@ -149,6 +156,17 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
     const canTrade = primary.capabilities?.placeMarketOrder?.immediate === true;
     const activationState: ActivationState = canTrade || flags >= 63 ? "active" : "inactive";
 
+    // Aggregate unrealizedPnl (and the discounted variant) across ALL subaccounts.
+    // Phoenix's per-account fields are isolated to that subaccount, so taking
+    // only the cross-margin (primary) account would silently zero-out PnL from
+    // every isolated subaccount. This is what the portfolio bar / leaderboard /
+    // any future consumer of `unrealizedPnl` should see.
+    const totalUnrealizedPnl = accounts.reduce((s, a) => s + sdkNum(a.unrealizedPnl), 0);
+    const totalDiscountedUnrealizedPnl = accounts.reduce(
+      (s, a) => s + sdkNum(a.discountedUnrealizedPnl),
+      0,
+    );
+
     set({
       account: primary,
       allAccounts: accounts,
@@ -160,7 +178,8 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       collateral: sdkNum(primary.effectiveCollateral),
       collateralBalance: sdkNum(primary.collateralBalance),
       portfolioValue: sdkNum(primary.portfolioValue),
-      unrealizedPnl: sdkNum(primary.unrealizedPnl),
+      unrealizedPnl: totalUnrealizedPnl,
+      discountedUnrealizedPnl: totalDiscountedUnrealizedPnl,
       initialMargin: sdkNum(primary.initialMargin),
       maintenanceMargin: sdkNum(primary.maintenanceMargin),
       riskState: primary.riskState || "",
@@ -191,6 +210,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       collateralBalance: 0,
       portfolioValue: 0,
       unrealizedPnl: 0,
+      discountedUnrealizedPnl: 0,
       initialMargin: 0,
       maintenanceMargin: 0,
       riskState: "",

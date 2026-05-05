@@ -97,6 +97,12 @@ export interface TradeStats {
   liquidations: number;
 }
 
+// Per-fill semantics (verified empirically by tests/pnl-accuracy.mjs):
+// Phoenix's TradeHistoryItem.realizedPnl is GROSS of fees — i.e. it represents
+// the (close - open) × size delta on the closed portion of the position only,
+// without subtracting the fee paid on this fill. So netPnl = realizedPnl - fees
+// is the correct "what hit my account" number, NOT a double-subtraction.
+// If Phoenix changes that semantic the lifecycle test will fail loudly.
 export function computeTradeStats(trades: NormalizedTrade[]): TradeStats {
   let realizedPnl = 0;
   let fees = 0;
@@ -182,12 +188,15 @@ export function computePerMarket(trades: NormalizedTrade[]): PerMarketStats[] {
 }
 
 // PnL time-series helper. The backend /pnl endpoint returns points with
-// cumulativePnl / cumulativeTakerFee / cumulativeFundingPayment / unrealizedPnl.
+// cumulativePnl / cumulativeTakerFee / cumulativeMakerFee / cumulativeFundingPayment / unrealizedPnl.
 // periodDelta returns the change across the requested window using first and
 // last non-null values — safer than last − first when a point is missing.
 export interface PnlPoint {
   time: number; // seconds
   cumulativePnl: number;
+  // cumulativeFees = takerFee + makerFee. We must include BOTH otherwise a
+  // trader who works limit orders sees their fees under-reported. Verified by
+  // tests/pnl-accuracy.mjs against summed fill fees.
   cumulativeFees: number;
   cumulativeFunding: number;
   unrealizedPnl: number;
@@ -198,7 +207,9 @@ export function normalizePnlSeries(raw: unknown[]): PnlPoint[] {
     .map((p) => ({
       time: sdkNum(p.timestamp),
       cumulativePnl: sdkNum(p.cumulativePnl),
-      cumulativeFees: sdkNum(p.cumulativeTakerFee),
+      // Sum taker + maker. Phoenix exposes them as separate fields; before
+      // this fix we only read taker which dropped maker fees on limit fills.
+      cumulativeFees: sdkNum(p.cumulativeTakerFee) + sdkNum(p.cumulativeMakerFee),
       cumulativeFunding: sdkNum(p.cumulativeFundingPayment),
       unrealizedPnl: sdkNum(p.unrealizedPnl),
     }))

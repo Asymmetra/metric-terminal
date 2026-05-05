@@ -18,9 +18,18 @@ const PERIODS = [
 
 interface LeaderboardEntry {
   authority: string;
-  pnl: number;
+  // `net_pnl` is the canonical field — already net of fees + funding per
+  // Phoenix's PnL series. `pnl` is a deprecated alias kept for one rollout
+  // cycle. `cumulative_pnl` is lifetime, also net.
+  net_pnl?: number;
+  pnl?: number;
   cumulative_pnl: number;
+  // `gross_fees` is the period sum (taker + maker). `fees` was the legacy
+  // taker-only field — both are surfaced for back-compat but already
+  // reflected in net_pnl, so they should NOT be subtracted again.
+  gross_fees?: number;
   fees: number;
+  cumulative_funding?: number;
 }
 
 function truncateAddress(addr: string): string {
@@ -167,14 +176,20 @@ export default function LeaderboardPage() {
                   <th className="px-3 py-2.5 text-left font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
                     Trader
                   </th>
-                  <th className="px-3 py-2.5 text-right font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
-                    Period PnL
+                  <th
+                    className="px-3 py-2.5 text-right font-mono text-[10px] uppercase tracking-wider text-text-secondary/60"
+                    title="Net PnL over the selected period — already net of trading fees and funding payments. Do NOT subtract the Fees column from this value."
+                  >
+                    Period Net PnL
                   </th>
                   <th className="px-3 py-2.5 text-right font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
                     Cumulative PnL
                   </th>
-                  <th className="px-3 py-2.5 text-right font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">
-                    Fees Paid
+                  <th
+                    className="px-3 py-2.5 text-right font-mono text-[10px] uppercase tracking-wider text-text-secondary/60"
+                    title="Trading fees paid in the period (taker + maker). Already deducted from Net PnL — shown for attribution only."
+                  >
+                    Fees (info)
                   </th>
                 </tr>
               </thead>
@@ -206,15 +221,20 @@ export default function LeaderboardPage() {
                         {truncateAddress(entry.authority)}
                       </span>
                     </td>
-                    <td
-                      className={clsx(
-                        "px-3 py-2.5 text-right font-mono text-xs tabular-nums",
-                        entry.pnl >= 0 ? "text-ember-green" : "text-ember-red"
-                      )}
-                    >
-                      {entry.pnl >= 0 ? "+" : ""}
-                      {formatUsd(entry.pnl)}
-                    </td>
+                    {(() => {
+                      const periodPnl = entry.net_pnl ?? entry.pnl ?? 0;
+                      return (
+                        <td
+                          className={clsx(
+                            "px-3 py-2.5 text-right font-mono text-xs tabular-nums",
+                            periodPnl >= 0 ? "text-ember-green" : "text-ember-red"
+                          )}
+                        >
+                          {periodPnl >= 0 ? "+" : ""}
+                          {formatUsd(periodPnl)}
+                        </td>
+                      );
+                    })()}
                     <td
                       className={clsx(
                         "px-3 py-2.5 text-right font-mono text-xs tabular-nums",
@@ -224,8 +244,11 @@ export default function LeaderboardPage() {
                       {entry.cumulative_pnl >= 0 ? "+" : ""}
                       {formatUsd(entry.cumulative_pnl)}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-text-secondary">
-                      {formatUsd(Math.abs(entry.fees))}
+                    <td
+                      className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-text-secondary/70"
+                      title="Already deducted from Net PnL — informational only."
+                    >
+                      {formatUsd(Math.abs(entry.gross_fees ?? entry.fees ?? 0))}
                     </td>
                   </tr>
                 ))}

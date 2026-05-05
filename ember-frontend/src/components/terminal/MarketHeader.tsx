@@ -9,6 +9,7 @@ import { useTraderStore } from "@/stores/traderStore";
 import { formatPrice, formatPercent, formatUsd, abbreviateNumber } from "@/lib/format";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useMarkets } from "@/hooks/useMarkets";
+import { getLivePositionPnl } from "@/hooks/useLivePositionPnl";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { DepositWithdraw } from "@/components/terminal/DepositWithdraw";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -443,21 +444,11 @@ export function MarketHeader() {
   const markPrices = useStatsStore((s) => s.markPrices);
   const hasAccount = account != null;
 
-  const unrealizedPnl = useMemo(() => {
-    let total = 0;
-    for (const pos of positions) {
-      const mark = markPrices[pos.symbol] ?? pos.mark_price;
-      if (mark > 0 && pos.entry_price > 0) {
-        const isLong = pos.side.toLowerCase() === "long";
-        total += isLong
-          ? (mark - pos.entry_price) * pos.size
-          : (pos.entry_price - mark) * pos.size;
-      } else {
-        total += pos.unrealized_pnl;
-      }
-    }
-    return total;
-  }, [positions, markPrices]);
+  // Single source of truth for live PnL — see hooks/useLivePositionPnl.ts.
+  const unrealizedPnl = useMemo(
+    () => positions.reduce((sum, pos) => sum + getLivePositionPnl(pos, markPrices[pos.symbol]).markToMarket, 0),
+    [positions, markPrices],
+  );
   const portfolioValue = collateral + unrealizedPnl;
 
   if (isMobile) {

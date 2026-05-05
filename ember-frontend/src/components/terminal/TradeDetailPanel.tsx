@@ -6,6 +6,7 @@ import { useTradeDetailStore } from "@/stores/tradeDetailStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
+import { getLivePositionPnl } from "@/hooks/useLivePositionPnl";
 import { formatPrice, formatSize, formatUsd } from "@/lib/format";
 import clsx from "clsx";
 
@@ -95,7 +96,10 @@ export function TradeDetailPanel() {
 function PositionDetail({ data }: { data: import("@/types/trader").TraderPosition }) {
   const isLong = data.side.toLowerCase() === "long";
   const markPrices = useStatsStore((s) => s.markPrices);
-  const liveMarkPrice = markPrices[data.symbol] ?? data.mark_price;
+  // Single source of truth for live PnL — see hooks/useLivePositionPnl.ts.
+  const live = getLivePositionPnl(data, markPrices[data.symbol]);
+  const liveMarkPrice = live.mark;
+  const liveUnrealizedPnl = live.markToMarket;
   const { cancelStopLoss } = useTransactionBuilder();
   const [cancellingLeg, setCancellingLeg] = useState<"tp" | "sl" | null>(null);
 
@@ -122,9 +126,9 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
   const collateral = data.margin_mode === "isolated" && isoCollateral
     ? parseFloat(typeof isoCollateral === "object" && isoCollateral.ui != null ? isoCollateral.ui : String(isoCollateral)) || 0
     : crossCollateral;
-  const notional = data.position_value > 0 ? data.position_value : data.size * liveMarkPrice;
+  const notional = live.notional;
   const effLeverage = collateral > 0 ? notional / collateral : 0;
-  const roi = collateral > 0 ? (data.unrealized_pnl / collateral) * 100 : 0;
+  const roi = collateral > 0 ? (liveUnrealizedPnl / collateral) * 100 : 0;
   const liqDistPct = data.liquidation_price != null && liveMarkPrice > 0
     ? Math.abs((liveMarkPrice - data.liquidation_price) / liveMarkPrice) * 100
     : null;
@@ -170,8 +174,8 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
       {/* PnL & Returns */}
       <SectionHeader title="PnL & Returns" />
       <DetailRow label="Unrealized PnL">
-        <span className={data.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red"}>
-          {data.unrealized_pnl >= 0 ? "+" : ""}{formatUsd(data.unrealized_pnl)}
+        <span className={liveUnrealizedPnl >= 0 ? "text-ember-green" : "text-ember-red"}>
+          {liveUnrealizedPnl >= 0 ? "+" : ""}{formatUsd(liveUnrealizedPnl)}
         </span>
       </DetailRow>
       <DetailRow label="Discounted PnL">
@@ -184,6 +188,20 @@ function PositionDetail({ data }: { data: import("@/types/trader").TraderPositio
           {roi >= 0 ? "+" : ""}{roi.toFixed(2)}%
         </span>
       </DetailRow>
+      {Math.abs(live.unsettledFunding) > 0.0001 && (
+        <DetailRow label="Unsettled Funding">
+          <span className={live.unsettledFunding >= 0 ? "text-ember-green" : "text-ember-red"} title="Funding accrued this 8h epoch — settles into accumulated funding at the next boundary. Not included in headline PnL.">
+            {live.unsettledFunding >= 0 ? "+" : ""}{formatUsd(live.unsettledFunding)}
+          </span>
+        </DetailRow>
+      )}
+      {Math.abs(live.accumulatedFunding) > 0.0001 && (
+        <DetailRow label="Lifetime Funding">
+          <span className={live.accumulatedFunding >= 0 ? "text-ember-green" : "text-ember-red"} title="Total realized funding payments for this position over its lifetime.">
+            {live.accumulatedFunding >= 0 ? "+" : ""}{formatUsd(live.accumulatedFunding)}
+          </span>
+        </DetailRow>
+      )}
 
       {/* Margin & Risk */}
       <SectionHeader title="Margin & Risk" />
