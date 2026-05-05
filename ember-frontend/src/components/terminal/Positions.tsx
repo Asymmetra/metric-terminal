@@ -329,6 +329,18 @@ export function Positions() {
                     const isoAccount = pos.margin_mode === "isolated"
                       ? allAccounts.find((a) => a.traderSubaccountIndex === pos.subaccount_index)
                       : null;
+                    const crossAccount = allAccounts.find((a) => a.traderSubaccountIndex === 0);
+                    const positionAccount = isoAccount ?? crossAccount;
+                    // Phoenix's per-account risk classification. Anything other than
+                    // "healthy" means the account is approaching liquidation —
+                    // "cancellable" means open orders may be auto-cancelled, and
+                    // "Liquidatable"/"BeingLiquidated" mean a keeper can/will close
+                    // the position. We surface this on the row so users can spot
+                    // a critical isolated subaccount even when the cross-margin
+                    // account in the top bar still reads "healthy".
+                    const accountRiskState = (positionAccount?.riskState ?? "").toLowerCase();
+                    const isUnhealthy = accountRiskState.length > 0 && !accountRiskState.includes("healthy") && accountRiskState !== "zerocollateralnopositions";
+                    const isLiquidatable = accountRiskState.includes("liquidat");
                     const sdkValToNum = (v: any) =>
                       v == null ? 0
                         : typeof v === "object" && v.ui != null ? parseFloat(v.ui) || 0
@@ -386,10 +398,32 @@ export function Positions() {
                       <tr
                         key={posKey}
                         onClick={() => openPosition(pos)}
-                        className="cursor-pointer font-mono text-[11px] transition-colors hover:bg-surface-l2/30"
+                        className={clsx(
+                          "cursor-pointer font-mono text-[11px] transition-colors",
+                          isLiquidatable
+                            ? "bg-ember-red/10 hover:bg-ember-red/15"
+                            : isUnhealthy
+                              ? "bg-yellow-500/5 hover:bg-yellow-500/10"
+                              : "hover:bg-surface-l2/30"
+                        )}
                         style={{ height: "28px" }}
+                        title={isUnhealthy ? `Phoenix risk state: ${positionAccount?.riskState}` : undefined}
                       >
-                        <td className="px-3 text-text-primary">{pos.symbol}-PERP</td>
+                        <td className="px-3 text-text-primary">
+                          {isUnhealthy && (
+                            <span
+                              className={clsx(
+                                "mr-1.5 inline-block",
+                                isLiquidatable ? "text-ember-red" : "text-yellow-500"
+                              )}
+                              aria-label={`Risk: ${positionAccount?.riskState}`}
+                              title={`Phoenix risk state: ${positionAccount?.riskState}. Open orders on this account may be auto-cancelled and the position is approaching liquidation.`}
+                            >
+                              ⚠
+                            </span>
+                          )}
+                          {pos.symbol}-PERP
+                        </td>
                         <td className={clsx("px-3 font-medium", isLong ? "text-ember-green" : "text-ember-red")}>
                           {pos.side.toUpperCase()}
                         </td>
