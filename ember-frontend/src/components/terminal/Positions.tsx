@@ -67,8 +67,17 @@ export function Positions() {
   const limitOrders = useTraderStore((s) => s.limitOrders);
   const lastRefresh = useTraderStore((s) => s.lastRefresh);
   const crossCollateral = useTraderStore((s) => s.collateral);
+  const crossCollateralBalance = useTraderStore((s) => s.collateralBalance);
   const allAccounts = useTraderStore((s) => s.allAccounts);
+  const markets = useMarketStore((s) => s.markets);
   const selectedSymbol = useMarketStore((s) => s.selectedSymbol);
+
+  // Per-market base-lot precision so a small BTC position (e.g. 0.0043) doesn't
+  // render as "0.00". Falls back to 2 decimals if the market hasn't loaded.
+  const sizeDecimalsFor = useCallback(
+    (symbol: string) => markets.find((m) => m.symbol === symbol)?.baseLotsDecimals ?? 2,
+    [markets]
+  );
   const markPrices = useStatsStore((s) => s.markPrices);
   const setMarkPrice = useStatsStore((s) => s.setMarkPrice);
   const { submitOrder, submitIsolatedOrder, cancelOrders, transferCollateral, closeAllPositions, cancelStopLoss, connected } = useTransactionBuilder();
@@ -320,15 +329,27 @@ export function Positions() {
                     const isoAccount = pos.margin_mode === "isolated"
                       ? allAccounts.find((a) => a.traderSubaccountIndex === pos.subaccount_index)
                       : null;
-                    const isoCollateral = isoAccount?.effectiveCollateral;
-                    const collateral = pos.margin_mode === "isolated" && isoCollateral
-                      ? parseFloat(typeof isoCollateral === "object" && isoCollateral.ui != null ? isoCollateral.ui : String(isoCollateral)) || 0
-                      : crossCollateral;
-
-                    // ROI%: PnL / collateral backing this position
-                    const roi = collateral > 0
-                      ? (pos.unrealized_pnl / collateral) * 100
+                    const sdkValToNum = (v: any) =>
+                      v == null ? 0
+                        : typeof v === "object" && v.ui != null ? parseFloat(v.ui) || 0
+                        : parseFloat(String(v)) || 0;
+                    const isoEffective = sdkValToNum(isoAccount?.effectiveCollateral);
+                    const isoBalance = sdkValToNum(isoAccount?.collateralBalance);
+                    // COLLATERAL column shows effective (post-PnL) — that's what's actually
+                    // available right now and reflects how much margin is left.
+                    const collateral = pos.margin_mode === "isolated" ? isoEffective : crossCollateral;
+                    // ROI denominator: pre-PnL collateral (collateralBalance). Using
+                    // effectiveCollateral as the denominator inflates ROI past −100% as
+                    // the position goes underwater, which is mathematically impossible on
+                    // Phoenix (liquidation triggers before that). Clamp at −100% as a
+                    // safety net for any residual edge case.
+                    const roiDenominator = pos.margin_mode === "isolated"
+                      ? (isoBalance > 0 ? isoBalance : isoEffective)
+                      : (crossCollateralBalance > 0 ? crossCollateralBalance : crossCollateral);
+                    const rawRoi = roiDenominator > 0
+                      ? (pos.unrealized_pnl / roiDenominator) * 100
                       : 0;
+                    const roi = Math.max(-100, rawRoi);
 
                     // Liquidation distance: use real liq price from SDK
                     const liqPrice = pos.liquidation_price;
@@ -372,7 +393,7 @@ export function Positions() {
                         <td className={clsx("px-3 font-medium", isLong ? "text-ember-green" : "text-ember-red")}>
                           {pos.side.toUpperCase()}
                         </td>
-                        <td className="px-3 text-right text-text-primary/90">{formatSize(pos.size, 2)}</td>
+                        <td className="px-3 text-right text-text-primary/90">{formatSize(pos.size, sizeDecimalsFor(pos.symbol))}</td>
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.entry_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.mark_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">

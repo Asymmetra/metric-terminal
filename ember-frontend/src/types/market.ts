@@ -3,6 +3,14 @@ export interface Market {
   status: string;
   isolatedOnly?: boolean;
   maxLeverage?: number;
+  // Per-market base-lot precision. BTC=4 (0.0001), SOL=2 (0.01), MON=0 (1).
+  // Used to format position size in the UI so a small BTC position
+  // (e.g. 0.0043) doesn't render as "0.00".
+  baseLotsDecimals?: number;
+  tickSize?: number;
+  takerFee?: number;
+  makerFee?: number;
+  fundingIntervalSeconds?: number;
 }
 
 export interface OrderbookLevel {

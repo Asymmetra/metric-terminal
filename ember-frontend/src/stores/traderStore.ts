@@ -83,7 +83,8 @@ interface TraderStore {
   onboardingDismissed: boolean;
   activationState: ActivationState; // derived from primary account flags: uninitialized | inactive | active
   activationFlags: number; // raw flags value when activationState === "inactive"
-  collateral: number;
+  collateral: number; // effectiveCollateral — already net of unrealized PnL
+  collateralBalance: number; // raw collateralBalance — useful for ROI denominator
   portfolioValue: number;
   unrealizedPnl: number;
   initialMargin: number;
@@ -114,6 +115,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
   activationState: "uninitialized",
   activationFlags: 0,
   collateral: 0,
+  collateralBalance: 0,
   portfolioValue: 0,
   unrealizedPnl: 0,
   initialMargin: 0,
@@ -156,6 +158,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       activationState,
       activationFlags: flags,
       collateral: sdkNum(primary.effectiveCollateral),
+      collateralBalance: sdkNum(primary.collateralBalance),
       portfolioValue: sdkNum(primary.portfolioValue),
       unrealizedPnl: sdkNum(primary.unrealizedPnl),
       initialMargin: sdkNum(primary.initialMargin),
@@ -185,6 +188,7 @@ export const useTraderStore = create<TraderStore>((set, get) => ({
       activationState: "uninitialized",
       activationFlags: 0,
       collateral: 0,
+      collateralBalance: 0,
       portfolioValue: 0,
       unrealizedPnl: 0,
       initialMargin: 0,
