@@ -281,7 +281,7 @@ export function Positions() {
           <>
             {positions.length > 0 ? (
               <div className="scrollbar-hide overflow-x-auto">
-              <table className="w-full min-w-[1100px]">
+              <table className="w-full min-w-[1180px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <ColHeader label="Symbol" tooltipTitle="Symbol" tooltip="Perpetual contract market symbol" align="left" />
@@ -290,7 +290,8 @@ export function Positions() {
                     <ColHeader label="Notional" tooltipTitle="Notional Value" tooltip="Position size in USD at the current mark price. Formula: Size × Mark. Updates live as mark moves." />
                     <ColHeader label="Entry" tooltipTitle="Entry Price" tooltip="Average entry price of the position" />
                     <ColHeader label="Mark" tooltipTitle="Mark Price" tooltip="Current mark price used for PnL and margin calculations. Updated in real-time from the oracle." />
-                    <ColHeader label="Collateral" tooltipTitle="Collateral" tooltip="Capital backing this position. For isolated: allocated collateral. For cross: initial margin requirement. Formula: Notional ÷ Leverage" />
+                    <ColHeader label="Collateral" tooltipTitle="Collateral (Live)" tooltip="Capital currently backing this position, post-PnL. For isolated: subaccount effective collateral (deposit + unrealized PnL). For cross: total cross-margin effective collateral. Updates live as mark moves." />
+                    <ColHeader label="Cost" tooltipTitle="Cost / Initial Margin" tooltip="What you committed at open. Isolated: total deposited into this position's dedicated subaccount — your maximum loss. Cross: margin reserved at open (entry notional ÷ leverage). Static after open; compare to Collateral to see how much PnL has eroded your initial bet." />
                     <ColHeader label="Unreal. PnL" tooltipTitle="Unrealized PnL" tooltip="Unrealized profit/loss. Formula: (Mark − Entry) × Size for longs, (Entry − Mark) × Size for shorts" />
                     <ColHeader label="ROI%" tooltipTitle="Return on Investment" tooltip="Return on invested collateral. Formula: Unrealized PnL ÷ Collateral × 100" />
                     <ColHeader label="Liq. Price" tooltipTitle="Liquidation Price" tooltip="Price at which the position will be liquidated. Provided by the exchange based on your margin and maintenance requirements." />
@@ -344,6 +345,27 @@ export function Positions() {
                     // COLLATERAL column shows effective (post-PnL) — that's what's actually
                     // available right now and reflects how much margin is left.
                     const collateral = pos.margin_mode === "isolated" ? isoEffective : crossCollateral;
+
+                    // COST column: capital committed at open ("how much did I bet").
+                    // Isolated → raw collateralBalance of the dedicated subaccount,
+                    //   which is what the user deposited (their maximum loss for
+                    //   this bet). Differs from `collateral` (effective) by the
+                    //   unrealized PnL accrued since open.
+                    // Cross   → entry_notional / leverage_at_open. The exact margin
+                    //   allocation when the order was placed. Falls back to
+                    //   `position_initial_margin` (Phoenix's current required
+                    //   margin) if we don't have the saved-leverage hint — that
+                    //   value drifts with mark but is the cleanest approximation
+                    //   when historical leverage isn't recorded.
+                    const cost = (() => {
+                      if (pos.margin_mode === "isolated") {
+                        return isoBalance > 0 ? isoBalance : pos.initial_margin;
+                      }
+                      const savedLev = getLeveragePref(pos.symbol);
+                      const entryNotional = pos.entry_price * pos.size;
+                      if (savedLev && savedLev > 0 && entryNotional > 0) return entryNotional / savedLev;
+                      return pos.initial_margin;
+                    })();
                     // ROI denominator: pre-PnL collateral (collateralBalance). Using
                     // effectiveCollateral as the denominator inflates ROI past −100% as
                     // the position goes underwater, which is mathematically impossible on
@@ -436,6 +458,12 @@ export function Positions() {
                           {collateral > 0
                             ? `$${formatPrice(collateral)}`
                             : "—"}
+                        </td>
+                        <td
+                          className="px-3 text-right text-text-secondary/60"
+                          title={pos.margin_mode === "isolated" ? "Total deposited into this isolated subaccount — your max loss for this bet." : "Margin reserved when this cross-margin position was opened."}
+                        >
+                          {cost > 0 ? `$${formatPrice(cost)}` : "—"}
                         </td>
                         <td className={clsx("px-3 text-right font-medium", pos.unrealized_pnl >= 0 ? "text-ember-green" : "text-ember-red")}>
                           {pos.unrealized_pnl >= 0 ? "+" : ""}{formatUsd(pos.unrealized_pnl)}
