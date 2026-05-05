@@ -79,6 +79,23 @@ async function getTrades(limit = 50) {
   if (!r.ok) throw new Error(`/api/trader/.../trades -> ${r.status}`);
   return r.json();
 }
+/**
+ * Trade history has a propagation lag of several seconds after on-chain
+ * confirmation. Poll until at least `expectedNew` fills since `sinceTs` are
+ * visible (or until timeout). Returns the latest snapshot regardless.
+ */
+async function pollTrades(sinceTs, expectedNew, timeoutMs = 30_000) {
+  const tradeTsMs = (t) => typeof t.timestamp === "string" ? new Date(t.timestamp).getTime() : Number(t.timestamp);
+  const start = Date.now();
+  let latest;
+  while (Date.now() - start < timeoutMs) {
+    latest = await getTrades(100);
+    const newCount = (latest.trades ?? []).filter((t) => tradeTsMs(t) >= sinceTs).length;
+    if (newCount >= expectedNew) return latest;
+    await sleep(3000);
+  }
+  return latest;
+}
 async function getPnl(resolution = "1m", limit = 60) {
   const r = await fetch(`${BACKEND}/api/trader/${WALLET}/pnl?resolution=${resolution}&limit=${limit}`);
   if (!r.ok) throw new Error(`/api/trader/.../pnl -> ${r.status}`);
@@ -178,15 +195,17 @@ const openSig = await buildAndSend("/api/tx/market-order", {
 await sleep(4000);
 
 // ───── T1+: assert open-fill record ─────
-log(`\n[T1+] verifying open fill record...`);
+log(`\n[T1+] verifying open fill record (polling for trade-history propagation)...`);
 // Trade-history endpoint returns the latest N fills (paginated). To find our
 // new fills we filter by timestamp ≥ T0 rather than relying on signature
 // presence (the SDK's TradeHistoryItem.signature can be null on some paths).
+// Phoenix's trade-history pipeline has a multi-second propagation lag after
+// on-chain confirmation, so we poll up to 30s.
 const tradeTsMs = (t) => typeof t.timestamp === "string" ? new Date(t.timestamp).getTime() : Number(t.timestamp);
-const t1Trades = await getTrades(100);
+const t1Trades = await pollTrades(t0, 1, 30_000);
 const newFills = (t1Trades.trades ?? []).filter((t) => tradeTsMs(t) >= t0);
 log(`  ${newFills.length} new fill(s) since T0`);
-const openFill = newFills.find((t) => t.signature === openSig) ?? newFills.find((t) => Math.abs(num(t.baseLotsDelta)) > 0 && num(t.baseLotsDelta) > 0) ?? newFills[newFills.length - 1];
+const openFill = newFills.find((t) => t.signature === openSig) ?? newFills.find((t) => num(t.baseLotsDelta) > 0) ?? newFills[newFills.length - 1];
 if (!openFill) {
   ko("open fill record visible in trade history", `signature=${openSig} not found in ${t1Trades.trades?.length ?? 0} trades`);
 } else {
@@ -261,8 +280,8 @@ const closeSig = await buildAndSend("/api/tx/market-order", {
 await sleep(4000);
 
 // ───── T3+: assert close-fill record ─────
-log(`\n[T3+] verifying close fill record...`);
-const t3Trades = await getTrades(100);
+log(`\n[T3+] verifying close fill record (polling for both fills to propagate)...`);
+const t3Trades = await pollTrades(t0, 2, 30_000);
 const t3NewFills = (t3Trades.trades ?? []).filter((t) => tradeTsMs(t) >= t0);
 log(`  ${t3NewFills.length} new fill(s) since T0`);
 // Find close fill = the SELL among new fills (baseLotsDelta < 0). Prefer signature match, fall back to side.
