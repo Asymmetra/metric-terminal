@@ -281,12 +281,13 @@ export function Positions() {
           <>
             {positions.length > 0 ? (
               <div className="scrollbar-hide overflow-x-auto">
-              <table className="w-full min-w-[1000px]">
+              <table className="w-full min-w-[1100px]">
                 <thead>
                   <tr className="text-[10px] text-text-secondary/70">
                     <ColHeader label="Symbol" tooltipTitle="Symbol" tooltip="Perpetual contract market symbol" align="left" />
                     <ColHeader label="Side" tooltipTitle="Side" tooltip="Position direction: Long (profit when price rises) or Short (profit when price falls)" align="left" />
-                    <ColHeader label="Size" tooltipTitle="Size" tooltip="Position size in base asset units" />
+                    <ColHeader label="Size" tooltipTitle="Size" tooltip="Position size in the base asset (BTC, SOL, etc.). The asset is implied by the Symbol column." />
+                    <ColHeader label="Notional" tooltipTitle="Notional Value" tooltip="Position size in USD at the current mark price. Formula: Size × Mark. Updates live as mark moves." />
                     <ColHeader label="Entry" tooltipTitle="Entry Price" tooltip="Average entry price of the position" />
                     <ColHeader label="Mark" tooltipTitle="Mark Price" tooltip="Current mark price used for PnL and margin calculations. Updated in real-time from the oracle." />
                     <ColHeader label="Collateral" tooltipTitle="Collateral" tooltip="Capital backing this position. For isolated: allocated collateral. For cross: initial margin requirement. Formula: Notional ÷ Leverage" />
@@ -420,7 +421,15 @@ export function Positions() {
                         <td className={clsx("px-3 font-medium", isLong ? "text-ember-green" : "text-ember-red")}>
                           {pos.side.toUpperCase()}
                         </td>
-                        <td className="px-3 text-right text-text-primary/90">{formatSize(pos.size, sizeDecimalsFor(pos.symbol))}</td>
+                        <td className="px-3 text-right text-text-primary/90">
+                          <span title={`${formatSize(pos.size, sizeDecimalsFor(pos.symbol))} ${pos.symbol}`}>
+                            {formatSize(pos.size, sizeDecimalsFor(pos.symbol))}
+                            <span className="ml-1 text-text-secondary/40">{pos.symbol}</span>
+                          </span>
+                        </td>
+                        <td className="px-3 text-right text-text-primary/90" title="Notional value at the current mark price (size × mark)">
+                          ${formatPrice(notional)}
+                        </td>
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.entry_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">${formatPrice(pos.mark_price)}</td>
                         <td className="px-3 text-right text-text-secondary/60">
