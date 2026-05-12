@@ -2,6 +2,16 @@ use crate::phoenix::types::{OrderbookLevel, OrderbookSnapshot};
 use dashmap::DashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Capacity breakdown for the /health/memory endpoint.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MarketCacheSizes {
+    pub orderbooks: usize,
+    pub orderbook_levels: usize,
+    pub recent_trades_symbols: usize,
+    pub recent_trades_total: usize,
+    pub relay_timestamps: usize,
+}
+
 /// Tracks the last time data was received per channel type per symbol.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RelayStatus {
@@ -86,6 +96,23 @@ impl MarketCache {
             symbol: r.symbol.clone(),
             timestamp: r.timestamp,
         })
+    }
+
+    /// Sizes for /health/memory observability.
+    pub fn sizes(&self) -> MarketCacheSizes {
+        let total_trades = self.recent_trades.iter().map(|r| r.value().len()).sum();
+        let total_orderbook_levels = self
+            .orderbooks
+            .iter()
+            .map(|r| r.value().bids.len() + r.value().asks.len())
+            .sum();
+        MarketCacheSizes {
+            orderbooks: self.orderbooks.len(),
+            orderbook_levels: total_orderbook_levels,
+            recent_trades_symbols: self.recent_trades.len(),
+            recent_trades_total: total_trades,
+            relay_timestamps: self.relay_timestamps.len(),
+        }
     }
 
     pub fn update_orderbook(&self, symbol: &str, bids: Vec<OrderbookLevel>, asks: Vec<OrderbookLevel>) {

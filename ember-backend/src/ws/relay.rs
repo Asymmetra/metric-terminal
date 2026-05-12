@@ -7,7 +7,50 @@ use phoenix_rise::{
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// known_traders.json persist debouncer.
+///
+/// Originally we wrote the file synchronously on every newly-discovered
+/// trader, on the same async task that consumes Phoenix's UnboundedReceiver
+/// of market events. On Render's network-attached disk a fs::write can
+/// take 100–500ms; while it's blocked, events accumulate in the unbounded
+/// channel and memory grows. Multiply by 19 market relays and that's a
+/// real OOM driver.
+///
+/// New behavior: schedule at most one persist per PERSIST_DEBOUNCE_MS,
+/// off the hot path via tokio::task::spawn_blocking. If multiple new
+/// traders are discovered in quick succession, they coalesce into one
+/// write.
+const PERSIST_DEBOUNCE_MS: i64 = 5_000;
+static LAST_PERSIST_MS: AtomicI64 = AtomicI64::new(0);
+
+fn schedule_known_traders_persist(known: Arc<dashmap::DashSet<String>>) {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let last = LAST_PERSIST_MS.load(Ordering::Relaxed);
+    if now_ms - last < PERSIST_DEBOUNCE_MS {
+        return;
+    }
+    // Best-effort CAS — if two threads race, only one will win and write.
+    if LAST_PERSIST_MS
+        .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        let all: Vec<String> = known.iter().map(|r| r.clone()).collect();
+        if let Ok(json) = serde_json::to_string_pretty(&all) {
+            if let Err(e) = std::fs::write("known_traders.json", json) {
+                tracing::warn!("Failed to persist known_traders.json: {}", e);
+            }
+        }
+    });
+}
 
 /// Start the relay that feeds data from Phoenix SDK WS into broadcast channels.
 /// Uses the high-level `PhoenixClient` which manages WS connection,
@@ -130,11 +173,9 @@ async fn start_market_relay(
                                     "Discovered new trader from trade stream: {}",
                                     t.taker
                                 );
-                                let all: Vec<String> =
-                                    known.iter().map(|r| r.clone()).collect();
-                                if let Ok(json) = serde_json::to_string_pretty(&all) {
-                                    let _ = std::fs::write("known_traders.json", json);
-                                }
+                                // Persist asynchronously and debounced — see
+                                // schedule_known_traders_persist for why.
+                                schedule_known_traders_persist(known.clone());
                             }
                         }
 
