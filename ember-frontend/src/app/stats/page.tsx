@@ -118,10 +118,12 @@ export default function StatsPage() {
 
       {/* Top bar — category health + global counters + controls */}
       <div className="flex flex-wrap items-center gap-3 border-b border-ember-border/40 bg-surface-l1 px-4 py-3 mt-3">
-        <CategoryDot cat="phoenix-ws"   stats={snapshot.categoryHealth["phoenix-ws"]}   label="Phoenix WS" />
-        <CategoryDot cat="phoenix-rest" stats={snapshot.categoryHealth["phoenix-rest"]} label="Phoenix REST" />
-        <CategoryDot cat="ember-ws"     stats={snapshot.categoryHealth["ember-ws"]}     label="Ember WS" />
-        <CategoryDot cat="ember-rest"   stats={snapshot.categoryHealth["ember-rest"]}   label="Ember REST" />
+        {/* Hide category dots when zero sources are wired in that category
+            — same logic as the table itself. */}
+        {snapshot.categoryHealth["phoenix-ws"].total > 0 &&   <CategoryDot cat="phoenix-ws"   stats={snapshot.categoryHealth["phoenix-ws"]}   label="Phoenix WS" />}
+        {snapshot.categoryHealth["phoenix-rest"].total > 0 && <CategoryDot cat="phoenix-rest" stats={snapshot.categoryHealth["phoenix-rest"]} label="Phoenix REST" />}
+        {snapshot.categoryHealth["ember-ws"].total > 0 &&     <CategoryDot cat="ember-ws"     stats={snapshot.categoryHealth["ember-ws"]}     label="Ember WS" />}
+        {snapshot.categoryHealth["ember-rest"].total > 0 &&   <CategoryDot cat="ember-rest"   stats={snapshot.categoryHealth["ember-rest"]}   label="Ember REST" />}
 
         <div className="ml-auto flex items-center gap-3">
           <span className="font-mono text-[10px] text-text-secondary/60">

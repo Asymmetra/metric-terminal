@@ -92,10 +92,14 @@ function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBp
 }
 
 export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect, filter }: Props) {
-  // Group by category.
+  // Group by category. Track total-before-filter so we can distinguish
+  // "category is empty because we haven't wired it yet" from "category is
+  // empty because the filter excluded everything".
   const groups = new Map<SourceCategory, DataSource[]>();
+  const totalsByCategory = new Map<SourceCategory, number>();
   const normalizedFilter = filter.trim().toLowerCase();
   for (const s of sources) {
+    totalsByCategory.set(s.category, (totalsByCategory.get(s.category) ?? 0) + 1);
     if (normalizedFilter && !`${s.id} ${s.label}`.toLowerCase().includes(normalizedFilter)) continue;
     const arr = groups.get(s.category) ?? [];
     arr.push(s);
@@ -108,6 +112,11 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
     <div className="flex flex-col gap-3">
       {categoryOrder.map((cat) => {
         const rows = groups.get(cat) ?? [];
+        const totalRegistered = totalsByCategory.get(cat) ?? 0;
+        // Hide categories that have ZERO registered sources entirely —
+        // they're not wired yet, so listing them with a misleading "no
+        // sources match the current filter" message is confusing.
+        if (totalRegistered === 0) return null;
         const isOpen = expanded[cat] ?? true;
         const healthy = rows.filter((r) => r.status === "healthy").length;
         const degraded = rows.filter((r) => r.status === "degraded").length;
@@ -218,7 +227,9 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
 
             {isOpen && rows.length === 0 && (
               <div className="px-4 py-3 font-mono text-[10px] text-text-secondary/40">
-                No sources match the current filter.
+                {normalizedFilter
+                  ? `No sources in this category match "${filter}".`
+                  : "No sources match the current filter."}
               </div>
             )}
           </div>

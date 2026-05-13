@@ -101,14 +101,38 @@ function pickPercentile(sorted: number[], p: number): number | null {
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
 }
 
-function classifyHealth(lastUpdateAtMs: number | null, nowMs: number, p95: number | null, count: number, errorCount: number, hadActivity: boolean): SourceStatus {
+/**
+ * Health classifier — adapted per source's expected cadence so that
+ * fast WS streams (1Hz) and slow REST polls (every 30s) don't both
+ * get measured against the same threshold. A REST endpoint polled
+ * every 30s SHOULD have a 30s inter-arrival — that's healthy, not
+ * degraded.
+ *
+ * Thresholds, where E = expectedCadenceMs:
+ *   stale     → age > max(30s, 6×E)
+ *   degraded  → age > max(5s, 2×E)  OR  p95 > max(2s, 3×E)
+ *   healthy   → otherwise
+ */
+function classifyHealth(
+  lastUpdateAtMs: number | null,
+  nowMs: number,
+  p95: number | null,
+  count: number,
+  errorCount: number,
+  hadActivity: boolean,
+  expectedCadenceMs: number | undefined,
+): SourceStatus {
   if (count === 0 && !hadActivity) {
     return errorCount > 0 ? "error" : "idle";
   }
   if (lastUpdateAtMs == null) return "idle";
   const ageMs = nowMs - lastUpdateAtMs;
-  if (ageMs > 30_000) return "stale";
-  if (ageMs > 5_000 || (p95 != null && p95 > 2_000)) return "degraded";
+  const E = expectedCadenceMs ?? 1_000;
+  const staleAge    = Math.max(30_000, 6 * E);
+  const degradedAge = Math.max(5_000,  2 * E);
+  const degradedP95 = Math.max(2_000,  3 * E);
+  if (ageMs > staleAge) return "stale";
+  if (ageMs > degradedAge || (p95 != null && p95 > degradedP95)) return "degraded";
   return "healthy";
 }
 
@@ -127,7 +151,9 @@ function makeDescriptor(kind: SourceKind, symbol?: string): SourceDescriptor {
         label: `${symLabel} · market`,
         description: "Phoenix WS subscribe_to_market stream: oracle_price, mark_price, mid_price, funding rate, open interest, 24h volume. Event-driven (no guaranteed cadence). The primary oracle feed.",
         endpoint: PHOENIX_WS_URL,
-        expectedCadenceMs: 500,
+        // Empirically Phoenix publishes ~1s for this channel even on liquid
+        // markets. Healthy if we stay within 2× that window.
+        expectedCadenceMs: 1_000,
       };
     case "phoenix-ws-all-mids":
       return {
@@ -485,7 +511,15 @@ export function useObservability(options: UseObservabilityOptions) {
         const p99 = pickPercentile(sorted, 0.99);
         const max = sorted.length ? sorted[sorted.length - 1] : null;
         const ageSec = raw.lastUpdateAtMs != null ? (nowMs - raw.lastUpdateAtMs) / 1000 : null;
-        const status = classifyHealth(raw.lastUpdateAtMs, nowMs, p95, raw.count, raw.errorCount, raw.recentPayloads.length > 0);
+        const status = classifyHealth(
+          raw.lastUpdateAtMs,
+          nowMs,
+          p95,
+          raw.count,
+          raw.errorCount,
+          raw.recentPayloads.length > 0,
+          raw.descriptor.expectedCadenceMs,
+        );
         const stats: SourceStats = {
           count: raw.count,
           count60s: raw.arrivals.length,
