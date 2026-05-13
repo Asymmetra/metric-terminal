@@ -199,6 +199,36 @@ function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBp
 }
 
 /**
+ * Compact USD formatter — "$5.21B" / "$172M" / "$84K" / "$12". Used
+ * for the OI sub-figure in the Latest column and is the same shape as
+ * fmtUsdAbbrev in the detail tray.
+ */
+function fmtUsdAbbrev(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+/**
+ * Distilled "what does this market look like right now?" summary that
+ * replaces the previous oracle/mark/mid triple in the Latest column.
+ * Easier to read at a glance: price (what is it?), change (is it
+ * moving?), OI (is this a real market?).
+ *
+ * Only populated for sources whose primary is `phoenix-ws-market` and
+ * whose latest payload has actually arrived. Other sources (allMids,
+ * funding, REST endpoints) keep the existing string preview.
+ */
+interface MarketSummary {
+  markPx: number;
+  changePct: number;       // 24h % change vs prevDayPx
+  openInterest: number | null;
+}
+
+/**
  * A row as it appears in the table. May represent a single DataSource
  * (most categories) or a merged group of same-symbol sources (Phoenix
  * WS, where we collapse market/funding/orderbook/trades/candles for
@@ -206,6 +236,13 @@ function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBp
  * tray).
  */
 interface DisplayRow {
+  /**
+   * If present, the Latest column renders a structured market summary
+   * (price + change % + OI). Falls back to `preview` text otherwise.
+   * Also serves as the importance signal for sort order — rows with a
+   * summary AND a positive OI rank higher than rows without.
+   */
+  marketSummary?: MarketSummary;
   /** React key — unique across the table. */
   reactKey: string;
   /** id sent to onSelect when the row is clicked. For a merged row,
@@ -238,6 +275,22 @@ interface DisplayRow {
   status: SourceStatus;
 }
 
+/**
+ * Pull a MarketSummary out of a market-kind source's latest payload,
+ * or null if the payload hasn't arrived yet (or the source isn't a
+ * market kind).
+ */
+function extractMarketSummary(src: DataSource): MarketSummary | null {
+  if (src.kind !== "phoenix-ws-market") return null;
+  const p = src.latestPayload as any;
+  if (!p || typeof p !== "object") return null;
+  if (typeof p.markPx !== "number") return null;
+  const prev = typeof p.prevDayPx === "number" && p.prevDayPx > 0 ? p.prevDayPx : null;
+  const changePct = prev != null ? ((p.markPx - prev) / prev) * 100 : 0;
+  const oi = typeof p.openInterest === "number" && Number.isFinite(p.openInterest) ? p.openInterest : null;
+  return { markPx: p.markPx, changePct, openInterest: oi };
+}
+
 function toSingleRow(src: DataSource): DisplayRow {
   return {
     reactKey: src.id,
@@ -247,6 +300,7 @@ function toSingleRow(src: DataSource): DisplayRow {
     secondaryLabel: src.endpoint + (src.symbol ? ` · ${src.symbol}` : ""),
     latestPayloadJson: JSON.stringify(src.latestPayload ?? null).slice(0, 400),
     preview: previewLatest(src),
+    marketSummary: extractMarketSummary(src) ?? undefined,
     spread: computeSpreadBps(src),
     ageSec: src.stats.ageSec,
     count: src.stats.count,
@@ -313,6 +367,7 @@ function buildPhoenixWsRows(rows: DataSource[]): DisplayRow[] {
       channelBadge: `${members.length} ch`,
       latestPayloadJson: JSON.stringify(primary.latestPayload ?? null).slice(0, 400),
       preview: previewLatest(primary),
+      marketSummary: extractMarketSummary(primary) ?? undefined,
       spread: computeSpreadBps(primary),
       // Age + cadence come from the primary (market) channel —
       // semantic consistency matters: both should describe the same
@@ -329,12 +384,30 @@ function buildPhoenixWsRows(rows: DataSource[]): DisplayRow[] {
     void minAge; // (kept above for context — could be a future "freshness" indicator)
   }
 
-  // allMids first (it's the global heartbeat), then per-symbol alpha.
+  // Sort order:
+  //   1. allMids first (global heartbeat — operationally important).
+  //   2. Markets with a known open interest, descending by OI USD.
+  //      Blue-chip markets (BTC / SOL / ETH) float to the top; the
+  //      long tail of microcap perps falls to the bottom — and that
+  //      tail is exactly where slow/sparse oracle feeds are likely
+  //      to surface, which keeps them visible without crowding the
+  //      important rows.
+  //   3. Markets with no OI snapshot yet (first message not in) —
+  //      sorted alphabetically below the ranked block so they don't
+  //      cause shuffling once data lands.
+  //   4. Non-market sources (funding-only rows in odd chip states,
+  //      etc.) — alphabetical.
   return out.sort((a, b) => {
     const aGlobal = !a.primaryLabel || a.primaryLabel.toLowerCase() === "allmids";
     const bGlobal = !b.primaryLabel || b.primaryLabel.toLowerCase() === "allmids";
     if (aGlobal && !bGlobal) return -1;
     if (!aGlobal && bGlobal) return 1;
+
+    const aOi = a.marketSummary?.openInterest ?? null;
+    const bOi = b.marketSummary?.openInterest ?? null;
+    if (aOi != null && bOi != null) return bOi - aOi;
+    if (aOi != null) return -1;
+    if (bOi != null) return 1;
     return a.primaryLabel.localeCompare(b.primaryLabel);
   });
 }
@@ -460,8 +533,12 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
                             </div>
                             <div className="truncate text-[9px] text-text-secondary/40">{row.secondaryLabel}</div>
                           </td>
-                          <td className="overflow-hidden px-3 py-1.5 text-text-secondary/70 text-[10px] truncate" title={row.latestPayloadJson}>
-                            {row.preview}
+                          <td className="overflow-hidden px-3 py-1.5 truncate text-[10px]" title={row.latestPayloadJson}>
+                            {row.marketSummary ? (
+                              <MarketSummaryCell summary={row.marketSummary} />
+                            ) : (
+                              <span className="text-text-secondary/70">{row.preview}</span>
+                            )}
                           </td>
                           <td className="overflow-hidden px-3 py-1.5 text-right font-mono text-[10px]">
                             {row.spread ? (
@@ -520,6 +597,42 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The Latest cell for market-backed Phoenix WS rows. Trades the old
+ * cryptic "O 95.58 · M 95.50 · m 95.54" oracle/mark/mid triple for a
+ * cleaner glance-friendly summary:
+ *
+ *    $79,295.00   +1.24%   OI $5.2B
+ *
+ * The price answers "what?", the change answers "is it moving?", and
+ * the OI answers "is this a real market?". Full spread analysis lives
+ * in the detail tray's Market Snapshot block.
+ *
+ * Layout: an inline-flex row with explicit gaps and tabular-nums so
+ * the price and change-% don't visually wobble between updates.
+ */
+function MarketSummaryCell({ summary }: { summary: MarketSummary }) {
+  const { markPx, changePct, openInterest } = summary;
+  const changeColor =
+    Math.abs(changePct) < 0.01 ? "text-text-secondary/60"
+    : changePct >= 0 ? "text-ember-green"
+    : "text-ember-red";
+  const changeSign = changePct > 0 ? "+" : changePct < 0 ? "" : " ";
+  return (
+    <span className="inline-flex items-baseline gap-3 tabular-nums">
+      <span className="text-text-primary">${formatPrice(markPx)}</span>
+      <span className={changeColor}>
+        {changeSign}{changePct.toFixed(2)}%
+      </span>
+      {openInterest != null && openInterest > 0 && (
+        <span className="text-text-secondary/45">
+          <span className="text-text-secondary/35">OI </span>{fmtUsdAbbrev(openInterest)}
+        </span>
+      )}
+    </span>
   );
 }
 
