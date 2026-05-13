@@ -1,7 +1,7 @@
 "use client";
 
 import type { DataSource, SourceCategory, SourceKind, SourceStatus } from "@/lib/observability/types";
-import { formatPrice } from "@/lib/format";
+import { formatPriceAuto } from "@/lib/format";
 import clsx from "clsx";
 
 interface Props {
@@ -138,7 +138,7 @@ function previewLatest(src: DataSource): string {
   switch (src.kind) {
     case "phoenix-ws-market":
       if (typeof p.oraclePx === "number" && typeof p.markPx === "number" && typeof p.midPx === "number") {
-        return `O ${formatPrice(p.oraclePx)} · M ${formatPrice(p.markPx)} · m ${formatPrice(p.midPx)}`;
+        return `O ${formatPriceAuto(p.oraclePx)} · M ${formatPriceAuto(p.markPx)} · m ${formatPriceAuto(p.midPx)}`;
       }
       break;
     case "phoenix-ws-all-mids":
@@ -154,7 +154,7 @@ function previewLatest(src: DataSource): string {
       const depthAsk = Array.isArray(p.asks) ? p.asks.length : 0;
       if (bidPx && askPx) {
         const spread = ((askPx - bidPx) / askPx) * 10_000;
-        return `${formatPrice(bidPx)} / ${formatPrice(askPx)} · ${spread.toFixed(1)}bp · ${depthBid}/${depthAsk}`;
+        return `${formatPriceAuto(bidPx)} / ${formatPriceAuto(askPx)} · ${spread.toFixed(1)}bp · ${depthBid}/${depthAsk}`;
       }
       return `${depthBid} bids · ${depthAsk} asks`;
     }
@@ -165,7 +165,7 @@ function previewLatest(src: DataSource): string {
         const side = String(last.side ?? "").toLowerCase();
         const px = typeof last.px === "number" ? last.px : (typeof last.price === "number" ? last.price : null);
         const sz = typeof last.sz === "number" ? last.sz : (typeof last.size === "number" ? last.size : null);
-        return `${side} ${sz != null ? sz.toFixed(4) : "?"} @ ${px != null ? formatPrice(px) : "?"} · ${trades.length} this msg`;
+        return `${side} ${sz != null ? sz.toFixed(4) : "?"} @ ${px != null ? formatPriceAuto(px) : "?"} · ${trades.length} this msg`;
       }
       return `${trades.length} trades`;
     }
@@ -225,7 +225,13 @@ function fmtUsdAbbrev(n: number): string {
 interface MarketSummary {
   markPx: number;
   changePct: number;       // 24h % change vs prevDayPx
-  openInterest: number | null;
+  /**
+   * Open interest in USD = base-unit open interest × mark price.
+   * Phoenix's `openInterest` field is published in BASE asset units
+   * (e.g. 10.34 for "10 BTC of OI"), not USD — we multiply by mark
+   * here so the displayed value and the sort key are both in dollars.
+   */
+  openInterestUsd: number | null;
 }
 
 /**
@@ -287,8 +293,11 @@ function extractMarketSummary(src: DataSource): MarketSummary | null {
   if (typeof p.markPx !== "number") return null;
   const prev = typeof p.prevDayPx === "number" && p.prevDayPx > 0 ? p.prevDayPx : null;
   const changePct = prev != null ? ((p.markPx - prev) / prev) * 100 : 0;
-  const oi = typeof p.openInterest === "number" && Number.isFinite(p.openInterest) ? p.openInterest : null;
-  return { markPx: p.markPx, changePct, openInterest: oi };
+  const oiBase = typeof p.openInterest === "number" && Number.isFinite(p.openInterest) ? p.openInterest : null;
+  // Phoenix's openInterest is base-asset units (e.g. 10 BTC), not USD.
+  // Convert: USD OI = base × mark.
+  const openInterestUsd = oiBase != null && p.markPx > 0 ? oiBase * p.markPx : null;
+  return { markPx: p.markPx, changePct, openInterestUsd };
 }
 
 function toSingleRow(src: DataSource): DisplayRow {
@@ -403,8 +412,8 @@ function buildPhoenixWsRows(rows: DataSource[]): DisplayRow[] {
     if (aGlobal && !bGlobal) return -1;
     if (!aGlobal && bGlobal) return 1;
 
-    const aOi = a.marketSummary?.openInterest ?? null;
-    const bOi = b.marketSummary?.openInterest ?? null;
+    const aOi = a.marketSummary?.openInterestUsd ?? null;
+    const bOi = b.marketSummary?.openInterestUsd ?? null;
     if (aOi != null && bOi != null) return bOi - aOi;
     if (aOi != null) return -1;
     if (bOi != null) return 1;
@@ -615,7 +624,7 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
  * the price and change-% don't visually wobble between updates.
  */
 function MarketSummaryCell({ summary }: { summary: MarketSummary }) {
-  const { markPx, changePct, openInterest } = summary;
+  const { markPx, changePct, openInterestUsd } = summary;
   const changeColor =
     Math.abs(changePct) < 0.01 ? "text-text-secondary/60"
     : changePct >= 0 ? "text-ember-green"
@@ -623,13 +632,13 @@ function MarketSummaryCell({ summary }: { summary: MarketSummary }) {
   const changeSign = changePct > 0 ? "+" : changePct < 0 ? "" : " ";
   return (
     <span className="inline-flex items-baseline gap-3 tabular-nums">
-      <span className="text-text-primary">${formatPrice(markPx)}</span>
+      <span className="text-text-primary">${formatPriceAuto(markPx)}</span>
       <span className={changeColor}>
         {changeSign}{changePct.toFixed(2)}%
       </span>
-      {openInterest != null && openInterest > 0 && (
+      {openInterestUsd != null && openInterestUsd > 0 && (
         <span className="text-text-secondary/45">
-          <span className="text-text-secondary/35">OI </span>{fmtUsdAbbrev(openInterest)}
+          <span className="text-text-secondary/35">OI </span>{fmtUsdAbbrev(openInterestUsd)}
         </span>
       )}
     </span>

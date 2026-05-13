@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useObservability } from "@/hooks/useObservability";
 import { SourceTable } from "@/components/stats/SourceTable";
 import { SourceDetailTray } from "@/components/stats/SourceDetailTray";
+import { MarketOverview } from "@/components/stats/MarketOverview";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { loadPreferences } from "@/lib/observability/persistence";
 import type { SourceCategory, SourceKind } from "@/lib/observability/types";
@@ -167,6 +168,12 @@ export default function StatsPage() {
             Failed to load market list: {marketsError}. Phoenix WS subscriptions degraded.
           </div>
         )}
+      </div>
+
+      {/* Aggregate market stats — Total OI, 24h Volume, biggest mover,
+          etc. derived from the per-market payloads we already ingest. */}
+      <div className="px-4 pt-3">
+        <MarketOverview sources={sources} />
       </div>
 
       {/* Channel toggles — let the user hide high-volume kinds so the

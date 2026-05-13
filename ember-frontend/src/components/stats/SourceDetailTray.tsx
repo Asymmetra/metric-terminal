@@ -6,7 +6,7 @@ import type { DataSource } from "@/lib/observability/types";
 import { generateSnippets } from "@/lib/observability/snippets";
 import { CodeBlock } from "./CodeBlock";
 import { Sparkline } from "./Sparkline";
-import { formatPrice } from "@/lib/format";
+import { formatPriceAuto } from "@/lib/format";
 import clsx from "clsx";
 
 interface Props {
@@ -285,7 +285,10 @@ function MarketSnapshot({ payload }: { payload: PhoenixMarketPayload | null }) {
   const oracle = payload.oraclePx ?? 0;
   const mark = payload.markPx ?? 0;
   const mid = payload.midPx ?? 0;
-  const oi = payload.openInterest ?? 0;
+  // Phoenix publishes openInterest in BASE asset units (e.g. 10.34 for
+  // "10.34 BTC of OI"); convert to USD with the mark price for display.
+  const oiBase = payload.openInterest ?? 0;
+  const oi = oiBase * mark;
   const vol = payload.dayNtlVlm ?? 0;
   const fundingPct = (payload.funding ?? 0) * 100;
   const prev = payload.prevDayPx ?? 0;
@@ -365,7 +368,7 @@ function PriceCell({ label, value, color, tooltip }: { label: string; value: num
   return (
     <div className="group relative flex flex-col gap-0.5 bg-surface-l1 px-3 py-2.5">
       <span className="cursor-help font-mono text-[9px] uppercase tracking-wider text-text-secondary/50 border-b border-dotted border-text-secondary/30 w-fit">{label}</span>
-      <span className={clsx("font-mono text-base", color)}>${formatPrice(value)}</span>
+      <span className={clsx("font-mono text-base", color)}>${formatPriceAuto(value)}</span>
       <HoverHint text={tooltip} />
     </div>
   );

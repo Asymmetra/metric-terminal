@@ -6,6 +6,36 @@ export function formatPrice(price: number, decimals = 2): string {
   });
 }
 
+/**
+ * Format a price with magnitude-adaptive decimal precision. Used by
+ * the observability page so BTC (~$79,000) and PUMP / SKR (~$0.005) can
+ * share a single renderer without one of them collapsing to "0.00".
+ *
+ * Bands chosen so the rendered value carries ~5 significant figures
+ * regardless of scale:
+ *   ≥ 1000        →  79,295.00
+ *   ≥ 1           →  91.190 / 38.940
+ *   ≥ 0.1         →  0.2225
+ *   ≥ 0.01        →  0.04123
+ *   ≥ 0.001       →  0.006543
+ *   else          →  0.00012345
+ */
+export function formatPriceAuto(price: number): string {
+  if (price == null || isNaN(price)) return "0.00";
+  const abs = Math.abs(price);
+  let decimals: number;
+  if (abs >= 1000) decimals = 2;
+  else if (abs >= 1) decimals = 3;
+  else if (abs >= 0.1) decimals = 4;
+  else if (abs >= 0.01) decimals = 5;
+  else if (abs >= 0.001) decimals = 6;
+  else decimals = 8;
+  return price.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
 export function formatSize(size: number, decimals = 4): string {
   if (size == null || isNaN(size)) return "0.0000";
   return size.toLocaleString("en-US", {
