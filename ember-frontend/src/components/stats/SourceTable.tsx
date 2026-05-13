@@ -73,10 +73,14 @@ function AgeValue({ sec, className }: { sec: number | null; className?: string }
   if (sec == null) return <span className="text-text-secondary/40">—</span>;
   let num: string;
   let unit: string;
-  if (sec < 60) {
-    num = sec < 10 ? sec.toFixed(2) : sec.toFixed(1);
+  // Boundary nudges (same idea as GapValue): a value that would round
+  // INTO the next unit gets promoted, so we never show "60.0 s" or
+  // "60.0 m" — those render as "1.0 m" / "1.0 h" instead, matching
+  // neighboring rows on either side of the threshold.
+  if (sec < 59.95) {
+    num = sec < 9.995 ? sec.toFixed(2) : sec.toFixed(1);
     unit = "s";
-  } else if (sec < 3600) {
+  } else if (sec < 3599.5) {
     num = (sec / 60).toFixed(1);
     unit = "m";
   } else {
@@ -88,18 +92,23 @@ function AgeValue({ sec, className }: { sec: number | null; className?: string }
 
 /**
  * Pretty-print an inter-arrival GAP in ms. Same fixed-slot treatment.
+ *
+ * Boundary handling: every branch boundary is set just below the value
+ * that would round into the next unit, so e.g. 999.7ms renders as
+ * "1.00 s" (consistent with 1001ms) rather than "1000 ms" (visually
+ * mixed with neighboring "1.00 s" rows). Same for the s→m boundary.
  */
 function GapValue({ ms, className }: { ms: number | null; className?: string }) {
   if (ms == null) return <span className="text-text-secondary/40">—</span>;
   let num: string;
   let unit: string;
-  if (ms < 1000) {
-    num = ms.toFixed(0);
+  if (ms < 999.5) {
+    num = Math.round(ms).toString();
     unit = "ms";
-  } else if (ms < 10_000) {
+  } else if (ms < 9995) {
     num = (ms / 1000).toFixed(2);
     unit = "s";
-  } else if (ms < 60_000) {
+  } else if (ms < 59_950) {
     num = (ms / 1000).toFixed(1);
     unit = "s";
   } else {
