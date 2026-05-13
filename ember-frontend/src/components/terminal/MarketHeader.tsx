@@ -585,6 +585,17 @@ export function MarketHeader() {
       >
         Leaderboard
       </Link>
+      <Link
+        href="/stats"
+        className={clsx(
+          "font-mono text-[10px] uppercase tracking-wider transition-colors",
+          pathname === "/stats"
+            ? "text-ember-orange"
+            : "text-text-secondary/60 hover:text-text-secondary"
+        )}
+      >
+        Stats
+      </Link>
 
       <StatSeparator />
 
