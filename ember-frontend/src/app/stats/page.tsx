@@ -98,12 +98,39 @@ export default function StatsPage() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  const { snapshot, sources, resetAll } = useObservability({ symbols, paused });
+  // Subscribe to exactly the kinds the user has enabled via the chips.
+  // Subscribing to disabled kinds (especially the high-volume orderbook /
+  // trades / candles streams) congests the single Phoenix WebSocket and
+  // inflates the perceived inter-arrival gap of the channels we ARE
+  // showing — so disabled = unsubscribed, not just hidden.
+  const enabledPhoenixKinds = useMemo(() => {
+    const enabled = new Set<SourceKind>();
+    for (const t of TOGGLEABLE_KINDS) {
+      if (!hiddenKinds.has(t.kind)) enabled.add(t.kind);
+    }
+    return enabled;
+  }, [hiddenKinds]);
+
+  const { snapshot, sources, resetAll } = useObservability({ symbols, paused, enabledPhoenixKinds });
 
   const selectedSource = useMemo(
     () => (selectedId ? snapshot.sources[selectedId] ?? null : null),
     [selectedId, snapshot.sources],
   );
+
+  // Sibling sources for the channel-switcher: all Phoenix WS sources
+  // sharing the selected source's symbol. Returns the selected one
+  // included (so the switcher can highlight it as active). Empty when
+  // the selected source isn't part of a multi-channel merged row
+  // (e.g. allMids, REST endpoints).
+  const selectedSiblings = useMemo<typeof sources>(() => {
+    if (!selectedSource) return [];
+    if (selectedSource.category !== "phoenix-ws") return [];
+    if (!selectedSource.symbol) return [];
+    return sources.filter(
+      (s) => s.category === "phoenix-ws" && s.symbol === selectedSource.symbol,
+    );
+  }, [selectedSource, sources]);
 
   const toggleCategory = useCallback((cat: SourceCategory) => {
     setExpanded((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -240,6 +267,8 @@ export default function StatsPage() {
       {/* Slide-out detail tray */}
       <SourceDetailTray
         source={selectedSource}
+        siblings={selectedSiblings}
+        onSelectSibling={(id) => setSelectedId(id)}
         onClose={() => setSelectedId(null)}
         defaultLanguage={snippetLang}
         onLanguageChange={setSnippetLang}

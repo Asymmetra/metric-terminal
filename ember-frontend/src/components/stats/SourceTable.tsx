@@ -34,19 +34,88 @@ const CATEGORY_DESC: Record<SourceCategory, string> = {
   "ember-rest":   "Our backend's HTTP API (ember-backend-q4nf.onrender.com).",
 };
 
-function fmtMs(v: number | null): string {
-  if (v == null) return "—";
-  if (v < 1000) return `${v.toFixed(0)}ms`;
-  if (v < 60_000) return `${(v / 1000).toFixed(1)}s`;
-  return `${(v / 60_000).toFixed(1)}m`;
+/**
+ * Renders a numeric value + unit as two fixed-width slots so the value
+ * occupies the same horizontal footprint regardless of magnitude. The
+ * number right-aligns inside a number slot; the unit left-aligns inside
+ * a unit slot. Combined with `tabular-nums`, this kills the perceived
+ * jitter you get from variable-character-count values being just
+ * right-aligned in a cell.
+ */
+function NumberUnit({
+  num,
+  unit,
+  numClass,
+  unitClass,
+  numWidth = "2.6em",
+  unitWidth = "1.4em",
+}: {
+  num: string;
+  unit: string;
+  numClass?: string;
+  unitClass?: string;
+  numWidth?: string;
+  unitWidth?: string;
+}) {
+  return (
+    <span className="inline-flex items-baseline tabular-nums">
+      <span className={clsx("inline-block text-right", numClass)} style={{ minWidth: numWidth }}>{num}</span>
+      <span className={clsx("inline-block pl-0.5 text-left text-text-secondary/50", unitClass)} style={{ minWidth: unitWidth }}>{unit}</span>
+    </span>
+  );
 }
 
-function fmtAge(sec: number | null): string {
-  if (sec == null) return "—";
-  if (sec < 1) return `${(sec * 1000).toFixed(0)}ms`;
-  if (sec < 60) return `${sec.toFixed(1)}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m${Math.floor(sec % 60).toString().padStart(2, "0")}s`;
-  return `${Math.floor(sec / 3600)}h`;
+/**
+ * Pretty-print an "age" (seconds since last update). Splits magnitude
+ * from unit so cells don't wobble as the value crosses unit boundaries.
+ */
+function AgeValue({ sec, className }: { sec: number | null; className?: string }) {
+  if (sec == null) return <span className="text-text-secondary/40">—</span>;
+  let num: string;
+  let unit: string;
+  if (sec < 60) {
+    num = sec < 10 ? sec.toFixed(2) : sec.toFixed(1);
+    unit = "s";
+  } else if (sec < 3600) {
+    num = (sec / 60).toFixed(1);
+    unit = "m";
+  } else {
+    num = (sec / 3600).toFixed(1);
+    unit = "h";
+  }
+  return <NumberUnit num={num} unit={unit} numClass={className} />;
+}
+
+/**
+ * Pretty-print an inter-arrival GAP in ms. Same fixed-slot treatment.
+ */
+function GapValue({ ms, className }: { ms: number | null; className?: string }) {
+  if (ms == null) return <span className="text-text-secondary/40">—</span>;
+  let num: string;
+  let unit: string;
+  if (ms < 1000) {
+    num = ms.toFixed(0);
+    unit = "ms";
+  } else if (ms < 10_000) {
+    num = (ms / 1000).toFixed(2);
+    unit = "s";
+  } else if (ms < 60_000) {
+    num = (ms / 1000).toFixed(1);
+    unit = "s";
+  } else {
+    num = (ms / 60_000).toFixed(1);
+    unit = "m";
+  }
+  return <NumberUnit num={num} unit={unit} numClass={className} unitWidth="1.6em" />;
+}
+
+/**
+ * Mark-Oracle spread in bps. Sign + 2-decimal magnitude + "bp" unit.
+ */
+function BpsValue({ bps, className }: { bps: number; className?: string }) {
+  const sign = bps > 0.005 ? "+" : bps < -0.005 ? "−" : " ";
+  const num = `${sign}${Math.abs(bps).toFixed(2)}`;
+  return <NumberUnit num={num} unit="bp" numClass={className} numWidth="3.2em" unitWidth="1.4em" />;
 }
 
 function statusStyles(s: SourceStatus): { label: string; cls: string; dot: string } {
@@ -129,6 +198,152 @@ function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBp
   };
 }
 
+/**
+ * A row as it appears in the table. May represent a single DataSource
+ * (most categories) or a merged group of same-symbol sources (Phoenix
+ * WS, where we collapse market/funding/orderbook/trades/candles for
+ * one asset into a single row that opens to a multi-channel detail
+ * tray).
+ */
+interface DisplayRow {
+  /** React key — unique across the table. */
+  reactKey: string;
+  /** id sent to onSelect when the row is clicked. For a merged row,
+   *  this is the "primary" channel's id (preferring market). */
+  primaryId: string;
+  /** All underlying DataSource ids in this row. A merged row contains
+   *  many; a single row contains exactly its own. Used to detect
+   *  selection when the user has flipped to a sibling channel. */
+  memberIds: string[];
+  /** Bold label — for merged rows this is the symbol; for single rows
+   *  it's the source's label. */
+  primaryLabel: string;
+  /** Subline below the label — endpoint + context (channel count for
+   *  merged rows, symbol for single rows). */
+  secondaryLabel: string;
+  /** Small pill rendered next to the primary label for merged rows
+   *  ("5 channels"). undefined for single rows. */
+  channelBadge?: string;
+  /** Full-payload JSON used for the row-level title attribute. */
+  latestPayloadJson: string;
+  /** "Latest" column text. */
+  preview: string;
+  spread: { markOracleBps: number; midOracleBps: number } | null;
+  ageSec: number | null;
+  count: number;
+  count60s: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  maxMs: number | null;
+  status: SourceStatus;
+}
+
+function toSingleRow(src: DataSource): DisplayRow {
+  return {
+    reactKey: src.id,
+    primaryId: src.id,
+    memberIds: [src.id],
+    primaryLabel: src.label,
+    secondaryLabel: src.endpoint + (src.symbol ? ` · ${src.symbol}` : ""),
+    latestPayloadJson: JSON.stringify(src.latestPayload ?? null).slice(0, 400),
+    preview: previewLatest(src),
+    spread: computeSpreadBps(src),
+    ageSec: src.stats.ageSec,
+    count: src.stats.count,
+    count60s: src.stats.count60s,
+    p50Ms: src.stats.p50Ms,
+    p95Ms: src.stats.p95Ms,
+    maxMs: src.stats.maxMs,
+    status: src.status,
+  };
+}
+
+/**
+ * Aggregate worst-case status across a group. Order: error/stale beats
+ * degraded beats healthy beats idle.
+ */
+function aggregateStatus(members: DataSource[]): SourceStatus {
+  const statuses = members.map((m) => m.status);
+  if (statuses.includes("error")) return "error";
+  if (statuses.includes("stale")) return "stale";
+  if (statuses.includes("degraded")) return "degraded";
+  if (statuses.includes("healthy")) return "healthy";
+  return "idle";
+}
+
+/**
+ * Build display rows for the Phoenix WS category. Collapses
+ * (market, funding, orderbook, trades, candles) for a given symbol
+ * into ONE row whose Latest/Mark-Oracle/cadence columns are sourced
+ * from the market channel (the richest one), while Age is the minimum
+ * across all channels (freshest message wins) and Count/N/60s are
+ * sums across channels.
+ *
+ * Sources without a symbol (allMids) are passed through as single
+ * rows. Symbols with only one active channel also pass through as
+ * single rows — there's no benefit to a "merged" UI for a row of one.
+ */
+function buildPhoenixWsRows(rows: DataSource[]): DisplayRow[] {
+  const bySymbol = new Map<string, DataSource[]>();
+  for (const r of rows) {
+    const key = r.symbol ?? `__nosym:${r.kind}`;
+    if (!bySymbol.has(key)) bySymbol.set(key, []);
+    bySymbol.get(key)!.push(r);
+  }
+
+  const out: DisplayRow[] = [];
+  for (const [key, members] of bySymbol) {
+    if (members.length === 1 || key.startsWith("__nosym:")) {
+      out.push(toSingleRow(members[0]));
+      continue;
+    }
+    const primary = members.find((m) => m.kind === "phoenix-ws-market") ?? members[0];
+    const totalCount = members.reduce((acc, m) => acc + m.stats.count, 0);
+    const totalCount60s = members.reduce((acc, m) => acc + m.stats.count60s, 0);
+    const minAge = members.reduce<number | null>((acc, m) => {
+      if (m.stats.ageSec == null) return acc;
+      return acc == null ? m.stats.ageSec : Math.min(acc, m.stats.ageSec);
+    }, null);
+    out.push({
+      reactKey: `phoenix-ws-merged:${primary.symbol ?? "?"}`,
+      primaryId: primary.id,
+      memberIds: members.map((m) => m.id),
+      primaryLabel: primary.symbol ?? primary.label,
+      secondaryLabel: `${primary.endpoint} · ${members.length} channels`,
+      channelBadge: `${members.length} ch`,
+      latestPayloadJson: JSON.stringify(primary.latestPayload ?? null).slice(0, 400),
+      preview: previewLatest(primary),
+      spread: computeSpreadBps(primary),
+      // Age + cadence come from the primary (market) channel —
+      // semantic consistency matters: both should describe the same
+      // feed. Mixing "freshest of any channel" age with "market only"
+      // cadence makes the columns hard to reason about together.
+      ageSec: primary.stats.ageSec,
+      count: totalCount,
+      count60s: totalCount60s,
+      p50Ms: primary.stats.p50Ms,
+      p95Ms: primary.stats.p95Ms,
+      maxMs: primary.stats.maxMs,
+      status: aggregateStatus(members),
+    });
+    void minAge; // (kept above for context — could be a future "freshness" indicator)
+  }
+
+  // allMids first (it's the global heartbeat), then per-symbol alpha.
+  return out.sort((a, b) => {
+    const aGlobal = !a.primaryLabel || a.primaryLabel.toLowerCase() === "allmids";
+    const bGlobal = !b.primaryLabel || b.primaryLabel.toLowerCase() === "allmids";
+    if (aGlobal && !bGlobal) return -1;
+    if (!aGlobal && bGlobal) return 1;
+    return a.primaryLabel.localeCompare(b.primaryLabel);
+  });
+}
+
+function buildDisplayRows(cat: SourceCategory, rows: DataSource[]): DisplayRow[] {
+  if (cat === "phoenix-ws") return buildPhoenixWsRows(rows);
+  return rows.map(toSingleRow);
+}
+
 export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect, filter, hiddenKinds }: Props) {
   // Group by category. Track total-before-filter so we can distinguish
   // "category is empty because we haven't wired it yet" from "category is
@@ -150,17 +365,18 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
   return (
     <div className="flex flex-col gap-3">
       {categoryOrder.map((cat) => {
-        const rows = groups.get(cat) ?? [];
+        const rawRows = groups.get(cat) ?? [];
+        const displayRows = buildDisplayRows(cat, rawRows);
         const totalRegistered = totalsByCategory.get(cat) ?? 0;
         // Hide categories that have ZERO registered sources entirely —
         // they're not wired yet, so listing them with a misleading "no
         // sources match the current filter" message is confusing.
         if (totalRegistered === 0) return null;
         const isOpen = expanded[cat] ?? true;
-        const healthy = rows.filter((r) => r.status === "healthy").length;
-        const degraded = rows.filter((r) => r.status === "degraded").length;
-        const stale = rows.filter((r) => r.status === "stale" || r.status === "error").length;
-        const total = rows.length;
+        const healthy = displayRows.filter((r) => r.status === "healthy").length;
+        const degraded = displayRows.filter((r) => r.status === "degraded").length;
+        const stale = displayRows.filter((r) => r.status === "stale" || r.status === "error").length;
+        const total = displayRows.length;
         return (
           <div key={cat} className="border border-ember-border bg-surface-l1">
             <button
@@ -180,77 +396,106 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
               </div>
             </button>
 
-            {isOpen && rows.length > 0 && (
+            {isOpen && displayRows.length > 0 && (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1100px] font-mono text-[11px]">
+                {/*
+                  table-layout: fixed + explicit colgroup widths so column
+                  widths don't jitter every time a number changes precision
+                  (e.g. "0.01%" vs "-1.3349%"). tabular-nums on numeric cells
+                  reinforces it. With auto layout the table re-measures every
+                  cell on every paint — at 500ms flush × 100+ rows that meant
+                  the columns visibly wiggled.
+                */}
+                {/*
+                  Six-column distilled view. Anything more detailed
+                  (Count, N/60s, Gap p95, Gap p99, Gap max, recent-arrival
+                  sparkline, raw samples) lives in the detail tray so the
+                  main table stays glanceable.
+
+                  table-layout: fixed + explicit colgroup widths +
+                  NumberUnit-formatted numeric cells means columns and
+                  in-cell value positions don't shift as values cross
+                  unit/magnitude boundaries.
+                */}
+                <table className="w-full font-mono text-[11px]" style={{ tableLayout: "fixed", minWidth: "960px" }}>
+                  <colgroup>
+                    <col style={{ width: "240px" }} />  {/* Source */}
+                    <col style={{ width: "320px" }} />  {/* Latest */}
+                    <col style={{ width: "110px" }} />  {/* Mark-Oracle */}
+                    <col style={{ width: "90px"  }} />  {/* Age */}
+                    <col style={{ width: "90px"  }} />  {/* Cadence */}
+                    <col style={{ width: "110px" }} />  {/* Status */}
+                  </colgroup>
                   <thead>
                     <tr className="text-[9px] uppercase tracking-wider text-text-secondary/40">
                       <Th align="left">Source</Th>
                       <Th align="left">Latest</Th>
-                      <Th align="right" title="Mark−Oracle spread in basis points (market sources only). Positive = mark trades above oracle.">Mark−Oracle</Th>
-                      <Th align="right" title="Time since the most recent message arrived. Resets to 0 on every update; grows up to ~Gap p50 between messages. This is age-of-freshest-value, NOT a request-latency measurement.">Age</Th>
-                      <Th align="right" title="Total messages or successful polls since reset.">Count</Th>
-                      <Th align="right" title="Approximate count of inter-arrival samples in the rolling 60s window.">N/60s</Th>
-                      <Th align="right" title="Median GAP between consecutive messages — how often the source publishes. If Phoenix publishes once per second, this will be ~1000ms even though every individual message arrives in microseconds. Different from Age.">Gap p50</Th>
-                      <Th align="right" title="95th-percentile gap between consecutive messages. Healthy if ≤ 500ms for liquid markets.">Gap p95</Th>
-                      <Th align="right" title="Worst gap seen in the rolling window.">Gap max</Th>
+                      <Th align="right" title="Mark−Oracle spread in basis points (market sources only). Positive = mark trades above oracle. Click any row to see Mid-Oracle and Mid-Mark in the detail panel.">Spread</Th>
+                      <Th align="right" title="Time since the most recent message arrived. Grows from 0 to roughly the cadence (one publish interval) and resets each update. Click the row for percentiles + raw samples.">Age</Th>
+                      <Th align="right" title="Median GAP between consecutive messages — how often the source publishes. ~1000ms for a 1Hz feed. Click the row for p95, p99, max and the full inter-arrival sparkline.">Cadence</Th>
                       <Th align="left">Status</Th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((src) => {
-                      const ss = statusStyles(src.status);
-                      const selected = selectedId === src.id;
-                      const spread = computeSpreadBps(src);
+                    {displayRows.map((row) => {
+                      const ss = statusStyles(row.status);
+                      const selected = selectedId != null && row.memberIds.includes(selectedId);
                       return (
                         <tr
-                          key={src.id}
-                          onClick={() => onSelect(src.id)}
+                          key={row.reactKey}
+                          onClick={() => onSelect(row.primaryId)}
                           className={clsx(
                             "cursor-pointer border-b border-ember-border/20 transition-colors",
                             selected ? "bg-ember-orange/10" : "hover:bg-surface-l2/30",
                           )}
                         >
-                          <td className="px-3 py-1.5">
-                            <div className="text-text-primary">{src.label}</div>
-                            <div className="text-[9px] text-text-secondary/40">{src.endpoint}{src.symbol ? ` · ${src.symbol}` : ""}</div>
+                          <td className="px-3 py-1.5 overflow-hidden">
+                            <div className="flex items-center gap-2 truncate">
+                              <span className="truncate text-text-primary">{row.primaryLabel}</span>
+                              {row.channelBadge && (
+                                <span className="shrink-0 rounded border border-ember-border/50 bg-surface-l2/60 px-1 py-0.5 text-[8px] uppercase tracking-wider text-text-secondary/70">
+                                  {row.channelBadge}
+                                </span>
+                              )}
+                            </div>
+                            <div className="truncate text-[9px] text-text-secondary/40">{row.secondaryLabel}</div>
                           </td>
-                          <td className="px-3 py-1.5 text-text-secondary/70 text-[10px] max-w-[260px] truncate" title={JSON.stringify(src.latestPayload)?.slice(0, 400)}>
-                            {previewLatest(src)}
+                          <td className="overflow-hidden px-3 py-1.5 text-text-secondary/70 text-[10px] truncate" title={row.latestPayloadJson}>
+                            {row.preview}
                           </td>
-                          <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                            {spread ? (
-                              <span
-                                className={Math.abs(spread.markOracleBps) < 1 ? "text-text-secondary/50" : spread.markOracleBps > 0 ? "text-ember-green" : "text-ember-red"}
-                                title={`Mark − Oracle: ${spread.markOracleBps > 0 ? "+" : ""}${spread.markOracleBps.toFixed(2)}bp\nMid − Oracle: ${spread.midOracleBps > 0 ? "+" : ""}${spread.midOracleBps.toFixed(2)}bp`}
-                              >
-                                {spread.markOracleBps > 0 ? "+" : ""}{spread.markOracleBps.toFixed(2)}bp
-                              </span>
+                          <td className="overflow-hidden px-3 py-1.5 text-right font-mono text-[10px]">
+                            {row.spread ? (
+                              <BpsValue
+                                bps={row.spread.markOracleBps}
+                                className={Math.abs(row.spread.markOracleBps) < 1 ? "text-text-secondary/60" : row.spread.markOracleBps > 0 ? "text-ember-green" : "text-ember-red"}
+                              />
                             ) : (
                               <span className="text-text-secondary/30">—</span>
                             )}
                           </td>
-                          <td className={clsx(
-                            "px-3 py-1.5 text-right",
-                            src.stats.ageSec == null ? "text-text-secondary/40"
-                            : src.stats.ageSec < 5 ? "text-ember-green"
-                            : src.stats.ageSec < 30 ? "text-yellow-500"
-                            : "text-ember-red",
-                          )}>
-                            {fmtAge(src.stats.ageSec)}
+                          <td className="px-3 py-1.5 text-right">
+                            <AgeValue
+                              sec={row.ageSec}
+                              className={
+                                row.ageSec == null ? "text-text-secondary/40"
+                                : row.ageSec < 5 ? "text-ember-green"
+                                : row.ageSec < 30 ? "text-yellow-500"
+                                : "text-ember-red"
+                              }
+                            />
                           </td>
-                          <td className="px-3 py-1.5 text-right text-text-secondary/70">{src.stats.count.toLocaleString()}</td>
-                          <td className="px-3 py-1.5 text-right text-text-secondary/60">{src.stats.count60s}</td>
-                          <td className="px-3 py-1.5 text-right text-text-secondary/80">{fmtMs(src.stats.p50Ms)}</td>
-                          <td className={clsx(
-                            "px-3 py-1.5 text-right",
-                            src.stats.p95Ms == null ? "text-text-secondary/40"
-                            : src.stats.p95Ms < 500 ? "text-ember-green"
-                            : src.stats.p95Ms < 2000 ? "text-yellow-500"
-                            : "text-ember-red",
-                          )}>{fmtMs(src.stats.p95Ms)}</td>
-                          <td className="px-3 py-1.5 text-right text-text-secondary/50">{fmtMs(src.stats.maxMs)}</td>
-                          <td className="px-3 py-1.5">
+                          <td className="px-3 py-1.5 text-right">
+                            <GapValue
+                              ms={row.p50Ms}
+                              className={
+                                row.p50Ms == null ? "text-text-secondary/40"
+                                : row.p50Ms < 1500 ? "text-text-primary"
+                                : row.p50Ms < 5000 ? "text-yellow-500"
+                                : "text-ember-red"
+                              }
+                            />
+                          </td>
+                          <td className="overflow-hidden px-3 py-1.5">
                             <span className="inline-flex items-center gap-1.5">
                               <span className={clsx("inline-block h-1.5 w-1.5 rounded-full", ss.dot)} />
                               <span className={clsx("text-[10px] uppercase tracking-wider", ss.cls)}>{ss.label}</span>
@@ -264,7 +509,7 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
               </div>
             )}
 
-            {isOpen && rows.length === 0 && (
+            {isOpen && displayRows.length === 0 && (
               <div className="px-4 py-3 font-mono text-[10px] text-text-secondary/40">
                 {normalizedFilter
                   ? `No sources in this category match "${filter}".`
@@ -278,10 +523,32 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
   );
 }
 
+/**
+ * Column header with an instant CSS hover-popover (not native `title=`,
+ * which has a ~700ms-1s browser delay). The popover anchors to the
+ * dotted-underline span so it appears just below the label, regardless
+ * of header alignment.
+ */
 function Th({ children, align = "left", title }: { children: React.ReactNode; align?: "left" | "right"; title?: string }) {
   return (
-    <th className={clsx("px-3 py-1.5 font-normal", align === "right" ? "text-right" : "text-left")} title={title}>
-      {title ? <span className="cursor-help border-b border-dotted border-text-secondary/30">{children}</span> : children}
+    <th className={clsx("px-3 py-1.5 font-normal", align === "right" ? "text-right" : "text-left")}>
+      {title ? (
+        <span className="group relative inline-block cursor-help border-b border-dotted border-text-secondary/30">
+          {children}
+          <span
+            role="tooltip"
+            className={clsx(
+              "pointer-events-none invisible absolute top-full z-50 mt-1 normal-case whitespace-normal rounded border border-ember-border bg-surface-l3/95 px-2 py-1.5 font-mono text-[10px] leading-snug tracking-normal text-text-primary opacity-0 shadow-xl backdrop-blur-sm transition-opacity duration-75 group-hover:visible group-hover:opacity-100",
+              align === "right" ? "right-0" : "left-0",
+            )}
+            style={{ width: "max-content", maxWidth: "320px" }}
+          >
+            {title}
+          </span>
+        </span>
+      ) : (
+        children
+      )}
     </th>
   );
 }

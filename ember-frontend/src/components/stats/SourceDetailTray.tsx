@@ -11,9 +11,41 @@ import clsx from "clsx";
 
 interface Props {
   source: DataSource | null;
+  /**
+   * Other sources sharing the same symbol + category as `source`. When
+   * present and length > 1, a channel-switcher pill bar is rendered at
+   * the top of the tray so the user can hop between (e.g.) AAVE's
+   * market, funding, orderbook, trades, and candles channels without
+   * closing and re-opening the tray. Order in this array determines
+   * pill order.
+   */
+  siblings?: DataSource[];
+  /** Called when the user clicks a sibling pill. */
+  onSelectSibling?: (id: string) => void;
   onClose: () => void;
   defaultLanguage?: string;
   onLanguageChange?: (lang: string) => void;
+}
+
+/**
+ * "phoenix-ws-market" → "market". Used as the short pill label so the
+ * channel switcher reads cleanly without the redundant prefix.
+ */
+function channelShortLabel(kind: DataSource["kind"]): string {
+  return kind.replace(/^phoenix-ws-/, "").replace(/^ember-(ws|rest)-/, "");
+}
+
+const KIND_ORDER: Record<string, number> = {
+  "phoenix-ws-market":    0,
+  "phoenix-ws-all-mids":  1,
+  "phoenix-ws-funding":   2,
+  "phoenix-ws-orderbook": 3,
+  "phoenix-ws-trades":    4,
+  "phoenix-ws-candles":   5,
+};
+
+function sortedSiblings(siblings: DataSource[]): DataSource[] {
+  return [...siblings].sort((a, b) => (KIND_ORDER[a.kind] ?? 99) - (KIND_ORDER[b.kind] ?? 99));
 }
 
 function fmtMs(v: number | null): string {
@@ -43,13 +75,20 @@ function fmtUsdAbbrev(n: number): string {
  * phoenix-ws-market sources (price spreads, OI, volume, funding) plus
  * the raw inter-arrival gaps that feed the latency percentiles.
  */
-export function SourceDetailTray({ source, onClose, defaultLanguage, onLanguageChange }: Props) {
+export function SourceDetailTray({ source, siblings, onSelectSibling, onClose, defaultLanguage, onLanguageChange }: Props) {
   useEffect(() => {
     if (!source) return;
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [source, onClose]);
+
+  // Only show pills when the user has actually landed on a multi-channel
+  // symbol (Phoenix WS market/funding/orderbook/trades/candles for one
+  // asset). Single-source views — e.g. allMids, health endpoints — get
+  // the original cleaner header.
+  const hasSiblings = !!(siblings && siblings.length > 1);
+  const orderedSiblings = hasSiblings ? sortedSiblings(siblings!) : [];
 
   return (
     <AnimatePresence>
@@ -60,13 +99,24 @@ export function SourceDetailTray({ source, onClose, defaultLanguage, onLanguageC
             onClick={onClose}
             className="fixed inset-0 z-[90] bg-black/40"
           />
+          {/*
+            The animation key is based on the SYMBOL+category (or source id
+            for non-merged sources) rather than `source.id` directly — so
+            clicking a sibling pill swaps tray content in place without
+            re-running the slide-in transition, which would feel jumpy.
+          */}
           <motion.div
-            key={source.id}
+            key={hasSiblings ? `${source.category}:${source.symbol ?? source.id}` : source.id}
             initial={{ x: 580 }} animate={{ x: 0 }} exit={{ x: 580 }}
             transition={{ type: "spring", damping: 32, stiffness: 320 }}
             className="fixed right-0 top-0 bottom-0 z-[91] w-[580px] border-l border-ember-border bg-surface-l1 shadow-[−24px_0_96px_rgba(0,0,0,0.55)] overflow-y-auto"
           >
-            <Header source={source} onClose={onClose} />
+            <Header
+              source={source}
+              onClose={onClose}
+              siblings={orderedSiblings}
+              onSelectSibling={onSelectSibling}
+            />
             <Body source={source} defaultLanguage={defaultLanguage} onLanguageChange={onLanguageChange} />
           </motion.div>
         </>
@@ -75,14 +125,30 @@ export function SourceDetailTray({ source, onClose, defaultLanguage, onLanguageC
   );
 }
 
-function Header({ source, onClose }: { source: DataSource; onClose: () => void }) {
+function Header({
+  source,
+  onClose,
+  siblings,
+  onSelectSibling,
+}: {
+  source: DataSource;
+  onClose: () => void;
+  siblings: DataSource[];
+  onSelectSibling?: (id: string) => void;
+}) {
   const ss = statusBadge(source.status);
+  const hasSiblings = siblings.length > 1;
+  // When the tray is the merged-symbol view, show the symbol as the
+  // big title and let the eyebrow communicate the category. Otherwise
+  // keep the per-source label as the title.
+  const titleText = hasSiblings ? (source.symbol ?? source.label) : source.label;
+  const eyebrowText = hasSiblings ? "Phoenix · WebSocket" : source.kind;
   return (
     <div className="border-b border-ember-border/70 px-5 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ember-orange">{source.kind}</span>
-          <h2 className="font-mono text-sm uppercase tracking-wider text-text-primary">{source.label}</h2>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ember-orange">{eyebrowText}</span>
+          <h2 className="font-mono text-sm uppercase tracking-wider text-text-primary">{titleText}</h2>
           <code className="font-mono text-[10px] text-text-secondary/50">{source.endpoint}</code>
         </div>
         <button onClick={onClose} className="text-text-secondary/60 hover:text-text-primary transition-colors">
@@ -94,6 +160,49 @@ function Header({ source, onClose }: { source: DataSource; onClose: () => void }
         <span className={clsx("font-mono text-[10px] uppercase tracking-wider", ss.cls)}>{ss.label}</span>
         <span className="ml-2 font-mono text-[10px] text-text-secondary/50">last update {fmtAge(source.stats.ageSec)} ago · {source.stats.count.toLocaleString()} total</span>
       </div>
+      {hasSiblings && (
+        <ChannelSwitcher
+          source={source}
+          siblings={siblings}
+          onSelect={onSelectSibling}
+        />
+      )}
+    </div>
+  );
+}
+
+function ChannelSwitcher({
+  source,
+  siblings,
+  onSelect,
+}: {
+  source: DataSource;
+  siblings: DataSource[];
+  onSelect?: (id: string) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 font-mono text-[9px] uppercase tracking-wider text-text-secondary/40">Channels</span>
+      {siblings.map((sib) => {
+        const active = sib.id === source.id;
+        const ss = statusBadge(sib.status);
+        return (
+          <button
+            key={sib.id}
+            onClick={() => onSelect?.(sib.id)}
+            className={clsx(
+              "inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+              active
+                ? "border-ember-orange/60 bg-ember-orange/15 text-ember-orange"
+                : "border-ember-border text-text-secondary/70 hover:bg-surface-l2 hover:text-text-primary",
+            )}
+            title={`${sib.kind} · ${sib.status} · ${sib.stats.count.toLocaleString()} msgs`}
+          >
+            <span className={clsx("inline-block h-1.5 w-1.5 rounded-full", ss.dot)} />
+            {channelShortLabel(sib.kind)}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -232,11 +341,32 @@ function MarketSnapshot({ payload }: { payload: PhoenixMarketPayload | null }) {
   );
 }
 
+/**
+ * CSS-only hover hint. Native `title=` has a ~700-1000ms browser-driven
+ * delay before showing — annoying on a dense dashboard where the user
+ * just wants a quick definition. This fires on `group-hover` so the
+ * label appears the instant the cursor enters the cell.
+ *
+ * Caller is responsible for adding `group relative` to the cell.
+ */
+function HoverHint({ text }: { text: string }) {
+  return (
+    <span
+      role="tooltip"
+      className="pointer-events-none invisible absolute left-2 top-full z-50 mt-1 whitespace-normal rounded border border-ember-border bg-surface-l3/95 px-2 py-1.5 font-mono text-[10px] leading-snug text-text-primary opacity-0 shadow-xl backdrop-blur-sm transition-opacity duration-75 group-hover:visible group-hover:opacity-100"
+      style={{ width: "max-content", maxWidth: "300px" }}
+    >
+      {text}
+    </span>
+  );
+}
+
 function PriceCell({ label, value, color, tooltip }: { label: string; value: number; color: string; tooltip: string }) {
   return (
-    <div className="flex flex-col gap-0.5 bg-surface-l1 px-3 py-2.5" title={tooltip}>
+    <div className="group relative flex flex-col gap-0.5 bg-surface-l1 px-3 py-2.5">
       <span className="cursor-help font-mono text-[9px] uppercase tracking-wider text-text-secondary/50 border-b border-dotted border-text-secondary/30 w-fit">{label}</span>
       <span className={clsx("font-mono text-base", color)}>${formatPrice(value)}</span>
+      <HoverHint text={tooltip} />
     </div>
   );
 }
@@ -245,21 +375,23 @@ function SpreadCell({ label, deltaUsd, deltaBps, tooltip }: { label: string; del
   const isPos = deltaUsd > 0;
   const color = Math.abs(deltaBps) < 1 ? "text-text-secondary/60" : isPos ? "text-ember-green" : "text-ember-red";
   return (
-    <div className="flex flex-col gap-0.5 bg-surface-l1 px-3 py-2" title={tooltip}>
+    <div className="group relative flex flex-col gap-0.5 bg-surface-l1 px-3 py-2">
       <span className="cursor-help font-mono text-[9px] uppercase tracking-wider text-text-secondary/50 border-b border-dotted border-text-secondary/30 w-fit">{label}</span>
       <div className="flex items-baseline gap-2">
         <span className={clsx("font-mono text-xs", color)}>{isPos ? "+" : ""}${deltaUsd.toFixed(4)}</span>
         <span className={clsx("font-mono text-[10px]", color)}>{isPos ? "+" : ""}{deltaBps.toFixed(2)}bp</span>
       </div>
+      <HoverHint text={tooltip} />
     </div>
   );
 }
 
 function MetricCell({ label, value, tooltip, colored }: { label: string; value: string; tooltip: string; colored?: string }) {
   return (
-    <div className="flex flex-col gap-0.5 bg-surface-l1 px-3 py-2" title={tooltip}>
+    <div className="group relative flex flex-col gap-0.5 bg-surface-l1 px-3 py-2">
       <span className="cursor-help font-mono text-[9px] uppercase tracking-wider text-text-secondary/50 border-b border-dotted border-text-secondary/30 w-fit">{label}</span>
       <span className={clsx("font-mono text-xs", colored ?? "text-text-primary")}>{value}</span>
+      <HoverHint text={tooltip} />
     </div>
   );
 }
@@ -310,9 +442,10 @@ function CadencePanel({ source }: { source: DataSource }) {
 
 function StatBox({ label, value, tooltip, highlight }: { label: string; value: string; tooltip?: string; highlight?: boolean }) {
   return (
-    <div className="flex flex-col gap-0.5 bg-surface-l1 px-2 py-1.5" title={tooltip}>
+    <div className="group relative flex flex-col gap-0.5 bg-surface-l1 px-2 py-1.5">
       <span className={clsx("font-mono text-[9px] uppercase tracking-wider", tooltip ? "cursor-help border-b border-dotted border-text-secondary/30 text-text-secondary/50 w-fit" : "text-text-secondary/50")}>{label}</span>
       <span className={clsx("font-mono text-xs", highlight ? "text-ember-orange" : "text-text-primary")}>{value}</span>
+      {tooltip && <HoverHint text={tooltip} />}
     </div>
   );
 }

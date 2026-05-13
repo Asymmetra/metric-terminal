@@ -369,7 +369,31 @@ intentionally small enough to ship independently.
   done because it needs wallet pubkey input. Right now we don't
   surface this kind at all; could add a small form in the tray.
 
-### 10.5 Stretch
+### 10.5 Cross-asset & analytics layer
+
+- **Top-of-table market overview strip** — a horizontal carousel of
+  per-symbol price tiles (price, 24h change, OI) sorted by movement.
+  Today this data is only visible if you open the detail tray for
+  one market at a time; surface it at-a-glance for everything.
+- **Spread time-series per symbol** — chart of `mark − oracle` and
+  `mid − oracle` drifting over the rolling window. Detail tray shows
+  the current spreads but the trend is more informative.
+- **Funding countdown** — funding settles at 0/8/16 UTC; show the
+  countdown next to the funding-rate cell so the operator knows
+  when the next settlement print is due.
+- **Volume velocity** — derivative of `dayNtlVlm` over recent
+  minutes. Highlights unusually busy markets even when the absolute
+  volume number is small (microcap markets where 50× the usual
+  velocity still rounds to a small $ number).
+- **Correlation matrix tab** — pair-wise return correlation across
+  symbols over a rolling window. Useful as a research/sanity tool.
+- **Direct on-chain oracle comparison** — read Pyth/Switchboard
+  accounts via the Solana RPC (read-only, the public RPC is fine)
+  and compare against Phoenix's reported `oracle_price`. Validates
+  whether Phoenix's oracle tracks the source. Adds the rpc latency
+  channel as a new category.
+
+### 10.6 Stretch
 
 - **WebRTC-style bottom-tray "raw event log"** with search and
   pause. Useful for forensic debugging of one specific message.
@@ -378,6 +402,118 @@ intentionally small enough to ship independently.
 - **Schema validation** — fetch the SDK's TypeScript types at build
   time and validate incoming payloads, flag any payload that
   doesn't match Phoenix's documented schema.
+
+### 10.7 Audit (2026-05-13) — concrete additions and what was just fixed
+
+**Mid-session iteration (same date) — three more landed:**
+
+- **Per-symbol consolidation in the Phoenix WS table.** Rows are now
+  one-per-asset instead of one-per-(asset, channel). Market / funding /
+  orderbook / trades / candles for SOL collapse to a single "SOL" row
+  whose Latest / Spread / Age / Cadence come from the market channel
+  (the primary). A "5 ch" pill next to the symbol indicates merged
+  rows; allMids and single-channel symbols pass through unchanged. The
+  detail tray gained a channel-switcher pill bar in its header so you
+  can hop between channels for the same asset without closing the tray.
+- **Reduced column count.** Main table is now 6 columns:
+  `Source · Latest · Spread · Age · Cadence · Status`. The richer
+  per-channel detail (Count, N/60s, Gap p95, Gap p99, Gap max, rate,
+  sparkline, raw inter-arrival samples) all live in the detail tray's
+  Cadence panel. Glanceable on the main screen; drill in for depth.
+- **Fixed-width numeric rendering.** Every numeric value (Age, Cadence,
+  Spread) is split into a fixed-width number slot + fixed-width unit
+  slot via the new `NumberUnit` helper. Combined with `tabular-nums`
+  and `table-layout: fixed`, this removes both the column wobble
+  *and* the in-cell wobble where the left edge of right-aligned text
+  shifted as character count changed.
+- **Instant CSS tooltips.** Native `title=` attributes have a
+  ~700ms-1s browser-driven appearance delay; replaced with a CSS-only
+  `group-hover` popover that fires the moment the cursor enters the
+  cell. Applied to all detail-tray cells and column-header tooltips.
+
+**Subscription scope fix — accurate cadence metrics:**
+
+The page used to subscribe to *every* Phoenix channel for every market
+even when channels were hidden via the chip toggle. With 29 markets ×
+6 channels, that's ~175 active streams competing for the single
+Phoenix WS connection. Orderbook alone publishes ~10Hz × 29 markets ≈
+290 msgs/sec; that traffic queues ahead of the 1Hz market messages on
+the browser's WS receive buffer, inflating the perceived inter-arrival
+gap of the channels the user actually cared about. p50 for market
+drifted from ~1s (clean) to ~3.5–4s (congested).
+
+Fix: a subscription reconciler in `useObservability` that diffs
+*desired* subscriptions (= enabled kinds × symbols + the always-on
+allMids) against *current* subscriptions and sends only the deltas.
+Default chip state subscribes to market + funding + allMids ≈ 58
+streams; toggling orderbook ON sends 29 new subscribes; toggling it
+OFF sends 29 unsubscribes. Cadence numbers for the channels we DO
+show are now accurate — they reflect Phoenix's actual publish rate,
+not our own bandwidth contention.
+
+
+
+A fresh pass over what `/stats` does today vs the data Phoenix and
+our backend actually expose. Anchored against §6's completeness
+matrix; items here are not yet captured in §10.1–10.6 or expand them
+with new detail.
+
+**Fixed this revision**
+- **Boot-up TTFD reduced from ~5s to sub-500ms.** Was: a single
+  synchronous burst of 145 subscribe messages on WS open (29 markets
+  × 5 channels + allMids). Phoenix's server queued them, and no data
+  flowed until the queue drained. Now: staggered in 3 phases —
+  market+allMids immediately, funding at +250ms, orderbook/trades/
+  candles at +750ms. The kinds visible by default flow first.
+- **Column-width jitter eliminated.** Was: `<table>` auto layout
+  re-measuring on every paint as decimal counts changed. Now:
+  `table-layout: fixed` + explicit colgroup widths + `tabular-nums`
+  on every numeric cell. Cells truncate with ellipsis instead of
+  reflowing the row.
+
+**Coverage audit — what's present today**
+
+| Layer | Present | Missing |
+|-------|---------|---------|
+| Phoenix WS market channels | ✅ all 6 channels × all symbols | trader_state (needs pubkey input) |
+| Phoenix REST | descriptors only | live polls for `/exchange`, `/orderbook/{sym}`, `/markets/{sym}/stats-history` |
+| Ember REST | `/api/markets`, three `/health/*` | `/api/orderbook/{sym}`, `/api/candles/{sym}`, `/api/leaderboard`, `/api/onboard/check`, trader-state family |
+| Ember WS relay | none subscribed | comparison-only sources for relay-vs-direct latency check |
+| Browser-side analytics | cadence percentiles, spreads | no derived series (funding countdown, velocity, top-movers carousel) |
+| Wallet-aware sources | none | trader_state, /api/trader/{pk}/* (gate behind wallet connect) |
+| Deployment metadata | none | commit SHA, build time, region surfaced in header so the operator knows what they're testing |
+
+**New candidate additions not yet covered above**
+
+1. **Deployment header pill** — show `${commitSha.slice(0,7)} ·
+   ${deployRegion} · built ${buildTimeIso}` in the top bar. Cheap
+   (Vercel injects the env vars at build time), high signal for
+   "is this the change I expected to be testing?".
+2. **Filter by status** — chip row next to the search box: "healthy
+   / degraded / stale / error / idle". Click to scope the table.
+   Useful when triaging.
+3. **Per-row symbol-grouped layout** — sibling to the current
+   category grouping; when on, every market shows one accordion
+   block with all 6 kinds nested inside. Better for "tell me
+   everything about SOL right now" than the per-category view.
+4. **Live oracle-vs-mark divergence alert** — flash any row whose
+   `|mark − oracle| / oracle` exceeds a threshold (e.g. 0.5%).
+   Phoenix uses an EMA-smoothed mark; large divergence usually
+   means the oracle just jumped. First-line indicator that
+   something interesting is happening on chain.
+5. **Bandwidth + msg-rate tile** — per-WS, bytes/sec and msgs/sec
+   computed from message lengths. Catches "page is slow because
+   orderbook payloads are huge today" before it becomes a mystery.
+6. **Backend richer health** — extend `/health/memory` to also
+   include RSS, heap, request-rate, and active-WS-connection
+   counts. Single REST source on the page gains a payload tab full
+   of system metrics.
+7. **Pause-per-source** — today Pause is global. Per-source pause
+   would let the operator freeze one weird stream while keeping
+   everything else live.
+
+These are intentionally bite-sized; pick the highest-value subset
+for the next pass rather than trying to land all of them.
 
 ## 11. Known limitations
 

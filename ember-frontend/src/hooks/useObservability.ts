@@ -94,6 +94,20 @@ export interface UseObservabilityOptions {
   symbols: string[];
   /** Whether new arrivals should be accepted (pauses ALL ingestion). */
   paused: boolean;
+  /**
+   * Which Phoenix WS kinds to actually subscribe to. Kinds NOT in this
+   * set are not subscribed at all — we don't even ask Phoenix for the
+   * data. This is important: subscribing to a kind we're going to hide
+   * (e.g. orderbook at ~10Hz × 29 markets ≈ 290 msgs/sec) congests the
+   * single Phoenix WebSocket and inflates the perceived inter-arrival
+   * GAPS of the channels the user IS looking at. Subscribing only to
+   * enabled kinds restores accurate per-channel cadence.
+   *
+   * `phoenix-ws-all-mids` is implicitly always subscribed (it's a
+   * single global heartbeat with negligible bandwidth) — listing it
+   * explicitly is fine but not required.
+   */
+  enabledPhoenixKinds: Set<SourceKind>;
 }
 
 function pickPercentile(sorted: number[], p: number): number | null {
@@ -240,8 +254,38 @@ function makeDescriptor(kind: SourceKind, symbol?: string): SourceDescriptor {
   }
 }
 
+/**
+ * Channel-name conversion between our internal SourceKind and the
+ * channel string Phoenix's WS protocol expects.
+ */
+function phoenixChannelFor(kind: SourceKind): { channel: string; needsSymbol: boolean; timeframe?: string } | null {
+  switch (kind) {
+    case "phoenix-ws-market":     return { channel: "market",      needsSymbol: true  };
+    case "phoenix-ws-all-mids":   return { channel: "allMids",     needsSymbol: false };
+    case "phoenix-ws-funding":    return { channel: "fundingRate", needsSymbol: true  };
+    case "phoenix-ws-orderbook":  return { channel: "orderbook",   needsSymbol: true  };
+    case "phoenix-ws-trades":     return { channel: "trades",      needsSymbol: true  };
+    case "phoenix-ws-candles":    return { channel: "candles",     needsSymbol: true, timeframe: "1m" };
+    default:                      return null;
+  }
+}
+
+const PHOENIX_WS_KINDS: SourceKind[] = [
+  "phoenix-ws-market",
+  "phoenix-ws-all-mids",
+  "phoenix-ws-funding",
+  "phoenix-ws-orderbook",
+  "phoenix-ws-trades",
+  "phoenix-ws-candles",
+];
+
+/** Stable string key for a (kind, symbol) pair used in the subscription set. */
+function subKey(kind: SourceKind, symbol?: string): string {
+  return symbol ? `${kind}::${symbol}` : kind;
+}
+
 export function useObservability(options: UseObservabilityOptions) {
-  const { symbols, paused } = options;
+  const { symbols, paused, enabledPhoenixKinds } = options;
   const sourcesRef = useRef<Map<string, RawSource>>(new Map());
   const phoenixWsRef = useRef<WebSocket | null>(null);
   const phoenixStateRef = useRef<ConnectionRecord>({
@@ -264,6 +308,22 @@ export function useObservability(options: UseObservabilityOptions) {
   pausedRef.current = paused;
   const symbolsRef = useRef(symbols);
   symbolsRef.current = symbols;
+  const enabledKindsRef = useRef(enabledPhoenixKinds);
+  enabledKindsRef.current = enabledPhoenixKinds;
+  /**
+   * Subscriptions currently held on the live Phoenix WS, keyed by
+   * subKey(kind, symbol). Reconciled on connect, symbol-list change,
+   * and chip toggle. On WS close this is reset (subscriptions don't
+   * survive a reconnect on Phoenix's side).
+   */
+  const currentSubsRef = useRef<Set<string>>(new Set());
+  /**
+   * Stable handle to the in-effect `reconcile(ws)` function. Set inside
+   * the Phoenix WS effect (where the closure has access to the local
+   * helpers); read by the outer effect that watches symbols + enabled
+   * kinds so it can re-fire reconciliation without tearing the WS down.
+   */
+  const reconcileRef = useRef<((ws: WebSocket) => void) | null>(null);
   const recentMsgTimestampsRef = useRef<number[]>([]);
 
   const [snapshot, setSnapshot] = useState<ObservabilitySnapshot>(() => ({
@@ -354,27 +414,92 @@ export function useObservability(options: UseObservabilityOptions) {
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
 
-    const subscribeAll = (ws: WebSocket) => {
-      const syms = symbolsRef.current;
-      // Subscribe to every Phoenix WS channel for every listed market —
-      // "ingest all possible data" per the page's goal. High-volume
-      // channels (orderbook, trades) use bounded per-kind history caps
-      // (see types.ts:HISTORY_LIMIT_BY_KIND) to keep memory in check.
-      for (const sym of syms) {
-        ensureSource("phoenix-ws-market", sym);
-        ensureSource("phoenix-ws-funding", sym);
-        ensureSource("phoenix-ws-orderbook", sym);
-        ensureSource("phoenix-ws-trades", sym);
-        ensureSource("phoenix-ws-candles", sym);
-        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "market",      symbol: sym } }));
-        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "fundingRate", symbol: sym } }));
-        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "orderbook",   symbol: sym } }));
-        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "trades",      symbol: sym } }));
-        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "candles",     symbol: sym, timeframe: "1m" } }));
+    /**
+     * Compute the desired (kind, symbol) subscription set from the
+     * current symbol list + the user's enabled-kinds preference.
+     * allMids is ALWAYS desired (one global heartbeat, negligible cost,
+     * useful even when per-symbol market is disabled).
+     */
+    const computeDesired = (): Set<string> => {
+      const desired = new Set<string>();
+      desired.add(subKey("phoenix-ws-all-mids"));
+      for (const sym of symbolsRef.current) {
+        for (const kind of PHOENIX_WS_KINDS) {
+          if (kind === "phoenix-ws-all-mids") continue;
+          if (!enabledKindsRef.current.has(kind)) continue;
+          desired.add(subKey(kind, sym));
+        }
       }
-      ensureSource("phoenix-ws-all-mids");
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "allMids" } }));
+      return desired;
     };
+
+    /**
+     * Bring the live subscription set in sync with `computeDesired()`.
+     * Sends subscribes for newly-desired (kind, symbol) pairs and
+     * unsubscribes for ones the user has just disabled. Phoenix
+     * de-dupes subscribes server-side so we don't bother filtering
+     * "already-subscribed" — but we DO bother filtering for unsubscribe
+     * because the protocol expects matched pairs.
+     *
+     * Newly-added subscribes are staggered in three small batches so
+     * the very first market data lands quickly even on cold connects
+     * (the alternative — flooding 60+ subscribes into Phoenix's WS at
+     * once — has been measured to delay first-data by several seconds).
+     */
+    const reconcile = (ws: WebSocket) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const safeSend = (msg: object) => { try { ws.send(JSON.stringify(msg)); } catch { /* socket closed mid-burst */ } };
+      const desired = computeDesired();
+      const current = currentSubsRef.current;
+
+      // Group additions by stagger phase. allMids + market first
+      // (visible by default), funding next, then any high-volume kinds.
+      const phaseA: string[] = []; // market + allMids
+      const phaseB: string[] = []; // funding
+      const phaseC: string[] = []; // orderbook + trades + candles
+      for (const key of desired) {
+        if (current.has(key)) continue;
+        if (key === "phoenix-ws-all-mids" || key.startsWith("phoenix-ws-market::")) phaseA.push(key);
+        else if (key.startsWith("phoenix-ws-funding::")) phaseB.push(key);
+        else phaseC.push(key);
+      }
+
+      const sendSubscribe = (key: string) => {
+        const [kind, symbol] = key.includes("::") ? key.split("::") as [SourceKind, string] : [key as SourceKind, undefined];
+        const chan = phoenixChannelFor(kind);
+        if (!chan) return;
+        ensureSource(kind, symbol);
+        const sub: Record<string, unknown> = { channel: chan.channel };
+        if (chan.needsSymbol && symbol) sub.symbol = symbol;
+        if (chan.timeframe) sub.timeframe = chan.timeframe;
+        safeSend({ type: "subscribe", subscription: sub });
+        current.add(key);
+      };
+
+      for (const k of phaseA) sendSubscribe(k);
+      if (phaseB.length > 0) {
+        setTimeout(() => { if (ws.readyState === WebSocket.OPEN) for (const k of phaseB) sendSubscribe(k); }, 250);
+      }
+      if (phaseC.length > 0) {
+        setTimeout(() => { if (ws.readyState === WebSocket.OPEN) for (const k of phaseC) sendSubscribe(k); }, 500);
+      }
+
+      // Unsubscribes — send immediately, no need to stagger.
+      for (const key of Array.from(current)) {
+        if (desired.has(key)) continue;
+        const [kind, symbol] = key.includes("::") ? key.split("::") as [SourceKind, string] : [key as SourceKind, undefined];
+        const chan = phoenixChannelFor(kind);
+        if (!chan) { current.delete(key); continue; }
+        const sub: Record<string, unknown> = { channel: chan.channel };
+        if (chan.needsSymbol && symbol) sub.symbol = symbol;
+        if (chan.timeframe) sub.timeframe = chan.timeframe;
+        safeSend({ type: "unsubscribe", subscription: sub });
+        current.delete(key);
+      }
+    };
+    // Used by the WS event handler below and (via reconcileRef) by the
+    // effect that watches enabledKinds / symbols.
+    reconcileRef.current = reconcile;
 
     const scheduleReconnect = (errorMessage?: string) => {
       if (cancelled) return;
@@ -430,7 +555,10 @@ export function useObservability(options: UseObservabilityOptions) {
           connectedAtMs: performance.now(),
           lastErrorMessage: null,
         };
-        subscribeAll(ws);
+        // A reconnected WS starts with zero server-side subscriptions —
+        // forget what we thought we had and reconcile from scratch.
+        currentSubsRef.current.clear();
+        reconcile(ws);
       };
 
       ws.onmessage = (event) => {
@@ -513,26 +641,16 @@ export function useObservability(options: UseObservabilityOptions) {
     };
   }, [ensureSource, recordEvent]);
 
-  // ── Re-send subscriptions when the symbol list changes (auto-discovery).
-  // Subscribing to a channel we're already subscribed to is a no-op
-  // server-side, so we don't bother tracking which symbols are already
-  // wired — just rebroadcast the full set whenever the list shifts.
+  // ── Re-reconcile subscriptions when the symbol list or the user's
+  //    enabled-kinds set changes. The reconciler diffs desired vs
+  //    current and sends only the deltas, so toggling a chip OFF sends
+  //    unsubscribes (freeing wire bandwidth) while toggling ON sends
+  //    only the newly-needed subscribes.
   useEffect(() => {
     const ws = phoenixWsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    for (const sym of symbols) {
-      ensureSource("phoenix-ws-market", sym);
-      ensureSource("phoenix-ws-funding", sym);
-      ensureSource("phoenix-ws-orderbook", sym);
-      ensureSource("phoenix-ws-trades", sym);
-      ensureSource("phoenix-ws-candles", sym);
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "market",      symbol: sym } }));
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "fundingRate", symbol: sym } }));
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "orderbook",   symbol: sym } }));
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "trades",      symbol: sym } }));
-      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "candles",     symbol: sym, timeframe: "1m" } }));
-    }
-  }, [symbols, ensureSource]);
+    reconcileRef.current?.(ws);
+  }, [symbols, enabledPhoenixKinds]);
 
   // ── REST pollers for ember backend health endpoints.
   useEffect(() => {
