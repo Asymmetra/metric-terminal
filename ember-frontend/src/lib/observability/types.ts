@@ -127,8 +127,35 @@ export interface DataSource extends SourceDescriptor {
   recentPayloads: Array<{ tMs: number; payload: unknown }>;
 }
 
-/** Maximum payloads kept per source in-memory and in localStorage. */
-export const HISTORY_LIMIT = 100;
+/**
+ * Per-source-kind history cap. High-volume channels (orderbook, trades)
+ * carry potentially huge payloads (full L2 books); we cap them tightly
+ * to keep the in-memory + localStorage footprint bounded. Low-volume
+ * channels keep the longer tail for richer history scrollback.
+ */
+export const HISTORY_LIMIT_BY_KIND: Partial<Record<SourceKind, number>> = {
+  "phoenix-ws-orderbook": 10,
+  "phoenix-ws-trades":    20,
+  "phoenix-ws-candles":   30,
+};
+
+/** Default cap for any source kind that isn't listed above. */
+export const HISTORY_LIMIT_DEFAULT = 100;
+
+export function historyLimitFor(kind: SourceKind): number {
+  return HISTORY_LIMIT_BY_KIND[kind] ?? HISTORY_LIMIT_DEFAULT;
+}
 
 /** Maximum interarrival samples used to compute percentiles. */
 export const ARRIVAL_SAMPLE_LIMIT = 256;
+
+/**
+ * Kinds whose payloads contain too much data to be worth persisting
+ * (full orderbook snapshots can be tens of KB each). We still track
+ * their cadence + latest payload in memory, but they don't go to
+ * localStorage. Otherwise the 3MB persistence budget gets blown.
+ */
+export const NO_PERSIST_KINDS = new Set<SourceKind>([
+  "phoenix-ws-orderbook",
+  "phoenix-ws-trades",
+]);

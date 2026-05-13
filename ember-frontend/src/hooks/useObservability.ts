@@ -9,7 +9,7 @@ import type {
   SourceStats,
   SourceStatus,
 } from "@/lib/observability/types";
-import { ARRIVAL_SAMPLE_LIMIT, HISTORY_LIMIT } from "@/lib/observability/types";
+import { ARRIVAL_SAMPLE_LIMIT, historyLimitFor, NO_PERSIST_KINDS } from "@/lib/observability/types";
 import { loadPersisted, loadPreferences, savePersisted } from "@/lib/observability/persistence";
 
 /**
@@ -169,6 +169,33 @@ function makeDescriptor(kind: SourceKind, symbol?: string): SourceDescriptor {
         label: `${symLabel} · funding`,
         description: "Phoenix WS subscribe_to_funding_rate: per-market funding rate updates. Very low frequency (settlements happen on 8h boundaries; intra-epoch updates are sparse).",
         endpoint: PHOENIX_WS_URL,
+        // Funding can be silent for many minutes between epoch boundaries —
+        // use a generous threshold so we don't flag healthy markets as stale.
+        expectedCadenceMs: 300_000,
+      };
+    case "phoenix-ws-orderbook":
+      return {
+        id, kind, category: "phoenix-ws", symbol,
+        label: `${symLabel} · orderbook`,
+        description: "Phoenix WS subscribe_to_orderbook: L2 book snapshots. Pushed on every book change so cadence tracks market activity. Highest-volume channel — recentPayloads cap kept small to bound memory.",
+        endpoint: PHOENIX_WS_URL,
+        expectedCadenceMs: 500,
+      };
+    case "phoenix-ws-trades":
+      return {
+        id, kind, category: "phoenix-ws", symbol,
+        label: `${symLabel} · trades`,
+        description: "Phoenix WS subscribe_to_trades: print stream of executed fills. Cadence is liquidity-bound — illiquid markets can be silent for minutes.",
+        endpoint: PHOENIX_WS_URL,
+        // Trades come whenever there's volume; some markets are quiet.
+        expectedCadenceMs: 30_000,
+      };
+    case "phoenix-ws-candles":
+      return {
+        id, kind, category: "phoenix-ws", symbol, timeframe: "1m",
+        label: `${symLabel} · candles 1m`,
+        description: "Phoenix WS subscribe_to_candles: 1-minute candle updates. Closes at minute boundaries and updates in-flight as trades arrive.",
+        endpoint: PHOENIX_WS_URL,
         expectedCadenceMs: 60_000,
       };
     case "ember-rest-markets":
@@ -286,7 +313,12 @@ export function useObservability(options: UseObservabilityOptions) {
     s.count += 1;
     s.latestPayload = payload;
     s.recentPayloads.push({ tMs: nowMs, payload });
-    if (s.recentPayloads.length > HISTORY_LIMIT) s.recentPayloads.shift();
+    // Per-kind cap so high-volume channels (orderbook, trades) don't
+    // blow up memory. Most kinds keep the full 100-message tail.
+    const cap = historyLimitFor(s.descriptor.kind);
+    if (s.recentPayloads.length > cap) {
+      s.recentPayloads.splice(0, s.recentPayloads.length - cap);
+    }
     recentMsgTimestampsRef.current.push(nowMs);
   }, []);
 
@@ -324,11 +356,21 @@ export function useObservability(options: UseObservabilityOptions) {
 
     const subscribeAll = (ws: WebSocket) => {
       const syms = symbolsRef.current;
+      // Subscribe to every Phoenix WS channel for every listed market —
+      // "ingest all possible data" per the page's goal. High-volume
+      // channels (orderbook, trades) use bounded per-kind history caps
+      // (see types.ts:HISTORY_LIMIT_BY_KIND) to keep memory in check.
       for (const sym of syms) {
         ensureSource("phoenix-ws-market", sym);
-        ws.send(
-          JSON.stringify({ type: "subscribe", subscription: { channel: "market", symbol: sym } }),
-        );
+        ensureSource("phoenix-ws-funding", sym);
+        ensureSource("phoenix-ws-orderbook", sym);
+        ensureSource("phoenix-ws-trades", sym);
+        ensureSource("phoenix-ws-candles", sym);
+        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "market",      symbol: sym } }));
+        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "fundingRate", symbol: sym } }));
+        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "orderbook",   symbol: sym } }));
+        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "trades",      symbol: sym } }));
+        ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "candles",     symbol: sym, timeframe: "1m" } }));
       }
       ensureSource("phoenix-ws-all-mids");
       ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "allMids" } }));
@@ -398,22 +440,51 @@ export function useObservability(options: UseObservabilityOptions) {
         } catch {
           return;
         }
-        if (msg?.channel === "market" && typeof msg.symbol === "string") {
-          ensureSource("phoenix-ws-market", msg.symbol);
-          recordEvent(sourceId("phoenix-ws-market", msg.symbol), msg);
-          phoenixStateRef.current.totalUpdates += 1;
-        } else if (msg?.channel === "allMids") {
-          ensureSource("phoenix-ws-all-mids");
-          recordEvent(sourceId("phoenix-ws-all-mids"), msg);
-          phoenixStateRef.current.totalUpdates += 1;
-        } else if (msg?.channel === "fundingRate" && typeof msg.symbol === "string") {
-          ensureSource("phoenix-ws-funding", msg.symbol);
-          recordEvent(sourceId("phoenix-ws-funding", msg.symbol), msg);
-          phoenixStateRef.current.totalUpdates += 1;
+        if (!msg || typeof msg !== "object") return;
+        switch (msg.channel) {
+          case "market":
+            if (typeof msg.symbol === "string") {
+              ensureSource("phoenix-ws-market", msg.symbol);
+              recordEvent(sourceId("phoenix-ws-market", msg.symbol), msg);
+              phoenixStateRef.current.totalUpdates += 1;
+            }
+            break;
+          case "allMids":
+            ensureSource("phoenix-ws-all-mids");
+            recordEvent(sourceId("phoenix-ws-all-mids"), msg);
+            phoenixStateRef.current.totalUpdates += 1;
+            break;
+          case "fundingRate":
+            if (typeof msg.symbol === "string") {
+              ensureSource("phoenix-ws-funding", msg.symbol);
+              recordEvent(sourceId("phoenix-ws-funding", msg.symbol), msg);
+              phoenixStateRef.current.totalUpdates += 1;
+            }
+            break;
+          case "orderbook":
+            if (typeof msg.symbol === "string") {
+              ensureSource("phoenix-ws-orderbook", msg.symbol);
+              recordEvent(sourceId("phoenix-ws-orderbook", msg.symbol), msg);
+              phoenixStateRef.current.totalUpdates += 1;
+            }
+            break;
+          case "trades":
+            if (typeof msg.symbol === "string") {
+              ensureSource("phoenix-ws-trades", msg.symbol);
+              recordEvent(sourceId("phoenix-ws-trades", msg.symbol), msg);
+              phoenixStateRef.current.totalUpdates += 1;
+            }
+            break;
+          case "candle":
+          case "candles":
+            if (typeof msg.symbol === "string") {
+              ensureSource("phoenix-ws-candles", msg.symbol);
+              recordEvent(sourceId("phoenix-ws-candles", msg.symbol), msg);
+              phoenixStateRef.current.totalUpdates += 1;
+            }
+            break;
+          // subscriptionConfirmed / subscriptionError / error fall through.
         }
-        // Other channels (orderbook/trades/candles) and subscriptionConfirmed
-        // messages are dropped silently — we'll wire those later behind an
-        // explicit toggle (they're high-volume).
       };
 
       ws.onerror = (event) => {
@@ -443,14 +514,23 @@ export function useObservability(options: UseObservabilityOptions) {
   }, [ensureSource, recordEvent]);
 
   // ── Re-send subscriptions when the symbol list changes (auto-discovery).
+  // Subscribing to a channel we're already subscribed to is a no-op
+  // server-side, so we don't bother tracking which symbols are already
+  // wired — just rebroadcast the full set whenever the list shifts.
   useEffect(() => {
     const ws = phoenixWsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     for (const sym of symbols) {
       ensureSource("phoenix-ws-market", sym);
-      ws.send(
-        JSON.stringify({ type: "subscribe", subscription: { channel: "market", symbol: sym } }),
-      );
+      ensureSource("phoenix-ws-funding", sym);
+      ensureSource("phoenix-ws-orderbook", sym);
+      ensureSource("phoenix-ws-trades", sym);
+      ensureSource("phoenix-ws-candles", sym);
+      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "market",      symbol: sym } }));
+      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "fundingRate", symbol: sym } }));
+      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "orderbook",   symbol: sym } }));
+      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "trades",      symbol: sym } }));
+      ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "candles",     symbol: sym, timeframe: "1m" } }));
     }
   }, [symbols, ensureSource]);
 
@@ -575,9 +655,13 @@ export function useObservability(options: UseObservabilityOptions) {
   useEffect(() => {
     const prefs = loadPreferences();
     const id = setInterval(() => {
-      // Snapshot the registry to plain objects for save.
+      // Snapshot the registry to plain objects for save. High-volume
+      // kinds (orderbook, trades) are excluded so 3MB localStorage
+      // budget doesn't blow up — full L2 books are too big to persist
+      // and stats survive across reloads in-memory either way.
       const sources: Record<string, DataSource> = {};
       for (const [k, raw] of sourcesRef.current.entries()) {
+        if (NO_PERSIST_KINDS.has(raw.descriptor.kind)) continue;
         sources[k] = {
           ...raw.descriptor,
           stats: {

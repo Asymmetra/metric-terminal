@@ -1,6 +1,6 @@
 "use client";
 
-import type { DataSource, SourceCategory, SourceStatus } from "@/lib/observability/types";
+import type { DataSource, SourceCategory, SourceKind, SourceStatus } from "@/lib/observability/types";
 import { formatPrice } from "@/lib/format";
 import clsx from "clsx";
 
@@ -16,6 +16,8 @@ interface Props {
   onSelect: (id: string) => void;
   /** Search filter (matches against label + id). */
   filter: string;
+  /** Set of source-kinds the user has hidden via the channel toggles. */
+  hiddenKinds: Set<SourceKind>;
 }
 
 const CATEGORY_LABELS: Record<SourceCategory, string> = {
@@ -60,20 +62,56 @@ function statusStyles(s: SourceStatus): { label: string; cls: string; dot: strin
 function previewLatest(src: DataSource): string {
   const p = src.latestPayload as any;
   if (!p) return "";
-  if (typeof p === "object") {
-    // Market source: show all three prices compactly so the basis is
-    // visible without opening the detail tray.
-    if (typeof p.oraclePx === "number" && typeof p.markPx === "number" && typeof p.midPx === "number") {
-      return `O ${formatPrice(p.oraclePx)} · M ${formatPrice(p.markPx)} · m ${formatPrice(p.midPx)}`;
+  if (typeof p !== "object") return String(p).slice(0, 40);
+
+  // Per-kind preview format — keep the row useful at-a-glance without
+  // dumping the full payload.
+  switch (src.kind) {
+    case "phoenix-ws-market":
+      if (typeof p.oraclePx === "number" && typeof p.markPx === "number" && typeof p.midPx === "number") {
+        return `O ${formatPrice(p.oraclePx)} · M ${formatPrice(p.markPx)} · m ${formatPrice(p.midPx)}`;
+      }
+      break;
+    case "phoenix-ws-all-mids":
+      return `${Object.keys(p.mids ?? {}).length} mids · slot ${p.slot ?? "?"}`;
+    case "phoenix-ws-funding":
+      return typeof p.funding === "number" ? `${(p.funding * 100).toFixed(4)}% per epoch` : "";
+    case "phoenix-ws-orderbook": {
+      const bestBid = Array.isArray(p.bids) ? p.bids[0] : null;
+      const bestAsk = Array.isArray(p.asks) ? p.asks[0] : null;
+      const bidPx = bestBid && typeof bestBid[0] === "number" ? bestBid[0] : null;
+      const askPx = bestAsk && typeof bestAsk[0] === "number" ? bestAsk[0] : null;
+      const depthBid = Array.isArray(p.bids) ? p.bids.length : 0;
+      const depthAsk = Array.isArray(p.asks) ? p.asks.length : 0;
+      if (bidPx && askPx) {
+        const spread = ((askPx - bidPx) / askPx) * 10_000;
+        return `${formatPrice(bidPx)} / ${formatPrice(askPx)} · ${spread.toFixed(1)}bp · ${depthBid}/${depthAsk}`;
+      }
+      return `${depthBid} bids · ${depthAsk} asks`;
     }
-    if (typeof p.oraclePx === "number") return `oracle $${formatPrice(p.oraclePx)}`;
-    if (typeof p.mids === "object") return `${Object.keys(p.mids).length} mids · slot ${p.slot}`;
-    if (typeof p.funding === "number") return `funding ${(p.funding * 100).toFixed(4)}%`;
-    if (Array.isArray(p)) return `[${p.length} items]`;
-    const keys = Object.keys(p);
-    return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""}}`;
+    case "phoenix-ws-trades": {
+      const trades = Array.isArray(p.trades) ? p.trades : [];
+      const last = trades[trades.length - 1];
+      if (last) {
+        const side = String(last.side ?? "").toLowerCase();
+        const px = typeof last.px === "number" ? last.px : (typeof last.price === "number" ? last.price : null);
+        const sz = typeof last.sz === "number" ? last.sz : (typeof last.size === "number" ? last.size : null);
+        return `${side} ${sz != null ? sz.toFixed(4) : "?"} @ ${px != null ? formatPrice(px) : "?"} · ${trades.length} this msg`;
+      }
+      return `${trades.length} trades`;
+    }
+    case "phoenix-ws-candles": {
+      const c = p.candle ?? p;
+      if (typeof c?.c === "number") return `O ${c.o} H ${c.h} L ${c.l} C ${c.c}`;
+      if (typeof c?.close === "number") return `O ${c.open} H ${c.high} L ${c.low} C ${c.close}`;
+      return "";
+    }
   }
-  return String(p).slice(0, 40);
+
+  // Generic fallback.
+  if (Array.isArray(p)) return `[${p.length} items]`;
+  const keys = Object.keys(p);
+  return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""}}`;
 }
 
 /**
@@ -91,7 +129,7 @@ function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBp
   };
 }
 
-export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect, filter }: Props) {
+export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect, filter, hiddenKinds }: Props) {
   // Group by category. Track total-before-filter so we can distinguish
   // "category is empty because we haven't wired it yet" from "category is
   // empty because the filter excluded everything".
@@ -100,6 +138,7 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
   const normalizedFilter = filter.trim().toLowerCase();
   for (const s of sources) {
     totalsByCategory.set(s.category, (totalsByCategory.get(s.category) ?? 0) + 1);
+    if (hiddenKinds.has(s.kind)) continue;
     if (normalizedFilter && !`${s.id} ${s.label}`.toLowerCase().includes(normalizedFilter)) continue;
     const arr = groups.get(s.category) ?? [];
     arr.push(s);

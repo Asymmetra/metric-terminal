@@ -8,8 +8,22 @@ import { SourceTable } from "@/components/stats/SourceTable";
 import { SourceDetailTray } from "@/components/stats/SourceDetailTray";
 import { WalletButton } from "@/components/shared/WalletButton";
 import { loadPreferences } from "@/lib/observability/persistence";
-import type { SourceCategory } from "@/lib/observability/types";
+import type { SourceCategory, SourceKind } from "@/lib/observability/types";
 import clsx from "clsx";
+
+/**
+ * Kind-filter toggles available in the top bar. High-volume kinds
+ * (orderbook, trades, candles) default OFF so opening /stats doesn't
+ * immediately render 100+ rows. The user flips them on as needed.
+ */
+const TOGGLEABLE_KINDS: Array<{ kind: SourceKind; label: string; tooltip: string; defaultHidden: boolean }> = [
+  { kind: "phoenix-ws-market",     label: "Market",     tooltip: "Phoenix WS market channel — oracle, mark, mid, funding, OI, volume per symbol.",                       defaultHidden: false },
+  { kind: "phoenix-ws-all-mids",   label: "All mids",   tooltip: "Phoenix WS allMids channel — every market's mid price in a single message. Global heartbeat.",          defaultHidden: false },
+  { kind: "phoenix-ws-funding",    label: "Funding",    tooltip: "Phoenix WS fundingRate channel — per-market funding updates. Very low frequency.",                      defaultHidden: false },
+  { kind: "phoenix-ws-orderbook",  label: "Orderbook",  tooltip: "Phoenix WS orderbook channel — L2 book snapshots. HIGH VOLUME. Off by default to keep the table sane.", defaultHidden: true  },
+  { kind: "phoenix-ws-trades",     label: "Trades",     tooltip: "Phoenix WS trades channel — fill prints per market.",                                                   defaultHidden: true  },
+  { kind: "phoenix-ws-candles",    label: "Candles 1m", tooltip: "Phoenix WS candles channel — 1m OHLC.",                                                                 defaultHidden: true  },
+];
 
 /**
  * Observability page — internal developer dashboard for every data feed
@@ -33,6 +47,18 @@ export default function StatsPage() {
     "ember-rest": true,
   });
   const [snippetLang, setSnippetLang] = useState<string>("ts");
+  const [hiddenKinds, setHiddenKinds] = useState<Set<SourceKind>>(() => {
+    const initial = new Set<SourceKind>();
+    for (const k of TOGGLEABLE_KINDS) if (k.defaultHidden) initial.add(k.kind);
+    return initial;
+  });
+  const toggleKind = useCallback((kind: SourceKind) => {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind); else next.add(kind);
+      return next;
+    });
+  }, []);
 
   // Hydrate UI preferences from localStorage on mount.
   useEffect(() => {
@@ -116,8 +142,34 @@ export default function StatsPage() {
         )}
       </div>
 
+      {/* Channel toggles — let the user hide high-volume kinds so the
+          table doesn't have 145 rows by default. Each toggle reflects how
+          many sources of that kind exist + their visibility. */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-ember-border/40 bg-surface-l1/60 px-4 py-2 mt-3">
+        <span className="mr-2 font-mono text-[9px] uppercase tracking-wider text-text-secondary/50">Channels</span>
+        {TOGGLEABLE_KINDS.map((t) => {
+          const total = Object.values(snapshot.sources).filter((s) => s.kind === t.kind).length;
+          const isVisible = !hiddenKinds.has(t.kind);
+          return (
+            <button
+              key={t.kind}
+              onClick={() => toggleKind(t.kind)}
+              title={t.tooltip + (total ? `\n${total} active source(s).` : "")}
+              className={clsx(
+                "border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                isVisible
+                  ? "border-ember-orange/40 bg-ember-orange/10 text-ember-orange"
+                  : "border-ember-border text-text-secondary/50 hover:text-text-primary",
+              )}
+            >
+              {t.label} {total > 0 && <span className="ml-1 text-text-secondary/50">{total}</span>}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Top bar — category health + global counters + controls */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-ember-border/40 bg-surface-l1 px-4 py-3 mt-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-ember-border/40 bg-surface-l1 px-4 py-3">
         {/* Hide category dots when zero sources are wired in that category
             — same logic as the table itself. */}
         {snapshot.categoryHealth["phoenix-ws"].total > 0 &&   <CategoryDot cat="phoenix-ws"   stats={snapshot.categoryHealth["phoenix-ws"]}   label="Phoenix WS" />}
@@ -181,6 +233,7 @@ export default function StatsPage() {
           selectedId={selectedId}
           onSelect={(id) => setSelectedId(id)}
           filter={filter}
+          hiddenKinds={hiddenKinds}
         />
       </div>
 
