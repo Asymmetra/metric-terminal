@@ -8,8 +8,6 @@ import { ConnectionPanel } from "@/components/stats/ConnectionPanel";
 import { OracleStatsTable } from "@/components/stats/OracleStatsTable";
 import { WalletButton } from "@/components/shared/WalletButton";
 
-const ACCESS_KEY = "ember-access";
-
 /**
  * Phoenix oracle feed observability page.
  *
@@ -19,27 +17,22 @@ const ACCESS_KEY = "ember-access";
  * client-direct architecture before committing to it in the React Native
  * app — see /Users/liamdig/.claude/plans/image-1-phoenix-ellpss-just-sleepy-nebula.md
  * for the architectural rationale.
+ *
+ * No access gate: the data shown here is already public (Phoenix's WS is
+ * an open endpoint anyone can hit). Replicating the /leaderboard
+ * sessionStorage gate would just create friction without adding security.
  */
 export default function StatsPage() {
-  const [authed, setAuthed] = useState(false);
-  const [authChecked, setAuthChecked] = useState(false);
   const [symbols, setSymbols] = useState<string[] | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [enableAllMids, setEnableAllMids] = useState(false);
 
-  // Gate the page the same way /leaderboard does — internal tool.
   useEffect(() => {
-    setAuthed(sessionStorage.getItem(ACCESS_KEY) === "1");
-    setAuthChecked(true);
-  }, []);
-
-  useEffect(() => {
-    if (!authed) return;
     api
       .getMarkets()
       .then((markets: Array<{ symbol: string }>) => setSymbols(markets.map((m) => m.symbol)))
       .catch((e) => setMarketsError(String(e?.message ?? e)));
-  }, [authed]);
+  }, []);
 
   const { state, exportCsv, resetStats, resubscribe } = useOracleFeed(symbols ?? [], {
     enableAllMids,
@@ -54,15 +47,6 @@ export default function StatsPage() {
   }, [enableAllMids]);
 
   const rows = useMemo(() => Object.values(state.bySymbol), [state.bySymbol]);
-
-  if (!authChecked) return null;
-  if (!authed) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-ember-black text-text-secondary font-mono text-xs">
-        Restricted. Set sessionStorage.{ACCESS_KEY} = &quot;1&quot; via /leaderboard first.
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-screen flex-col bg-ember-black text-text-primary">
