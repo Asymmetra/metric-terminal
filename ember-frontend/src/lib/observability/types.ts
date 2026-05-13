@@ -59,14 +59,32 @@ export interface SourceStats {
   rate60s: number;
   /** performance.now() timestamp of the last successful arrival. */
   lastUpdateAtMs: number | null;
-  /** Seconds since lastUpdateAtMs, recomputed at flush time. */
+  /**
+   * Seconds since `lastUpdateAtMs`, recomputed at flush time. This is the
+   * "how stale is the freshest value RIGHT NOW" metric — it grows from 0
+   * back up to ~p50 inter-arrival between messages. Do NOT confuse with
+   * a request-latency measurement; it is unrelated.
+   */
   ageSec: number | null;
-  /** Inter-arrival percentile in ms over the rolling window. */
+  /**
+   * Inter-arrival GAP percentiles in ms — how long between successive
+   * messages, NOT request latency. If a feed publishes ~once per second,
+   * `p50Ms` will be ~1000ms even though every individual message arrives
+   * in microseconds once it's on the wire.
+   */
   p50Ms: number | null;
   p95Ms: number | null;
   p99Ms: number | null;
   /** Worst gap seen in the window. */
   maxMs: number | null;
+  /**
+   * The raw inter-arrival samples (ms) feeding the percentiles, newest
+   * last. Capped at a reasonable size for display; the full ring lives
+   * in the hook. Exposed so the detail tray can render a sparkline /
+   * list so the user can see exactly what the aggregate numbers are
+   * derived from.
+   */
+  recentArrivals: number[];
   /** Number of failed polls / WS errors since reset. */
   errorCount: number;
   lastErrorAtMs: number | null;

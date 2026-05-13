@@ -496,6 +496,9 @@ export function useObservability(options: UseObservabilityOptions) {
           p95Ms: p95,
           p99Ms: p99,
           maxMs: max,
+          // Expose the last ~60 samples (newest last) so the detail tray
+          // can show what's feeding the percentiles.
+          recentArrivals: raw.arrivals.slice(-60),
           errorCount: raw.errorCount,
           lastErrorAtMs: raw.lastErrorAtMs,
           lastErrorMessage: raw.lastErrorMessage,
@@ -553,6 +556,7 @@ export function useObservability(options: UseObservabilityOptions) {
             p95Ms: null,
             p99Ms: null,
             maxMs: null,
+            recentArrivals: [],
             errorCount: raw.errorCount,
             lastErrorAtMs: raw.lastErrorAtMs,
             lastErrorMessage: raw.lastErrorMessage,

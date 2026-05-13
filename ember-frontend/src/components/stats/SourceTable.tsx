@@ -61,6 +61,11 @@ function previewLatest(src: DataSource): string {
   const p = src.latestPayload as any;
   if (!p) return "";
   if (typeof p === "object") {
+    // Market source: show all three prices compactly so the basis is
+    // visible without opening the detail tray.
+    if (typeof p.oraclePx === "number" && typeof p.markPx === "number" && typeof p.midPx === "number") {
+      return `O ${formatPrice(p.oraclePx)} · M ${formatPrice(p.markPx)} · m ${formatPrice(p.midPx)}`;
+    }
     if (typeof p.oraclePx === "number") return `oracle $${formatPrice(p.oraclePx)}`;
     if (typeof p.mids === "object") return `${Object.keys(p.mids).length} mids · slot ${p.slot}`;
     if (typeof p.funding === "number") return `funding ${(p.funding * 100).toFixed(4)}%`;
@@ -69,6 +74,21 @@ function previewLatest(src: DataSource): string {
     return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""}}`;
   }
   return String(p).slice(0, 40);
+}
+
+/**
+ * Return mark-oracle spread in bps if the source's latest payload has
+ * the three prices, else null. Used by the table's Spread column.
+ */
+function computeSpreadBps(src: DataSource): { markOracleBps: number; midOracleBps: number } | null {
+  const p = src.latestPayload as any;
+  if (!p || typeof p !== "object") return null;
+  if (typeof p.oraclePx !== "number" || p.oraclePx <= 0) return null;
+  if (typeof p.markPx !== "number" || typeof p.midPx !== "number") return null;
+  return {
+    markOracleBps: ((p.markPx - p.oraclePx) / p.oraclePx) * 10_000,
+    midOracleBps:  ((p.midPx  - p.oraclePx) / p.oraclePx) * 10_000,
+  };
 }
 
 export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect, filter }: Props) {
@@ -114,17 +134,18 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
 
             {isOpen && rows.length > 0 && (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] font-mono text-[11px]">
+                <table className="w-full min-w-[1100px] font-mono text-[11px]">
                   <thead>
                     <tr className="text-[9px] uppercase tracking-wider text-text-secondary/40">
                       <Th align="left">Source</Th>
                       <Th align="left">Latest</Th>
-                      <Th align="right" title="Time since the last update arrived.">Last</Th>
-                      <Th align="right" title="Total messages / polls since reset.">Count</Th>
-                      <Th align="right" title="Approximate inter-arrival samples in the rolling window.">N/60s</Th>
-                      <Th align="right" title="p50 of recent inter-arrival deltas.">p50</Th>
-                      <Th align="right" title="p95 of recent inter-arrival deltas. Healthy if ≤ 500ms.">p95</Th>
-                      <Th align="right" title="Worst gap seen in the window.">max</Th>
+                      <Th align="right" title="Mark−Oracle spread in basis points (market sources only). Positive = mark trades above oracle.">Mark−Oracle</Th>
+                      <Th align="right" title="Time since the most recent message arrived. Resets to 0 on every update; grows up to ~Gap p50 between messages. This is age-of-freshest-value, NOT a request-latency measurement.">Age</Th>
+                      <Th align="right" title="Total messages or successful polls since reset.">Count</Th>
+                      <Th align="right" title="Approximate count of inter-arrival samples in the rolling 60s window.">N/60s</Th>
+                      <Th align="right" title="Median GAP between consecutive messages — how often the source publishes. If Phoenix publishes once per second, this will be ~1000ms even though every individual message arrives in microseconds. Different from Age.">Gap p50</Th>
+                      <Th align="right" title="95th-percentile gap between consecutive messages. Healthy if ≤ 500ms for liquid markets.">Gap p95</Th>
+                      <Th align="right" title="Worst gap seen in the rolling window.">Gap max</Th>
                       <Th align="left">Status</Th>
                     </tr>
                   </thead>
@@ -132,6 +153,7 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
                     {rows.map((src) => {
                       const ss = statusStyles(src.status);
                       const selected = selectedId === src.id;
+                      const spread = computeSpreadBps(src);
                       return (
                         <tr
                           key={src.id}
@@ -145,8 +167,20 @@ export function SourceTable({ sources, expanded, onToggle, selectedId, onSelect,
                             <div className="text-text-primary">{src.label}</div>
                             <div className="text-[9px] text-text-secondary/40">{src.endpoint}{src.symbol ? ` · ${src.symbol}` : ""}</div>
                           </td>
-                          <td className="px-3 py-1.5 text-text-secondary/70 text-[10px] max-w-[280px] truncate" title={JSON.stringify(src.latestPayload)?.slice(0, 400)}>
+                          <td className="px-3 py-1.5 text-text-secondary/70 text-[10px] max-w-[260px] truncate" title={JSON.stringify(src.latestPayload)?.slice(0, 400)}>
                             {previewLatest(src)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                            {spread ? (
+                              <span
+                                className={Math.abs(spread.markOracleBps) < 1 ? "text-text-secondary/50" : spread.markOracleBps > 0 ? "text-ember-green" : "text-ember-red"}
+                                title={`Mark − Oracle: ${spread.markOracleBps > 0 ? "+" : ""}${spread.markOracleBps.toFixed(2)}bp\nMid − Oracle: ${spread.midOracleBps > 0 ? "+" : ""}${spread.midOracleBps.toFixed(2)}bp`}
+                              >
+                                {spread.markOracleBps > 0 ? "+" : ""}{spread.markOracleBps.toFixed(2)}bp
+                              </span>
+                            ) : (
+                              <span className="text-text-secondary/30">—</span>
+                            )}
                           </td>
                           <td className={clsx(
                             "px-3 py-1.5 text-right",
