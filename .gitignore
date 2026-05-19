@@ -8,6 +8,7 @@ metric-backend/target/
 metric-frontend/node_modules/
 metric-frontend/.next/
 metric-frontend/.env.local
+tests/node_modules
 
 # Environment / secrets
 tests/.env
