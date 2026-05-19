@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { TerminalGrid } from "@/components/layout/TerminalGrid";
 import { MarketHeader } from "@/components/terminal/MarketHeader";
 import { MarketDataPanel } from "@/components/terminal/MarketDataPanel";
@@ -22,6 +23,28 @@ import { useStatsStore } from "@/stores/statsStore";
 import { formatPrice } from "@/lib/format";
 import { useMarketStore } from "@/stores/marketStore";
 import clsx from "clsx";
+
+/**
+ * Phoenix-era terminal screen. The order-entry / positions / history panels
+ * still call `api.build*` endpoints that the backend now returns 410 for
+ * (see MIGRATION_BLOCKERS.md). Reads (orderbook, candles) still resolve.
+ * Use /imperial for the migrated demo path.
+ */
+function MigrationBanner() {
+  return (
+    <div className="border-b border-metric-primary/40 bg-metric-primary/5 px-4 py-2 font-mono text-[11px] text-metric-primary">
+      <span className="uppercase tracking-[0.2em]">Legacy view</span>
+      <span className="mx-3 text-text-secondary">·</span>
+      <span className="text-text-secondary">
+        Order placement on this screen calls deprecated `/api/tx/*` routes
+        and will fail with 410.
+      </span>{" "}
+      <Link href="/imperial" className="underline">
+        Use the Imperial demo →
+      </Link>
+    </div>
+  );
+}
 
 function MobileTerminal() {
   const [chartCollapsed, setChartCollapsed] = useState(false);
@@ -163,5 +186,10 @@ function Terminal() {
 }
 
 export default function TerminalPage() {
-  return <Terminal />;
+  return (
+    <>
+      <MigrationBanner />
+      <Terminal />
+    </>
+  );
 }
