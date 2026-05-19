@@ -1,52 +1,43 @@
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use phoenix_rise::{CandlesQueryParams, Timeframe};
 use serde::Deserialize;
-use std::str::FromStr;
-use std::sync::Arc;
 
 use crate::error::AppError;
+use crate::imperial::candles::{Candle, Timeframe};
 use crate::state::AppState;
-
-#[derive(Deserialize)]
-pub struct CandleQuery {
-    pub timeframe: Option<String>,
-    pub limit: Option<u32>,
-    /// Upper bound (exclusive) in ms for the returned candles. Used by the
-    /// client to page backward through history when the user scrolls left.
-    pub before: Option<i64>,
-}
-
-async fn get_candles(
-    State(state): State<Arc<AppState>>,
-    Path(symbol): Path<String>,
-    Query(query): Query<CandleQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let tf_str = query
-        .timeframe
-        .unwrap_or_else(|| "1m".to_string())
-        .to_lowercase();
-    let limit = query.limit.unwrap_or(300).min(1000);
-
-    let timeframe = Timeframe::from_str(&tf_str)
-        .map_err(|e| AppError::BadRequest(format!("Invalid timeframe: {}", e)))?;
-
-    let mut params = CandlesQueryParams::new(&symbol, timeframe).with_limit(limit);
-    if let Some(before_ms) = query.before {
-        params = params.with_end_time(before_ms);
-    }
-
-    let candles = state
-        .http_client
-        .candles()
-        .get_candles(params)
-        .await
-        .map_err(|e| AppError::Phoenix(format!("Failed to fetch candles: {}", e)))?;
-
-    Ok(Json(serde_json::json!(candles)))
-}
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/{symbol}", get(get_candles))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CandleQuery {
+    /// "1m" | "5m" | "15m" | "1h" — defaults to "1m".
+    pub timeframe: Option<String>,
+    /// Maximum number of bars to return (default 200).
+    pub limit: Option<usize>,
+    /// Which venue's price series. Defaults to "phoenix".
+    pub venue: Option<String>,
+}
+
+/// GET /api/candles/:symbol — served from the in-process CandleAggregator
+/// fed by the Imperial mark-price WS stream. Cold start is empty; bars
+/// fill in as the stream runs.
+async fn get_candles(
+    Path(symbol): Path<String>,
+    Query(q): Query<CandleQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<Candle>>, AppError> {
+    let tf = q
+        .timeframe
+        .as_deref()
+        .and_then(Timeframe::from_str)
+        .unwrap_or(Timeframe::M1);
+    let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+    let venue = q.venue.unwrap_or_else(|| "phoenix".to_string());
+    let bars = state.candles.get(&venue, &symbol, tf, limit);
+    Ok(Json(bars))
 }

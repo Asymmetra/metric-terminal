@@ -12,11 +12,14 @@ pub enum AppError {
     #[error("Invalid request: {0}")]
     BadRequest(String),
 
-    #[error("Phoenix SDK error: {0}")]
-    Phoenix(String),
+    #[error("Imperial error: {0}")]
+    Imperial(String),
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Gone: {0}")]
+    Gone(String),
 
     #[error("Internal error: {0}")]
     Internal(String),
@@ -27,12 +30,19 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::MarketNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::Phoenix(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Imperial(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            AppError::Gone(_) => (StatusCode::GONE, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
         let body = json!({ "error": message });
         (status, axum::Json(body)).into_response()
+    }
+}
+
+impl From<crate::imperial::ImperialError> for AppError {
+    fn from(e: crate::imperial::ImperialError) -> Self {
+        AppError::Imperial(e.to_string())
     }
 }

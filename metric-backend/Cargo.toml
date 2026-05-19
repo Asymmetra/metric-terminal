@@ -4,13 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Phoenix Rise SDK (public crate). Pinned until we explicitly bump.
-phoenix-rise = "=0.1.2"
-
 # Web framework
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+futures = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -27,25 +26,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 
-# Async utilities
-futures = "0.3"
-
-# Solana types (matching SDK versions)
+# Solana pubkey parsing (input validation only; no tx-building here)
 solana-pubkey = { version = "~2.4", features = ["curve25519"] }
-solana-instruction = { version = "~2.3", default-features = false, features = ["std"] }
 
-# Encoding
+# Encoding (the deposit-build-tx response carries a base64 VersionedTransaction
+# that we pass through unchanged to the client signer).
 base64 = "0.22"
 
-# HTTP (for proxying perp-api endpoints the SDK doesn't wrap, e.g. /v1/invite/check)
+# Imperial HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# Release-build tuning to keep the static binary footprint small on Render's
-# 512MB starter instance. `strip = true` removes debuginfo (~30MB savings on
-# Rust release binaries that pull in solana-sdk + phoenix-rise). `lto = "thin"`
-# is a cheap dead-code elimination pass that also reduces the binary; "fat"
-# would shave a bit more but balloons build time and we hit Render's 10-min
-# build cap on the starter plan.
 [profile.release]
 strip = true
 lto = "thin"
