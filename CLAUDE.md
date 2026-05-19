@@ -15,7 +15,7 @@ If your tooling or workflow attempts to create a worktree, override it. Work in-
 
 - `metric-frontend/` — Next.js frontend (TypeScript, Tailwind v4)
 - `metric-backend/` — Rust/Axum backend (calls Imperial — `https://api.imperial.space/api/v1`)
-- `.keys/test-wallet.json` — Test wallet keypair (pubkey: HP29cxeYsvErDq51zPmUdWp6j12GdLFQo97JJeQPC8x)
+- `.keys/test-wallet.json` — Test wallet keypair (pubkey: HP29cxeYsvErDq51zPmUdWp6j12GdLFQo97JJeQPC8x). Currently funded with ~0.08 SOL + ~10 USDC on mainnet for live-trade integration testing. Path is gitignored; copy from the original ember-terminal repo at `/Users/liamdig/Desktop/sandbox/ember-terminal/.keys/test-wallet.json` if missing.
 
 ## Upstream
 

@@ -6,6 +6,8 @@ migrated to Imperial and the rationale.
 
 ## Working today (verified)
 
+### Local / unit / backend integration (all green)
+
 | Surface | How verified |
 |---|---|
 | Backend boots, connects upstream WS | `cargo run` + log inspection |
@@ -16,11 +18,46 @@ migrated to Imperial and the rationale.
 | `GET /health{,/relay,/memory}` | Returns `ok` with 190 active broadcast channels |
 | `/ws` fan-out from Imperial `/ws/market` | Raw WS client smoke: 16 mark + 15 candle events in 8s |
 | `POST /api/tx/deposit`, `/withdraw` | Proxies `/deposit/build-tx`; returns base64 partial tx |
+| Backend degrades gracefully under Imperial outage | All three `/phoenix\|flash\|gmtrade/markets` 502 → `/api/markets` returns 502 with informative body; `/health` still ok |
+| `metric-backend` cargo clippy clean | `cargo clippy -- -D warnings` |
+| `metric-backend` cargo tests | 2/2 pass |
 | `metric-frontend` `tsc --noEmit` | Clean |
 | `metric-frontend` Vitest suite | 14 / 14 pass |
-| Imperial connect/exchange flow | Unit-tested with mocked fetch |
+| Imperial connect/exchange shape | Unit-tested with mocked fetch |
 | `/imperial` page | New demo route renders signer + JWT + balances + positions + live marks + deposit |
 | Rebrand + theme swap | Visually verified on landing page |
+| Test wallet on-chain | `HP29cxeY…` has 0.080 SOL + 10.34 USDC (verified via mainnet RPC) |
+| ed25519 sign of `imperial:mobile-connect:…` message | Verified locally via `@noble/curves/ed25519` with the test keypair |
+
+### Live network (blocked on Imperial uptime)
+
+`tests/imperial-live.mjs` is written and ready to exercise the full
+JWT-mediated flow against `api.imperial.space`. As of the last commit
+Imperial is in an outage:
+
+- `/api/v1/status` reports `db: down`, `indexer: unreachable`, `orderBot: unreachable`
+- `/mobile/connect` returns 500 with `"Redis connection error: failed to lookup address information: Temporary failure in name resolution"`
+- TLS cert at api.imperial.space intermittently serves the railway
+  proxy default cert (`CN=*.up.railway.app`) instead of the issued
+  `CN=api.imperial.space`, breaking strict TLS clients
+
+These prevent live verification of:
+
+| Surface | Status |
+|---|---|
+| `/mobile/connect` + `/mobile/exchange` with real ed25519 sig | **Blocked — Imperial 500** |
+| `/mobile/balances` with real JWT | **Blocked — depends on auth** |
+| `/positions`, `/trades` against the real wallet | **Blocked — fetch timeouts** |
+| `/deposit/build-tx` → on-chain submit → confirm | **Ready to run, blocked on auth + reads recovering** |
+| `/mobile/orders` (limit + cancel) | **Ready to run, blocked on Imperial uptime** |
+
+Run after Imperial recovers (from `metric-frontend/` so node modules resolve):
+
+```bash
+node ../tests/imperial-live.mjs                                        # T1
+DEPOSIT=1 SOLANA_RPC=https://… node ../tests/imperial-live.mjs         # T1 + T2
+ORDER=1 SOLANA_RPC=https://… node ../tests/imperial-live.mjs           # T1 + T3
+```
 
 ## Pending — frontend OrderEntry rewrite
 
