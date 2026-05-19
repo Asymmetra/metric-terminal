@@ -2,18 +2,12 @@
 .DS_Store
 
 # Rust
-ember-backend/target/
+metric-backend/target/
 
 # Node
-ember-frontend/node_modules/
-ember-frontend/.next/
-ember-frontend/.env.local
-
-# SDK build artifacts
-phoenix-rise-sdk/rust/target/
-
-# SDK docs (not needed for builds)
-phoenix-sdk-docs/
+metric-frontend/node_modules/
+metric-frontend/.next/
+metric-frontend/.env.local
 
 # Environment / secrets
 tests/.env
@@ -23,5 +17,4 @@ tests/.env
 *rpcpool.com*
 
 # Debug artifacts
-phoenix-api-debug.md
 .keys/

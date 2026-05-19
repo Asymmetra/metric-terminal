@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surfaces — sky-on-slate. Background sits below surface-1 (sidebar/panels)
+     which sits below surface-2 (cards, hovered states). */
+  --color-metric-bg: #020617;       /* slate-950 */
+  --color-surface-1: #0F172A;       /* slate-900 */
+  --color-surface-2: #1E293B;       /* slate-800 */
+  --color-metric-border: #334155;   /* slate-700 */
+
+  /* Accents */
+  --color-metric-primary: #0EA5E9;  /* sky-500 */
+  --color-metric-buy: #22D3EE;      /* cyan-400 — long / positive */
+  --color-metric-sell: #F97316;     /* orange-500 — short / negative */
+
+  /* Text */
+  --color-text-primary: #E2E8F0;    /* slate-200 */
+  --color-text-secondary: #94A3B8;  /* slate-400 */
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+* {
+  border-radius: 0 !important;
+}
+
+body {
+  background-color: #020617;
+  color: #E2E8F0;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Toast Slide-in Animation ── */
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast-slide-in {
+  animation: toast-slide-in 200ms ease-out;
+}
+
+/* ── Orderbook Row Flash ── */
+@keyframes ob-flash {
+  from { background-color: var(--flash-color); }
+  to { background-color: transparent; }
+}
+
+.ob-flash {
+  animation: ob-flash 300ms ease-out;
+}
+
+/* ── Trade History Slide-in ── */
+@keyframes trade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.trade-slide-in {
+  animation: trade-slide-in 200ms ease-out;
+}
+
+/* ── Solana Wallet Adapter Modal Overrides ── */
+.wallet-adapter-modal-wrapper {
+  background-color: rgba(2, 6, 23, 0.85) !important;
+  backdrop-filter: blur(8px);
+}
+
+.wallet-adapter-modal {
+  background-color: #0F172A !important;
+  border: 1px solid #334155 !important;
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.6) !important;
+  font-family: "Inter", system-ui, sans-serif !important;
+}
+
+.wallet-adapter-modal-title {
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 12px !important;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
+  color: #E2E8F0 !important;
+}
+
+.wallet-adapter-modal-list {
+  margin: 0 !important;
+}
+
+.wallet-adapter-modal-list li {
+  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background-color: transparent !important;
+  color: #94A3B8 !important;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 11px !important;
+  letter-spacing: 0.03em;
+  transition: background-color 150ms, color 150ms !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background-color: #1E293B !important;
+  color: #E2E8F0 !important;
+}
+
+.wallet-adapter-modal-button-close {
+  background-color: transparent !important;
+  color: rgba(148, 163, 184, 0.4) !important;
+  transition: color 150ms !important;
+}
+
+.wallet-adapter-modal-button-close:hover {
+  color: #E2E8F0 !important;
+}
+
+.wallet-adapter-modal-middle {
+  background-color: transparent !important;
+}
+
+.wallet-adapter-modal-middle .wallet-adapter-button {
+  background-color: #0EA5E9 !important;
+  color: #020617 !important;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 11px !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.wallet-adapter-modal-middle .wallet-adapter-button:hover {
+  filter: brightness(1.1);
+}
+
+.wallet-adapter-collapse-button {
+  color: #0EA5E9 !important;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 10px !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ── Scrollbar Hide Utility ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

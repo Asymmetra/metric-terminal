@@ -8,10 +8,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# phoenix-rise SDK is fetched from crates.io — no longer vendored.
-COPY ember-backend/ ember-backend/
+# Imperial is a remote HTTP/WS API — no SDK to vendor.
+COPY metric-backend/ metric-backend/
 
-WORKDIR /build/ember-backend
+WORKDIR /build/metric-backend
 RUN cargo build --release
 
 # ---- Runtime Stage ----
@@ -22,11 +22,11 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/ember-backend/target/release/ember-backend /usr/local/bin/ember-backend
+COPY --from=builder /build/metric-backend/target/release/metric-backend /usr/local/bin/metric-backend
 
 ENV PORT=10000
-ENV RUST_LOG=ember_backend=info
+ENV RUST_LOG=metric_backend=info
 
 EXPOSE 10000
 
-CMD ["ember-backend"]
+CMD ["metric-backend"]

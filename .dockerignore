@@ -1,5 +1,5 @@
-ember-frontend/
-ember-backend/target/
+metric-frontend/
+metric-backend/target/
 .git/
 .DS_Store
 *.md

@@ -1,6 +1,8 @@
-# Ember Terminal
+# Metric Terminal
 
-A high-performance perpetuals trading terminal for [Phoenix](https://phoenix.trade) on Solana. Built with a Rust/Axum backend and Next.js frontend, Ember brings a Bloomberg-grade trading experience to on-chain perpetual futures.
+A high-performance perpetuals trading terminal targeting [Imperial](https://api.imperial.space/api/v1/docs) on Solana — a passthrough router that brokers trades across Phoenix, Jupiter, Flash Trade, and GMTrade with isolated-margin profiles. Built with a Rust/Axum backend and Next.js frontend.
+
+> **Fork note:** This is a fork of Ember Terminal (a Phoenix-Rise SDK PoC). The Phoenix-specific backend has been retargeted to Imperial; the swap is in progress (see the migration plan). Documentation below still describes some Ember/Phoenix-era behavior that Phase C/D will rewrite.
 
 ## Live Deployment
 

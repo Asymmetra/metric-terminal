@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ember-backend
+    name: metric-backend
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -12,10 +12,8 @@ services:
       - key: CORS_ORIGIN
         sync: false
       - key: RUST_LOG
-        value: ember_backend=info
-      - key: PHOENIX_API_URL
-        value: https://perp-api.phoenix.trade
-      - key: PHOENIX_WS_URL
-        value: wss://perp-api.phoenix.trade/ws
-      - key: PHOENIX_API_KEY
-        sync: false
+        value: metric_backend=info
+      - key: IMPERIAL_API_URL
+        value: https://api.imperial.space
+      - key: IMPERIAL_WS_URL
+        value: wss://api.imperial.space
