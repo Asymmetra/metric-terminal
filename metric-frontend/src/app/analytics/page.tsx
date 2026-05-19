@@ -267,9 +267,6 @@ function AnalyticsContent() {
           <Link href="/terminal" className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 hover:text-metric-primary transition-colors">
             Terminal
           </Link>
-          <Link href="/leaderboard" className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 hover:text-metric-primary transition-colors">
-            Leaderboard
-          </Link>
           <WalletButton />
         </div>
       </div>

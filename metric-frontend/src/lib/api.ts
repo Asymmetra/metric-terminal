@@ -101,13 +101,6 @@ export const api = {
     fetchApi<any>(`/api/trader/${pubkey}/pnl?resolution=${resolution}&limit=${limit}`),
   getTraderCollateralHistory: (pubkey: string, limit = 100) =>
     fetchApi<any>(`/api/trader/${pubkey}/collateral-history?limit=${limit}`),
-  registerLeaderboard: (authority: string) =>
-    fetchApi<any>("/api/leaderboard/register", {
-      method: "POST",
-      body: JSON.stringify({ authority }),
-    }),
-  getLeaderboard: (period = "1d", limit = 50) =>
-    fetchApi<any>(`/api/leaderboard?period=${period}&limit=${limit}`),
   // Onboarding / invite gate
   checkOnboardingStatus: (pubkey: string) =>
     fetchApi<{ activated: boolean; whitelisted_at: string | null; invite_code_used: string | null }>(

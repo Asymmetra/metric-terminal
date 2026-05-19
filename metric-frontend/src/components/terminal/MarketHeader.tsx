@@ -575,17 +575,6 @@ export function MarketHeader() {
         Profile
       </Link>
       <Link
-        href="/leaderboard"
-        className={clsx(
-          "font-mono text-[10px] uppercase tracking-wider transition-colors",
-          pathname === "/leaderboard"
-            ? "text-metric-primary"
-            : "text-text-secondary/60 hover:text-text-secondary"
-        )}
-      >
-        Leaderboard
-      </Link>
-      <Link
         href="/stats"
         className={clsx(
           "font-mono text-[10px] uppercase tracking-wider transition-colors",
@@ -595,6 +584,17 @@ export function MarketHeader() {
         )}
       >
         Stats
+      </Link>
+      <Link
+        href="/status"
+        className={clsx(
+          "font-mono text-[10px] uppercase tracking-wider transition-colors",
+          pathname === "/status"
+            ? "text-metric-primary"
+            : "text-text-secondary/60 hover:text-text-secondary"
+        )}
+      >
+        Status
       </Link>
 
       <StatSeparator />

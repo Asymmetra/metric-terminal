@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useSigner } from "@/lib/wallet";
+import { HealthPanel } from "@/components/health/HealthPanel";
+import { WS_URL } from "@/lib/constants";
 import {
   imperial,
   ImperialError,
@@ -39,6 +41,36 @@ export default function ImperialDemo() {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState("1.00");
+  const [wsRate, setWsRate] = useState<number>(0);
+
+  // Live counter: events/sec from the metric-backend /ws fan-out.
+  // Connects to mark_prices:SOL + candles:SOL so we always have a signal
+  // when the relay is healthy.
+  useEffect(() => {
+    const ws = new WebSocket(WS_URL);
+    let recent: number[] = [];
+    let alive = true;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "subscribe", channel: "mark_prices", symbol: "SOL" }));
+      ws.send(JSON.stringify({ type: "subscribe", channel: "candles", symbol: "SOL" }));
+    };
+    ws.onmessage = () => {
+      const now = Date.now();
+      recent.push(now);
+      recent = recent.filter((t) => now - t < 10_000);
+    };
+    const id = setInterval(() => {
+      if (!alive) return;
+      const now = Date.now();
+      const last10 = recent.filter((t) => now - t < 10_000);
+      setWsRate(last10.length / 10);
+    }, 1_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+      ws.close();
+    };
+  }, []);
 
   // Auto-load any cached JWT for this wallet.
   useEffect(() => {
@@ -179,6 +211,8 @@ export default function ImperialDemo() {
         </div>
         <WalletMultiButton />
       </header>
+
+      <HealthPanel wsEventsPerSecond={wsRate} />
 
       <Section title="Signer">
         <Field k="impl" v={signer.displayName} />

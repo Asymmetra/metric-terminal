@@ -91,12 +91,6 @@ function TopNav() {
         <span className="font-mono text-[10px] uppercase tracking-wider text-metric-primary">
           Profile
         </span>
-        <Link
-          href="/leaderboard"
-          className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60 transition-colors hover:text-text-secondary"
-        >
-          Leaderboard
-        </Link>
       </div>
       <WalletButton />
     </div>
