@@ -14,10 +14,7 @@ export type UnsignedTx =
   // Imperial's /deposit/build-tx returns a base64 partially-signed
   // VersionedTransaction (Imperial signs the fee-payer half; the wallet
   // adds the user's signature).
-  | { kind: "solana-versioned"; base64: string }
-  // Legacy Ember tx-builder path: raw instructions. Used by
-  // useTransactionBuilder.ts until Phase D rewires it through Imperial.
-  | { kind: "solana-instructions"; instructionsBase64: string[] };
+  | { kind: "solana-versioned"; base64: string };
 
 export interface SignerProvider {
   /** Base58 wallet pubkey. Null until the user connects. */

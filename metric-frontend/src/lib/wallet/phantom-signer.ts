@@ -1,13 +1,7 @@
 "use client";
 
 import bs58 from "bs58";
-import {
-  Connection,
-  PublicKey,
-  Transaction,
-  TransactionInstruction,
-  VersionedTransaction,
-} from "@solana/web3.js";
+import { Connection, VersionedTransaction } from "@solana/web3.js";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import type { SignerProvider, UnsignedTx } from "./types";
 import { SignerNotReadyError } from "./types";
@@ -18,6 +12,12 @@ import { SignerNotReadyError } from "./types";
  * Constructed from a captured wallet adapter snapshot + Solana connection.
  * Stale-closure-safe because useSigner() rebuilds the instance whenever the
  * underlying adapter state changes.
+ *
+ * Handles `solana-versioned` UnsignedTx — the partially-signed
+ * VersionedTransaction shape Imperial's `/deposit/build-tx` returns. Order
+ * placement does not flow through this signer because Imperial signs +
+ * submits orders server-side under a JWT delegation; the only client-side
+ * tx signing is deposit/withdraw.
  */
 export function makePhantomSigner(
   wallet: WalletContextState,
@@ -44,43 +44,17 @@ export function makePhantomSigner(
       if (!wallet.publicKey || !wallet.sendTransaction) {
         throw new SignerNotReadyError();
       }
-      const payer = wallet.publicKey;
-
       if (unsigned.kind === "solana-versioned") {
         const raw = Uint8Array.from(atob(unsigned.base64), (c) => c.charCodeAt(0));
         const vtx = VersionedTransaction.deserialize(raw);
         const signature = await wallet.sendTransaction(vtx, connection);
         return { signature };
       }
-
-      // solana-instructions: legacy path used by useTransactionBuilder until
-      // Phase D rewires it. Builds a legacy Transaction from base64-encoded
-      // instructions, mirroring what deserializeInstructions does today.
-      const instructions = unsigned.instructionsBase64.map(decodeInstruction);
-      const { blockhash } = await connection.getLatestBlockhash();
-      const tx = new Transaction({ feePayer: payer, recentBlockhash: blockhash });
-      tx.add(...instructions);
-      const signature = await wallet.sendTransaction(tx, connection);
-      return { signature };
+      // Tagged-union exhaustiveness — UnsignedTx currently has one variant.
+      // If we ever add another (EVM calldata for non-Solana venues), TS
+      // will force a compiler-level review here.
+      const _exhaustive: never = unsigned.kind;
+      throw new Error(`Unknown UnsignedTx kind: ${String(_exhaustive)}`);
     },
   };
-}
-
-/**
- * Decode a base64 Solana instruction (the shape phoenix-rise returns from
- * Cargo-side ser/de). Mirrors metric-frontend/src/lib/solana.ts but kept
- * local here so the signer module doesn't reach across the codebase.
- */
-function decodeInstruction(b64: string): TransactionInstruction {
-  // Wire format: { programId: base58, keys: [{pubkey, isSigner, isWritable}], data: base64 }
-  const json = JSON.parse(atob(b64));
-  return new TransactionInstruction({
-    programId: new PublicKey(json.programId),
-    keys: json.keys.map((k: { pubkey: string; isSigner: boolean; isWritable: boolean }) => ({
-      pubkey: new PublicKey(k.pubkey),
-      isSigner: k.isSigner,
-      isWritable: k.isWritable,
-    })),
-    data: Buffer.from(json.data, "base64"),
-  });
 }

@@ -12,8 +12,8 @@
  *   - /api/candles/SOL returns an array (may be empty on cold start)
  *   - /health/relay is non-empty after a brief wait for WS to warm up
  *   - /api/tx/deposit returns an unsigned VersionedTransaction
- *   - /api/tx/market-order returns 410 (Imperial JWT-delegation)
- *   - /api/trader/<bogus> handles invalid wallets gracefully (Imperial 400)
+ *   - /api/tx/market-order returns 404 (route removed; call Imperial direct)
+ *   - /api/tx/deposit handles invalid wallets gracefully (400)
  *   - /ws fan-out delivers at least one mark_price_update + candle_update
  *     within 10 seconds of subscribing.
  */
@@ -154,17 +154,12 @@ await check("POST /api/tx/deposit → returns base64 partial tx", async () => {
 });
 
 await check(
-  "POST /api/tx/market-order → 410 Gone (JWT-delegated to Imperial)",
+  "POST /api/tx/market-order → 404 (route removed; call Imperial direct)",
   async () => {
     const r = await http_("POST", "/api/tx/market-order", { dummy: true });
-    assert(r.status === 410, `expected 410, got ${r.status}`);
+    assert(r.status === 404, `expected 404, got ${r.status}`);
   }
 );
-
-await check("POST /api/tx/transfer-collateral → 410 (use withdraw+deposit)", async () => {
-  const r = await http_("POST", "/api/tx/transfer-collateral", {});
-  assert(r.status === 410, `expected 410, got ${r.status}`);
-});
 
 await check("POST /api/tx/deposit with bad wallet → 400", async () => {
   const r = await http_("POST", "/api/tx/deposit", {

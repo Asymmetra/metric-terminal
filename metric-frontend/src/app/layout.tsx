@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { WalletProviderWrapper } from "@/providers/WalletProvider";
-import { OnboardingGate } from "@/components/onboarding/OnboardingGate";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -45,10 +44,7 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-metric-bg text-text-primary antialiased">
-        <WalletProviderWrapper>
-          <OnboardingGate />
-          {children}
-        </WalletProviderWrapper>
+        <WalletProviderWrapper>{children}</WalletProviderWrapper>
       </body>
     </html>
   );

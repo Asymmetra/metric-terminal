@@ -1,17 +1,13 @@
 //! Tx-building endpoints.
 //!
-//! After the Imperial swap, this file only handles **deposit/withdraw**
-//! because Imperial's /deposit/build-tx returns an unsigned partially-
-//! signed VersionedTransaction we can pass through to the client signer
-//! (Phantom in the PoC, Privy+paymaster in production).
+//! Only deposit/withdraw live here. Imperial's `/deposit/build-tx` returns
+//! a partially-signed VersionedTransaction which we pass through to the
+//! client signer (Phantom in the PoC, Privy + paymaster in production).
 //!
 //! Order placement / cancel / update / collateral are JWT-delegated on
-//! Imperial. The frontend calls those endpoints directly (browser →
-//! api.imperial.space/api/v1/mobile/*) so this backend never holds a
-//! per-wallet JWT.
-//!
-//! Stubs for the legacy Ember POST endpoints return 410 Gone with a
-//! redirect hint so any stale client surface is loud rather than silent.
+//! Imperial. The frontend calls those endpoints directly
+//! (browser → api.imperial.space/api/v1/mobile/*) so this backend never
+//! holds a per-wallet JWT.
 
 use std::sync::Arc;
 
@@ -28,16 +24,6 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/deposit", post(deposit))
         .route("/withdraw", post(withdraw))
-        .route("/market-order", post(gone_call_imperial))
-        .route("/limit-order", post(gone_call_imperial))
-        .route("/cancel-orders", post(gone_call_imperial))
-        .route("/isolated-market-order", post(gone_call_imperial))
-        .route("/isolated-limit-order", post(gone_call_imperial))
-        .route("/transfer-collateral", post(gone_transfer))
-        .route("/register-subaccount", post(gone_call_imperial))
-        .route("/place-multi-limit-orders", post(gone_call_imperial))
-        .route("/cancel-stop-loss", post(gone_call_imperial))
-        .route("/close-all-positions", post(gone_call_imperial))
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,23 +65,6 @@ async fn withdraw(
         mode: "withdraw".to_string(),
     };
     Ok(Json(state.imperial.build_deposit_tx(&req).await?))
-}
-
-async fn gone_call_imperial() -> Result<Json<()>, AppError> {
-    Err(AppError::Gone(
-        "Order/cancel/etc. require a per-wallet Imperial JWT. Call \
-         https://api.imperial.space/api/v1/mobile/* directly from the \
-         signed-in client (see metric-frontend/src/lib/imperial/client.ts)."
-            .to_string(),
-    ))
-}
-
-async fn gone_transfer() -> Result<Json<()>, AppError> {
-    Err(AppError::Gone(
-        "Inter-profile collateral transfer is not an Imperial primitive. \
-         Use withdraw → deposit on the two profile indices."
-            .to_string(),
-    ))
 }
 
 fn validate_pubkey(s: &str) -> Result<(), AppError> {
