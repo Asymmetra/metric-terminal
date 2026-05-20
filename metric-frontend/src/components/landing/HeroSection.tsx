@@ -88,7 +88,7 @@ export function HeroSection() {
         {/* CTA */}
         <motion.div variants={fadeUp} className="mt-4">
           <Link
-            href="/imperial"
+            href="/terminal"
             className="group relative inline-flex items-center border border-metric-primary/60 bg-transparent px-10 py-3.5 font-mono text-xs font-medium tracking-[0.2em] text-metric-primary transition-all duration-300 hover:border-metric-primary hover:bg-metric-primary/10 hover:text-metric-primary"
             style={{
               boxShadow: "0 0 20px rgba(14,165,233,0.10)",

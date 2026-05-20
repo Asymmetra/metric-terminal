@@ -16,22 +16,21 @@ import {
 import { loadJwt, clearJwt } from "@/lib/imperial/jwt";
 
 /**
- * Imperial integration demo — the canonical "this stack works" page.
+ * Metric Terminal trading view at /terminal.
  *
- * Exercises:
+ * Exercises the full Imperial pipeline:
  *   1. Connect Phantom (SignerProvider abstraction)
  *   2. /mobile/connect + /mobile/exchange JWT handshake
  *   3. /mobile/balances (auth)
- *   4. /positions (no auth)
- *   5. /mark-prices (no auth)
- *   6. /deposit/build-tx → SignerProvider.signAndSendTransaction (live tx
- *      flow; commented "DRY-RUN" button by default to avoid accidental
- *      sends — uncomment to enable real submission)
+ *   4. /positions, /mark-prices (no auth)
+ *   5. /deposit/build-tx → SignerProvider.signAndSendTransaction →
+ *      on-chain submit
  *
- * Designed so an engineer can verify the whole Imperial pipeline in one
- * place without touching the legacy Phoenix-coupled trading UI.
+ * Order placement + cancel happen via direct calls to
+ * api.imperial.space/api/v1/mobile/* from the signed-in client; the
+ * metric-backend (if deployed) only handles WS fan-out + candle aggregation.
  */
-export default function ImperialDemo() {
+export default function TerminalView() {
   const signer = useSigner();
   const wallet = signer.publicKey;
   const [jwt, setJwt] = useState<string | null>(null);
@@ -201,13 +200,11 @@ export default function ImperialDemo() {
       <header className="flex items-center justify-between">
         <div>
           <div className="font-mono text-[10px] tracking-[0.35em] text-text-secondary uppercase">
-            Metric Terminal · Imperial Demo
+            Metric Terminal
           </div>
-          <h1 className="font-mono text-2xl text-metric-primary">
-            E2E pipeline check
-          </h1>
+          <h1 className="font-mono text-2xl text-metric-primary">Trade</h1>
           <p className="font-mono text-xs text-text-secondary">
-            Connect → JWT → reads → deposit
+            Connect Phantom → authenticate with Imperial → deposit → trade
           </p>
         </div>
         <WalletMultiButton />

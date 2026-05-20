@@ -24,14 +24,14 @@ migrated to Imperial and the rationale.
 | `metric-frontend` `tsc --noEmit` | Clean |
 | `metric-frontend` Vitest suite | 14 / 14 pass |
 | Imperial connect/exchange shape | Unit-tested with mocked fetch |
-| `/imperial` page | New demo route renders signer + JWT + balances + positions + live marks + deposit |
+| `/terminal` page | New demo route renders signer + JWT + balances + positions + live marks + deposit |
 | Rebrand + theme swap | Visually verified on landing page |
 | Test wallet on-chain | `HP29cxeY…` has 0.080 SOL + 10.34 USDC (verified via mainnet RPC) |
 | ed25519 sign of `imperial:mobile-connect:…` message | Verified locally via `@noble/curves/ed25519` with the test keypair |
 
 ### Live network (blocked on Imperial uptime)
 
-`tests/imperial-live.mjs` is written and ready to exercise the full
+`tests/terminal-live.mjs` is written and ready to exercise the full
 JWT-mediated flow against `api.imperial.space`. As of the last commit
 Imperial is in an outage:
 
@@ -54,9 +54,9 @@ These prevent live verification of:
 Run after Imperial recovers (from `metric-frontend/` so node modules resolve):
 
 ```bash
-node ../tests/imperial-live.mjs                                        # T1
-DEPOSIT=1 SOLANA_RPC=https://… node ../tests/imperial-live.mjs         # T1 + T2
-ORDER=1 SOLANA_RPC=https://… node ../tests/imperial-live.mjs           # T1 + T3
+node ../tests/terminal-live.mjs                                        # T1
+DEPOSIT=1 SOLANA_RPC=https://… node ../tests/terminal-live.mjs         # T1 + T2
+ORDER=1 SOLANA_RPC=https://… node ../tests/terminal-live.mjs           # T1 + T3
 ```
 
 ## Pending — frontend OrderEntry rewrite
@@ -87,7 +87,7 @@ The rewrite needs to:
 parity with the Ember OrderEntry. The new shape can copy-paste cleanly
 to Asymmetra's production app.
 
-**Workaround until rewritten**: use the `/imperial` demo page for end-to-end
+**Workaround until rewritten**: use the `/terminal` demo page for end-to-end
 verification.
 
 ## Pending — frontend pages that touch legacy backend routes
@@ -151,7 +151,7 @@ deliberately small:
 - Health/observability endpoints
 
 Everything else lives at `api.imperial.space` and is called directly from
-the browser via `metric-frontend/src/lib/imperial/client.ts`.
+the browser via `metric-frontend/src/lib/terminal/client.ts`.
 
 ### Wire-format quirk
 
@@ -159,7 +159,7 @@ Imperial's REST responses use camelCase keys (per OpenAPI). Imperial's
 WebSocket `/ws/market` events use **snake_case** keys. The metric-backend's
 `MarketEvent` enum models the wire format directly and rewrites to
 camelCase when forwarding to browser /ws clients (see
-`metric-backend/src/imperial/ws.rs` and `ws/relay.rs`).
+`metric-backend/src/terminal/ws.rs` and `ws/relay.rs`).
 
 ## Run book
 
@@ -181,7 +181,7 @@ npx tsc --noEmit             # type-check
 
 # Manual e2e
 open http://localhost:3000          # landing
-open http://localhost:3000/imperial # full demo: connect → JWT → live data → deposit
+open http://localhost:3000/terminal # full demo: connect → JWT → live data → deposit
 ```
 
 Environment variables:

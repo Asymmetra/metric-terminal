@@ -6,7 +6,7 @@ import { HealthPanel } from "@/components/health/HealthPanel";
 import { IMPERIAL_WS_URL } from "@/lib/imperial";
 
 /**
- * Standalone health/status view. Same HealthPanel as /imperial, scaled up,
+ * Standalone health/status view. Same HealthPanel as /terminal, scaled up,
  * with quick-jump links to the trading surfaces. Live WS-events/sec gauge
  * opens a WS directly to Imperial /ws/market — no dependency on a deployed
  * metric-backend, so the dashboard works standalone on Vercel.
@@ -57,8 +57,8 @@ export default function StatusView() {
           <Link href="/terminal" className="text-text-secondary/70 hover:text-text-primary">
             Terminal
           </Link>
-          <Link href="/imperial" className="text-text-secondary/70 hover:text-text-primary">
-            Imperial Demo
+          <Link href="/terminal" className="text-text-secondary/70 hover:text-text-primary">
+            Terminal
           </Link>
           <Link href="/stats" className="text-text-secondary/70 hover:text-text-primary">
             Observability

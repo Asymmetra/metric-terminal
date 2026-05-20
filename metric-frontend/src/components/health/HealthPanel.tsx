@@ -13,7 +13,7 @@ import { IMPERIAL_API_URL } from "@/lib/imperial/config";
  *   metric-relay   GET {API_BASE_URL}/health/relay   (per-channel last-seen)
  *   imperial-rest  GET {IMPERIAL_API_URL}/api/v1/status
  *   imperial-ws    counts live messages received by useWsHealth() — wired
- *                  separately on /imperial via the props passthrough below.
+ *                  separately on /terminal via the props passthrough below.
  */
 
 type Color = "ok" | "warn" | "down" | "idle";

@@ -251,7 +251,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. The hero CTA goes to `/imperial`, the working demo route.
+Open <http://localhost:3000>. The hero CTA goes to `/terminal`, the working trading view.
 
 ### Tests
 
@@ -318,7 +318,7 @@ The Next.js app lives at `metric-frontend/`, **not at the repo root**. Vercel mu
 
 After this:
 - `metric-terminal.vercel.app/` — landing
-- `metric-terminal.vercel.app/imperial` — connect Phantom, authenticate with Imperial, deposit, place orders
+- `metric-terminal.vercel.app/terminal` (or `metric.asymmetra.xyz/terminal`) — connect Phantom, authenticate with Imperial, deposit, place orders
 - `metric-terminal.vercel.app/status` — live health of metric-backend + Imperial + WS feed
 
 **Solana RPC URL format**:
