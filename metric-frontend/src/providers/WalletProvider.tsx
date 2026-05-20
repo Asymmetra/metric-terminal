@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ConnectionProvider,
   WalletProvider,
@@ -8,8 +8,10 @@ import {
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import "@solana/wallet-adapter-react-ui/styles.css";
-
-const SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+import {
+  SOLANA_RPC_URL,
+  selectBestRpc,
+} from "@/lib/solana-rpc";
 
 export function WalletProviderWrapper({
   children,
@@ -18,8 +20,26 @@ export function WalletProviderWrapper({
 }) {
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
+  // Start with the synchronous primary (env var if set, else first public
+  // fallback). At mount, race the candidates and swap to whichever
+  // responds first — so a stale env var or a degraded primary doesn't
+  // brick deposits.
+  const [endpoint, setEndpoint] = useState<string>(SOLANA_RPC_URL);
+  useEffect(() => {
+    let cancelled = false;
+    selectBestRpc().then((url) => {
+      if (!cancelled && url !== endpoint) {
+        setEndpoint(url);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <ConnectionProvider endpoint={SOLANA_RPC}>
+    <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>

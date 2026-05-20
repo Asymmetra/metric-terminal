@@ -311,7 +311,7 @@ The Next.js app lives at `metric-frontend/`, **not at the repo root**. Vercel mu
    | `NEXT_PUBLIC_IMPERIAL_WS_URL`  | `wss://api.imperial.space`   | Imperial WS direct from browser |
    | `NEXT_PUBLIC_API_URL`          | (your metric-backend URL, e.g. `https://metric-backend.onrender.com`) | optional — HealthPanel polls this; if absent the panel just shows it as down and the page still works |
    | `NEXT_PUBLIC_WS_URL`           | (your metric-backend WS, e.g. `wss://metric-backend.onrender.com/ws`) | optional — same |
-   | `NEXT_PUBLIC_SOLANA_RPC`       | a Helius / QuickNode / Triton URL | required for the deposit/withdraw flow to submit signed transactions; public mainnet-beta works but rate-limits |
+   | `NEXT_PUBLIC_SOLANA_RPC`       | a Helius / QuickNode / Triton URL — see note below | optional override; defaults to public RPCs (mainnet-beta → publicnode) if unset. Required if you want production-grade rate limits |
    | `NEXT_PUBLIC_SIGNER`           | `phantom` (default) or `privy-stub` | active signer impl |
 
 4. **Redeploy** the latest commit on `main`.
@@ -321,7 +321,21 @@ After this:
 - `metric-terminal.vercel.app/imperial` — connect Phantom, authenticate with Imperial, deposit, place orders
 - `metric-terminal.vercel.app/status` — live health of metric-backend + Imperial + WS feed
 
-**CSP allowlist** (`metric-frontend/vercel.json`) already lists `api.imperial.space`, `wss://api.imperial.space`, mainnet-beta, common RPC providers (Helius, QuickNode, RPCPool), and `*.onrender.com`. If you use a different RPC, add it to the `connect-src` directive.
+**Solana RPC URL format**:
+
+- **Helius**: `https://mainnet.helius-rpc.com/?api-key=<KEY>`
+- **QuickNode**: `https://your-endpoint.solana-mainnet.quiknode.pro/<TOKEN>/`
+- **Triton RPCPool**: `https://<endpoint-name>.mainnet.rpcpool.com/<TOKEN>` — the host (e.g. `asymmetr-solanam-0245.mainnet.rpcpool.com`) and the token (e.g. `asymmetr-solanam-6204`) are listed separately in the Triton dashboard; concatenate them with `/` for the URL.
+
+The frontend has a built-in fallback chain (`src/lib/solana-rpc.ts`):
+
+1. `NEXT_PUBLIC_SOLANA_RPC` (env var) — your primary endpoint.
+2. `https://api.mainnet-beta.solana.com` — Solana Labs public, rate-limited.
+3. `https://solana-rpc.publicnode.com` — publicnode community public.
+
+`selectBestRpc()` runs at WalletProvider mount, races the candidates, and picks the first to answer `getSlot`. If the env-var primary is degraded the page swaps to a public fallback automatically; if every URL fails the user still gets a Connection pointed at the primary so error messages stay diagnostic.
+
+**CSP allowlist** (`metric-frontend/vercel.json`) already lists `api.imperial.space`, `wss://api.imperial.space`, mainnet-beta, `solana-rpc.publicnode.com`, and the common RPC providers (Helius, QuickNode, RPCPool — `*.mainnet.rpcpool.com`). If you use a different RPC, add it to the `connect-src` directive.
 
 ### Backend → Render (optional)
 
