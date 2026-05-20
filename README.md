@@ -295,7 +295,67 @@ ORDER=1   SOLANA_RPC=https://… node ../tests/imperial-live.mjs   # +T3 order p
 
 ## Deployment
 
-The current production Render service (`ember-backend-q4nf`) and Vercel project (`ember-terminal-gamma`) are pending rename to `metric-backend` / `metric-terminal`. CSP allowlist in `metric-frontend/vercel.json` will need to add `api.imperial.space` and drop `perp-api.phoenix.trade` once the rename lands.
+### Frontend → Vercel
+
+The Next.js app lives at `metric-frontend/`, **not at the repo root**. Vercel must be told this or it will produce a "Ready" deployment that 404s on every path.
+
+**One-time project setup** (Vercel Dashboard → your project → Settings):
+
+1. **Build & Development Settings → Root Directory** → set to `metric-frontend`
+2. **Build & Development Settings → Framework Preset** → `Next.js` (usually auto-detected once Root Directory is right)
+3. **Environment Variables** — add all four for Production *and* Preview:
+
+   | Name | Value | Purpose |
+   |---|---|---|
+   | `NEXT_PUBLIC_IMPERIAL_API_URL` | `https://api.imperial.space` | Imperial REST direct from browser |
+   | `NEXT_PUBLIC_IMPERIAL_WS_URL`  | `wss://api.imperial.space`   | Imperial WS direct from browser |
+   | `NEXT_PUBLIC_API_URL`          | (your metric-backend URL, e.g. `https://metric-backend.onrender.com`) | optional — HealthPanel polls this; if absent the panel just shows it as down and the page still works |
+   | `NEXT_PUBLIC_WS_URL`           | (your metric-backend WS, e.g. `wss://metric-backend.onrender.com/ws`) | optional — same |
+   | `NEXT_PUBLIC_SOLANA_RPC`       | a Helius / QuickNode / Triton URL | required for the deposit/withdraw flow to submit signed transactions; public mainnet-beta works but rate-limits |
+   | `NEXT_PUBLIC_SIGNER`           | `phantom` (default) or `privy-stub` | active signer impl |
+
+4. **Redeploy** the latest commit on `main`.
+
+After this:
+- `metric-terminal.vercel.app/` — landing
+- `metric-terminal.vercel.app/imperial` — connect Phantom, authenticate with Imperial, deposit, place orders
+- `metric-terminal.vercel.app/status` — live health of metric-backend + Imperial + WS feed
+
+**CSP allowlist** (`metric-frontend/vercel.json`) already lists `api.imperial.space`, `wss://api.imperial.space`, mainnet-beta, common RPC providers (Helius, QuickNode, RPCPool), and `*.onrender.com`. If you use a different RPC, add it to the `connect-src` directive.
+
+### Backend → Render (optional)
+
+The metric-backend serves the WS fan-out, candle aggregation, and the `/deposit/build-tx` proxy. The frontend works fully without it (`/imperial` page subscribes to Imperial's WS directly, calls Imperial REST directly), but health-status displays metric-backend as down until it's deployed.
+
+To deploy:
+
+1. `render.yaml` is already wired (`metric-backend` service, Docker, port 10000).
+2. Push to GitHub triggers a Render rebuild from `Dockerfile`.
+3. Set environment variables in the Render dashboard:
+   - `IMPERIAL_API_URL=https://api.imperial.space`
+   - `IMPERIAL_WS_URL=wss://api.imperial.space`
+   - `CORS_ORIGIN=https://metric-terminal.vercel.app` (your Vercel domain — comma-separated for multiple)
+   - `RUST_LOG=metric_backend=info`
+4. Once deployed, point the Vercel project's `NEXT_PUBLIC_API_URL` + `NEXT_PUBLIC_WS_URL` at the Render URL and redeploy.
+
+### Production checklist
+
+- [ ] Vercel Root Directory = `metric-frontend`
+- [ ] `NEXT_PUBLIC_IMPERIAL_API_URL` + `NEXT_PUBLIC_IMPERIAL_WS_URL` set on Vercel
+- [ ] `NEXT_PUBLIC_SOLANA_RPC` set on Vercel (required for deposits — Helius free tier is fine for the demo)
+- [ ] Phantom installed in the browser used to test
+- [ ] Test wallet (or your own) has ≥ 0.01 SOL for gas + ≥ $10 USDC for the Imperial minimum collateral
+- [ ] Optional: metric-backend deployed to Render and pointed at via `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` so HealthPanel shows green
+
+### What the user sees on `/imperial`
+
+1. **Connect wallet** → standard Phantom prompt
+2. **Authenticate** → Phantom prompts to sign `imperial:mobile-connect:{wallet}:{unix-ms-nonce}`; the page exchanges the code for a 30-day JWT and caches it in localStorage keyed by wallet
+3. **Balances** populate with all 6 isolated-margin profiles
+4. **Positions** + **live mark prices** populate from Imperial directly
+5. **Deposit** form — enter USDC amount, click Build+Sign+Send, Phantom prompts to sign the partially-signed VersionedTransaction, the deposit lands on Solana mainnet in 5-10s
+
+If you see 404s or blank pages, 90% of the time it's #1 (Root Directory) or the CSP missing `api.imperial.space` (overridden somewhere, or Vercel project has a custom security header that takes precedence).
 
 ## License
 

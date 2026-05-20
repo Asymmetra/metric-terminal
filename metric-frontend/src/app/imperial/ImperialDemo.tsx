@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useSigner } from "@/lib/wallet";
 import { HealthPanel } from "@/components/health/HealthPanel";
-import { WS_URL } from "@/lib/constants";
 import {
   imperial,
   ImperialError,
   IMPERIAL_API_URL,
+  IMPERIAL_WS_URL,
   type BalancesResponse,
   type MarkPriceRow,
   type PositionList,
@@ -43,16 +43,17 @@ export default function ImperialDemo() {
   const [depositAmount, setDepositAmount] = useState("1.00");
   const [wsRate, setWsRate] = useState<number>(0);
 
-  // Live counter: events/sec from the metric-backend /ws fan-out.
-  // Connects to mark_prices:SOL + candles:SOL so we always have a signal
-  // when the relay is healthy.
+  // Live events/sec gauge — opens a WS directly to Imperial /ws/market.
+  // No dependency on a deployed metric-backend, so the page works
+  // standalone on Vercel. metric-backend's fan-out is a server-side
+  // optimization for multi-client deployments; not needed for the demo.
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(`${IMPERIAL_WS_URL}/ws/market`);
     let recent: number[] = [];
     let alive = true;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "subscribe", channel: "mark_prices", symbol: "SOL" }));
-      ws.send(JSON.stringify({ type: "subscribe", channel: "candles", symbol: "SOL" }));
+      ws.send(JSON.stringify({ type: "subscribe_mark_prices" }));
+      ws.send(JSON.stringify({ type: "subscribe_funding_rates" }));
     };
     ws.onmessage = () => {
       const now = Date.now();
