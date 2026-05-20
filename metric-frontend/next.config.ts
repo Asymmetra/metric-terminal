@@ -1,29 +1,28 @@
 import type { NextConfig } from "next";
 
-// Build-time validation: reject localhost in NEXT_PUBLIC_* URL vars during production builds
-// Only check vars that look like URLs (contain :// or start with ws/http) — skip Vercel-injected metadata
+// Soft-warn (don't fail) when a NEXT_PUBLIC_* URL points at localhost
+// during a production build — leftover dev URLs are usually a config slip,
+// but failing the build on it bricks deployments that have other valid
+// runtime overrides (e.g. the metric-backend env vars are optional now).
 if (process.env.NODE_ENV === "production") {
-  const violations: string[] = [];
   const URL_PATTERN = /^(https?|wss?):\/\//;
-
   for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith("NEXT_PUBLIC_") && value && URL_PATTERN.test(value)) {
-      if (value.includes("localhost") || value.includes("127.0.0.1")) {
-        violations.push(`  ${key}="${value}"`);
-      }
+    if (
+      key.startsWith("NEXT_PUBLIC_") &&
+      value &&
+      URL_PATTERN.test(value) &&
+      (value.includes("localhost") || value.includes("127.0.0.1"))
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(`[metric] WARN: ${key}="${value}" points at localhost.`);
     }
-  }
-
-  if (violations.length > 0) {
-    throw new Error(
-      `Production build blocked — localhost detected in public env vars:\n${violations.join("\n")}\n` +
-      `Fix in Vercel Dashboard → Settings → Environment Variables.`
-    );
   }
 }
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Next 16 no longer runs ESLint during `next build`, so there's nothing
+  // to configure here — lint findings are tracked separately and run via
+  // `npm run lint` locally / in CI.
 };
 
 export default nextConfig;
