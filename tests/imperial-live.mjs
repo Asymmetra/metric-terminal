@@ -139,7 +139,11 @@ function signConnectMessage(message) {
 }
 
 function makeNonce() {
-  return crypto.randomBytes(16).toString("hex");
+  // Imperial's order bot requires the nonce to parse as u64 and be within
+  // ±5 minutes of now (accepts seconds or ms). Hex/UUID nonces produce
+  // a 400 "Invalid nonce format" inside the bot, which the API surfaces
+  // as a generic 401 "Failed to generate mobile session".
+  return Date.now().toString();
 }
 
 // ─────────────────────────────────────────────────────────── T1: auth + reads
@@ -308,12 +312,13 @@ if (process.env.ORDER === "1") {
       const mark = solRow?.phoenix?.price ?? solRow?.flash?.price;
       if (!mark) throw new Error("no SOL mark price available");
 
-      // Buy 50% below market — limit will rest, not fill.
+      // Buy 50% below market — limit will rest, not fill. Imperial's
+      // order bot enforces a $10 minimum collateral; sizing at 2x leverage.
       const limitPriceUsd = mark * 0.5;
       const TRIGGER_SCALE = 1e9;
       const triggerPrice = Math.round(limitPriceUsd * TRIGGER_SCALE);
-      const sizeUsd = 5 * 1e6; // $5 notional
-      const collateral = 1 * 1e6; // 1 USDC of collateral → 5x leverage
+      const sizeUsd = 20 * 1e6;       // $20 notional
+      const collateral = 10 * 1e6;    // $10 collateral → 2x leverage
 
       const placeBody = {
         wallet: WALLET,

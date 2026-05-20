@@ -213,9 +213,11 @@ export class ImperialClient {
 export const imperial = new ImperialClient();
 
 function makeNonce(): string {
-  // 16-byte hex nonce. Crypto-strong; matches what the Imperial server
-  // likely tracks for replay protection.
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  // Imperial's order bot requires the nonce to parse as u64 and be within
+  // ±5 minutes of now (seconds or ms). Hex/UUID nonces produce a 400
+  // "Invalid nonce format" inside the bot, which the API surfaces as a
+  // generic 401 "Failed to generate mobile session" (see mobile.rs:186-190
+  // vs http.rs:564-588 in Imperial). Date.now() is unix milliseconds —
+  // canonical client uses the same.
+  return Date.now().toString();
 }
