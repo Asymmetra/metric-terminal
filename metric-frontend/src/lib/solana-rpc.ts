@@ -17,8 +17,30 @@ const PUBLIC_FALLBACKS = [
   "https://solana-rpc.publicnode.com",
 ] as const;
 
-const envUrl =
-  typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SOLANA_RPC : undefined;
+/**
+ * Normalize a Solana RPC URL — accept bare hosts (Triton's dashboard
+ * shows them as `asymmetr-solanam-0245.mainnet.rpcpool.com`) and auto-
+ * prefix `https://`. Reject empty / non-string. @solana/web3.js's
+ * Connection constructor throws TypeError on anything without
+ * `http:` or `https:`; we'd rather fail-soft to a public fallback than
+ * crash prerendering.
+ */
+function normalize(url: string | undefined | null): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (/^(https?|wss?):\/\//.test(trimmed)) return trimmed;
+  // Bare host (Triton/QuickNode often show this in their UI). Wallet
+  // adapter wants HTTPS; HTTP downgrade only for explicit local dev.
+  if (trimmed.startsWith("localhost") || trimmed.startsWith("127.0.0.1")) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
+
+const envUrl = normalize(
+  typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SOLANA_RPC : undefined
+);
 
 /** Ordered candidate list; first one is the synchronous default. */
 export const SOLANA_RPC_CANDIDATES: readonly string[] = envUrl
