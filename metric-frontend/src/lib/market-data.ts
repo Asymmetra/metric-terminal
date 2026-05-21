@@ -110,10 +110,12 @@ class MarketDataController {
         .sort((a, b) => a.symbol.localeCompare(b.symbol));
       useMarketStore.getState().setMarkets(markets);
 
-      const setMark = useStatsStore.getState().setMark;
+      const setVenueMark = useStatsStore.getState().setVenueMark;
       for (const r of rows) {
-        const px = r.phoenix?.price ?? r.jupiter?.price ?? r.flash?.price ?? r.gmtrade?.price;
-        if (typeof px === "number") setMark(r.symbol, px);
+        if (r.phoenix) setVenueMark(r.symbol, "phoenix", r.phoenix.price);
+        if (r.jupiter) setVenueMark(r.symbol, "jupiter", r.jupiter.price);
+        if (r.flash) setVenueMark(r.symbol, "flash", r.flash.price);
+        if (r.gmtrade) setVenueMark(r.symbol, "gmtrade", r.gmtrade.price);
       }
     } catch {
       // WS will populate marks shortly; symbol list stays empty until then.
@@ -127,7 +129,7 @@ class MarketDataController {
 
     if (msg.type === "mark_price_update") {
       const m = msg as MarkPriceMsg;
-      if (typeof m.price === "number") useStatsStore.getState().setMark(m.symbol, m.price);
+      if (typeof m.price === "number") useStatsStore.getState().setVenueMark(m.symbol, m.venue, m.price);
       return;
     }
     if (msg.type === "funding_rate_update") {

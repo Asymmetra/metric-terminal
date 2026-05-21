@@ -108,8 +108,9 @@ export function Chart() {
           });
       priceSeriesRef.current = priceSeries;
 
-      // Shape a candle for whichever series is active.
-      const toPricePoint = (c: Candle) => (isLine ? { time: c.time, value: c.close } : c);
+      // Shape a candle for whichever series is active. The line is mark-based
+      // (markClose) so its history matches the live mark that drives the tip.
+      const toPricePoint = (c: Candle) => (isLine ? { time: c.time, value: c.markClose } : c);
 
       const volumeSeries = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
       volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
@@ -219,7 +220,7 @@ export function Chart() {
       const isLine = chartTypeRef.current === "line";
 
       if (!cur || cur.time !== bucket) {
-        const next: Candle = { time: bucket, open: mark, high: mark, low: mark, close: mark, volume: 0 };
+        const next: Candle = { time: bucket, open: mark, high: mark, low: mark, close: mark, markClose: mark, volume: 0 };
         currentCandleRef.current = next;
         priceSeriesRef.current.update(isLine ? { time: bucket, value: mark } : next);
         volumeSeriesRef.current?.update({ time: bucket, value: 0, color: VOL_UP });

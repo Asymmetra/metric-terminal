@@ -34,6 +34,9 @@ export interface Candle {
   high: number;
   low: number;
   close: number;
+  /** Mark-price close for this bucket (Phoenix `markClose`). Falls back to
+   *  the trade close when the feed omits it. Used for the mark-based line. */
+  markClose: number;
   volume: number;
 }
 
@@ -43,6 +46,7 @@ interface PhoenixCandleRaw {
   high: number;
   low: number;
   close: number;
+  markClose?: number;
   volume?: number;
   volumeQuote?: number;
   tradeCount?: number;
@@ -57,8 +61,14 @@ export function normalizeCandle(c: PhoenixCandleRaw): Candle {
     high: c.high,
     low: c.low,
     close: c.close,
+    markClose: c.markClose ?? c.close,
     volume: c.volume ?? 0,
   };
+}
+
+/** Map candles to mark-based line points ({time, value: markClose}). */
+export function toMarkLine(candles: Candle[]): { time: number; value: number }[] {
+  return candles.map((c) => ({ time: c.time, value: c.markClose }));
 }
 
 /**
