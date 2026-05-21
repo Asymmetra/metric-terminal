@@ -57,11 +57,8 @@ export default function StatusView() {
           <Link href="/terminal" className="text-text-secondary/70 hover:text-text-primary">
             Terminal
           </Link>
-          <Link href="/terminal" className="text-text-secondary/70 hover:text-text-primary">
-            Terminal
-          </Link>
-          <Link href="/stats" className="text-text-secondary/70 hover:text-text-primary">
-            Observability
+          <Link href="/debug" className="text-text-secondary/70 hover:text-text-primary">
+            Debug
           </Link>
         </nav>
       </header>
@@ -95,14 +92,6 @@ export default function StatusView() {
           What a green stack looks like
         </h2>
         <ul className="space-y-1 font-mono text-[11px] text-text-secondary">
-          <li>
-            <span className="text-metric-buy">●</span> metric-rest — backend
-            replies <code>ok</code> on /health
-          </li>
-          <li>
-            <span className="text-metric-buy">●</span> metric-relay — 100+
-            channels, 0 stale, youngest tick &lt; 5s old
-          </li>
           <li>
             <span className="text-metric-buy">●</span> imperial-rest — db ok,
             indexer ok, orderBot ok
