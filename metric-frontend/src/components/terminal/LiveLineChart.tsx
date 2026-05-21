@@ -65,8 +65,12 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
 
   const value = liveMark ?? points[points.length - 1]?.value ?? 0;
 
+  // Absolutely fill the (relative) parent panel. liveline sizes its canvas
+  // from this box via ResizeObserver; a flow-sized wrapper feeds the canvas
+  // height back into layout and the canvas grows unbounded (past the browser's
+  // max canvas dimension → invalid canvas / blank chart).
   return (
-    <div className="h-full w-full">
+    <div className="absolute inset-0">
       <Liveline
         data={points}
         value={value}
