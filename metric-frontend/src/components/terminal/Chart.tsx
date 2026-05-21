@@ -17,12 +17,15 @@ type Series = any;
 
 const UP = COLORS.emberGreen; // metric-buy (cyan)
 const DOWN = COLORS.emberRed; // metric-sell (orange)
+const LINE = COLORS.emberOrange; // metric-primary (sky)
 const VOL_UP = "rgba(34,211,238,0.15)";
 const VOL_DOWN = "rgba(249,115,22,0.15)";
 
+type ChartType = "candles" | "line";
+
 export function Chart() {
   const chartAreaRef = useRef<HTMLDivElement>(null);
-  const candleSeriesRef = useRef<Series>(null);
+  const priceSeriesRef = useRef<Series>(null);
   const volumeSeriesRef = useRef<Series>(null);
   const currentCandleRef = useRef<Candle | null>(null);
   const allCandlesRef = useRef<Candle[]>([]);
@@ -33,9 +36,12 @@ export function Chart() {
   const [activeTimeframe, setActiveTimeframe] = useState<Timeframe>("1m");
   const activeTfRef = useRef<Timeframe>(activeTimeframe);
   activeTfRef.current = activeTimeframe;
+  const [chartType, setChartType] = useState<ChartType>("candles");
+  const chartTypeRef = useRef<ChartType>(chartType);
+  chartTypeRef.current = chartType;
   const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">("loading");
 
-  // ── chart lifecycle: rebuild on symbol/timeframe change ──
+  // ── chart lifecycle: rebuild on symbol/timeframe/type change ──
   useEffect(() => {
     if (!chartAreaRef.current) return;
     setStatus("loading");
@@ -88,15 +94,22 @@ export function Chart() {
         height: chartAreaRef.current.clientHeight,
       });
 
-      const candleSeries = chart.addCandlestickSeries({
-        upColor: UP,
-        downColor: DOWN,
-        borderUpColor: UP,
-        borderDownColor: DOWN,
-        wickUpColor: UP,
-        wickDownColor: DOWN,
-      });
-      candleSeriesRef.current = candleSeries;
+      // Price series: candlesticks or a line of closes — same source data.
+      const isLine = chartTypeRef.current === "line";
+      const priceSeries = isLine
+        ? chart.addLineSeries({ color: LINE, lineWidth: 2, priceLineVisible: true, lastValueVisible: true })
+        : chart.addCandlestickSeries({
+            upColor: UP,
+            downColor: DOWN,
+            borderUpColor: UP,
+            borderDownColor: DOWN,
+            wickUpColor: UP,
+            wickDownColor: DOWN,
+          });
+      priceSeriesRef.current = priceSeries;
+
+      // Shape a candle for whichever series is active.
+      const toPricePoint = (c: Candle) => (isLine ? { time: c.time, value: c.close } : c);
 
       const volumeSeries = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
       volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
@@ -112,7 +125,7 @@ export function Chart() {
           setStatus("empty");
           return;
         }
-        candleSeries.setData(candles);
+        priceSeries.setData(candles.map(toPricePoint));
         volumeSeries.setData(
           candles.map((c) => ({
             time: c.time,
@@ -148,7 +161,7 @@ export function Chart() {
           }
           const merged = [...filtered, ...allCandlesRef.current];
           allCandlesRef.current = merged;
-          candleSeries.setData(merged);
+          priceSeries.setData(merged.map(toPricePoint));
           volumeSeries.setData(
             merged.map((c) => ({ time: c.time, value: c.volume, color: c.close >= c.open ? VOL_UP : VOL_DOWN }))
           );
@@ -162,7 +175,7 @@ export function Chart() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       chart.timeScale().subscribeVisibleLogicalRangeChange((range: any) => {
         if (!range) return;
-        const info = candleSeries.barsInLogicalRange(range);
+        const info = priceSeries.barsInLogicalRange(range);
         if (info && info.barsBefore < 15) void loadOlder();
       });
 
@@ -183,11 +196,11 @@ export function Chart() {
       abort.abort();
       observer?.disconnect();
       chart?.remove();
-      candleSeriesRef.current = null;
+      priceSeriesRef.current = null;
       volumeSeriesRef.current = null;
       currentCandleRef.current = null;
     };
-  }, [selectedSymbol, activeTimeframe]);
+  }, [selectedSymbol, activeTimeframe, chartType]);
 
   // ── live bar: drive the in-progress candle from the mark-price stream ──
   useEffect(() => {
@@ -197,24 +210,25 @@ export function Chart() {
     let lastPrice = 0;
     const unsub = useStatsStore.subscribe((state) => {
       const mark = state.marks[selectedSymbol];
-      if (!mark || mark === lastPrice || !candleSeriesRef.current) return;
+      if (!mark || mark === lastPrice || !priceSeriesRef.current) return;
       lastPrice = mark;
 
       const interval = tfSeconds[activeTfRef.current] ?? 60;
       const bucket = Math.floor(Date.now() / 1000 / interval) * interval;
       const cur = currentCandleRef.current;
+      const isLine = chartTypeRef.current === "line";
 
       if (!cur || cur.time !== bucket) {
         const next: Candle = { time: bucket, open: mark, high: mark, low: mark, close: mark, volume: 0 };
         currentCandleRef.current = next;
-        candleSeriesRef.current.update(next);
+        priceSeriesRef.current.update(isLine ? { time: bucket, value: mark } : next);
         volumeSeriesRef.current?.update({ time: bucket, value: 0, color: VOL_UP });
         return;
       }
       cur.close = mark;
       if (mark > cur.high) cur.high = mark;
       if (mark < cur.low) cur.low = mark;
-      candleSeriesRef.current.update({ ...cur });
+      priceSeriesRef.current.update(isLine ? { time: cur.time, value: mark } : { ...cur });
     });
     return unsub;
   }, [selectedSymbol]);
@@ -236,9 +250,28 @@ export function Chart() {
             {tf.label}
           </button>
         ))}
-        <span className="ml-auto font-mono text-[10px] text-text-secondary/60">
-          {selectedSymbol}/USD · Phoenix
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            {(["candles", "line"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setChartType(t)}
+                title={t === "candles" ? "Candlestick chart" : "Line chart"}
+                className={clsx(
+                  "px-2 py-0.5 font-mono text-[10px] capitalize transition-colors",
+                  chartType === t
+                    ? "bg-surface-2 text-metric-primary"
+                    : "text-text-secondary/60 hover:text-text-secondary"
+                )}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <span className="font-mono text-[10px] text-text-secondary/60">
+            {selectedSymbol}/USD · Phoenix
+          </span>
+        </div>
       </div>
 
       <div ref={chartAreaRef} className="relative flex-1">
