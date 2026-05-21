@@ -21,6 +21,7 @@
     "framer-motion": "^11.18.2",
     "jsdom": "^25.0.1",
     "lightweight-charts": "^4.2.3",
+    "liveline": "^0.0.7",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
