@@ -4,18 +4,20 @@
  * Order of preference:
  *   1. NEXT_PUBLIC_SOLANA_RPC (env var) — typically Triton/Helius/QuickNode
  *      with a per-customer URL. Set in Vercel for production.
- *   2. https://api.mainnet-beta.solana.com — Solana Labs public RPC.
- *      Rate-limited; fine for the demo's deposit-once-an-hour use.
- *   3. https://solana-rpc.publicnode.com — publicnode.com fallback.
+ *   2. https://solana-rpc.publicnode.com — publicnode.com fallback (returns
+ *      200 to browser-origin requests).
  *
- * Private endpoints stay in env vars (never in source). The public
- * fallbacks are safe to commit — they're shared community infra.
+ * NOTE: the official public endpoint per solana.com/docs/references/clusters
+ * is https://api.mainnet-beta.solana.com, but it returns HTTP 403 to
+ * browser-origin POSTs (Solana Labs blocks anonymous web traffic), so it is
+ * intentionally NOT raced here — including it just spams the console with 403s
+ * while the env primary wins anyway. rpc.ankr.com/solana likewise 403s now.
+ *
+ * Private endpoints stay in env vars (never in source). The public fallback is
+ * safe to commit — shared community infra.
  */
 
-const PUBLIC_FALLBACKS = [
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-] as const;
+const PUBLIC_FALLBACKS = ["https://solana-rpc.publicnode.com"] as const;
 
 /**
  * Normalize a Solana RPC URL — accept bare hosts (Triton's dashboard
