@@ -263,6 +263,31 @@ export async function solMark() {
   return px;
 }
 
+export async function getRoute({ asset, side = "long", notional, desiredLeverage = 2 }) {
+  const qs = new URLSearchParams({ asset, side, notional: String(notional), desiredLeverage: String(desiredLeverage) });
+  const r = await http("GET", `/route?${qs}`);
+  if (r.status !== 200) throw new Error(`route ${r.status}: ${JSON.stringify(r.body)}`);
+  return r.body;
+}
+
+/**
+ * MIRROR of src/lib/trade-flow.ts `marketVenueCandidates` (market case). Kept in
+ * sync intentionally so the live suite exercises the same routing rule the UI
+ * uses — the divergence between this harness and the frontend is exactly what
+ * let the Phoenix-market bug slip through before.
+ */
+export function marketVenues(route, selectedVenue = "auto") {
+  const cands = route?.candidates ?? [];
+  if (cands.length === 0) return [selectedVenue !== "auto" && selectedVenue !== "phoenix" ? selectedVenue : "gmtrade"];
+  const viable = cands.filter((c) => !c.filteredReason && c.venue !== "phoenix").map((c) => c.venue);
+  if (viable.length === 0) return [];
+  let ordered = viable;
+  if (selectedVenue !== "auto" && selectedVenue !== "phoenix" && viable.includes(selectedVenue)) {
+    ordered = [selectedVenue, ...viable.filter((v) => v !== selectedVenue)];
+  }
+  return [...new Set(ordered)];
+}
+
 // ───────────────────────────── request builders (mirror order-builder.ts)
 
 /**
@@ -380,6 +405,8 @@ export function makeCtx(reporter, options = {}) {
     getPositions,
     findOpenPosition,
     solMark,
+    getRoute,
+    marketVenues,
     // composite actions
     buildSignSubmit,
     ensureFunded,

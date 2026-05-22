@@ -17,7 +17,7 @@ import {
   MIN_COLLATERAL_USD,
   type OrderFormInput,
 } from "@/lib/order-builder";
-import { openWithDeposit, feeBufferUsd, TradeFlowError } from "@/lib/trade-flow";
+import { openWithDeposit, marketVenueCandidates, TradeFlowError } from "@/lib/trade-flow";
 import { formatPriceAuto } from "@/lib/format";
 
 // "auto" lets Imperial's /route pick the cheapest venue that supports the order
@@ -84,13 +84,12 @@ export function OrderEntry() {
   const sizeNum = Number(size) || 0;
   const lev = impliedLeverage(sizeNum, collateralNum);
 
-  // How much (if any) we'd auto-deposit to fund this order's collateral. The
-  // order debits collateral from the profile, so we top up to collateral + a
-  // small fee buffer when the profile can't already cover it.
+  // How much (if any) we'd auto-deposit to fund this order's collateral —
+  // exactly the shortfall to the entered collateral (no buffer; venue fees are
+  // netted into the position, not taken from the profile's free balance).
   const depositNeeded = useMemo(() => {
     if (!(collateralNum > 0)) return 0;
-    const target = collateralNum + feeBufferUsd(collateralNum, null);
-    return Math.max(0, +(target - profileBalance).toFixed(2));
+    return Math.max(0, +(collateralNum - profileBalance).toFixed(2));
   }, [collateralNum, profileBalance]);
 
   const refreshBalances = useCallback(
@@ -192,31 +191,39 @@ export function OrderEntry() {
   const submit = useCallback(
     async (side: "long" | "short") => {
       if (!wallet || busy) return;
-      // Resolve the venue. "auto" asks Imperial's router for the cheapest venue
-      // that supports this order — important because Phoenix is CLOB/limit-only
-      // via this path, so a Phoenix market order is rejected. Fall back to
-      // GMTrade (the reliable market venue) if /route is unavailable.
-      let resolvedVenue: VenueTag = venue === "auto" ? "gmtrade" : venue;
-      if (venue === "auto") {
-        try {
-          const route = await imperial.getRoute({
-            asset: symbol,
-            side,
-            notional: sizeNum,
-            desiredLeverage: Math.max(1, lev),
-            wallet,
-            profileIndex,
-          });
-          if (route?.venue) resolvedVenue = route.venue;
-        } catch {
-          /* keep the gmtrade fallback */
-        }
+      // Resolve which venue(s) to attempt. Imperial /route ranks purely by cost
+      // and is order-type-blind, so for a MARKET order it can return Phoenix —
+      // which is a CLOB and rejects market orders. marketVenueCandidates drops
+      // Phoenix for market and yields a cost-ordered fall-through list that
+      // openWithDeposit tries in turn; limit orders keep the selected/routed
+      // venue (Phoenix limits rest fine).
+      let route: Awaited<ReturnType<typeof imperial.getRoute>> | null = null;
+      try {
+        route = await imperial.getRoute({
+          asset: symbol,
+          side,
+          notional: sizeNum,
+          desiredLeverage: Math.max(1, lev),
+          wallet,
+          profileIndex,
+        });
+      } catch {
+        /* route unavailable — marketVenueCandidates falls back */
+      }
+      const venues = marketVenueCandidates({ type, selectedVenue: venue, route });
+      if (type === "market" && venues.length === 0) {
+        addToast(
+          "error",
+          "Market order unavailable",
+          `${symbol} only trades on Phoenix, which doesn't support market orders here — place a Limit order instead.`
+        );
+        return;
       }
       const input: OrderFormInput = {
         wallet,
         profileIndex,
         symbol,
-        venue: resolvedVenue,
+        venue: venues[0] ?? "gmtrade",
         side,
         type,
         sizeUsd: sizeNum,
@@ -232,20 +239,20 @@ export function OrderEntry() {
       }
       setBusy(true);
       const verb = type === "limit" ? "Limit" : "Market";
-      const via = venue === "auto" ? ` via ${resolvedVenue}` : "";
-      const tid = addToast("loading", `${verb} ${side} ${symbol}${via}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
+      const tid = addToast("loading", `${verb} ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
       try {
         const token = await ensureJwt();
-        const { depositedNative, order } = await openWithDeposit(input, {
+        const { depositedNative, order, venue: filledVenue } = await openWithDeposit(input, {
           signer,
           jwt: token,
+          venues,
           confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
           assertDepositReady,
           onStep: (p) => updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}`, detail: p.message }),
         });
         updateToast(tid, {
           type: "success",
-          title: `${verb} ${side} ${symbol} opened`,
+          title: `${verb} ${side} ${symbol} opened on ${filledVenue}`,
           detail:
             (depositedNative > 0 ? `Deposited $${(depositedNative / 1e6).toFixed(2)} · ` : "") +
             (order.orderPda ? `orderPda ${order.orderPda.slice(0, 8)}…` : "filled"),

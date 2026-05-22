@@ -45,13 +45,19 @@ light use). Required for any `onchain` scenario.
 
 ## Findings from live runs (mainnet, validated)
 
-- **Market opens route to GMTrade.** Imperial `/route` ranks GMTrade cheapest for
-  SOL (round-trip ~$0.011 vs Phoenix ~$0.016), and GMTrade reliably accepts
-  market open + close. **Phoenix is CLOB / limit-only via this path** — a Phoenix
-  *market* order returns a generic "Failed to place order — please try again".
-  Flash rejected $20 as "route too large"; Jupiter reported a collateral-unit
-  mismatch. The terminal UI defaults the venue to **Auto**, which calls `/route`
-  and uses its recommendation (so market orders just work).
+- **Phoenix is CLOB / limit-only via this path** — a Phoenix *market* order
+  returns a generic "Failed to place order — please try again". But `/route` ranks
+  purely by **cost** and is order-type-blind, so it *can and does* return Phoenix
+  for SOL — which is what stranded a user's deposit. **Fix:** for market orders the
+  UI (and `roundtrip-auto`) drop Phoenix from the candidates and **fall through**
+  the remaining cost-ordered venues until one fills (`marketVenueCandidates` in
+  `src/lib/trade-flow.ts`, mirrored by `marketVenues` here). GMTrade reliably
+  accepts SOL market open+close; Flash sometimes rejects "route too large"
+  (handled by fall-through); Jupiter had a collateral-unit mismatch. Phoenix-only
+  synthetics (CHIP, LIT, MET, MON, SKR, VVV, WTIOIL) have no market-capable venue,
+  so the UI blocks market orders there pre-deposit and suggests a limit order.
+- **Deposits are exactly the entered collateral** (no fee buffer) — venue open fees
+  are netted into the position, not taken from the profile's free balance.
 - **Limit orders work on Phoenix** (they rest on the book), which is why
   `limit-cancel` / `limit-update-cancel` use Phoenix.
 - **Account + ATA creation is folded into the first deposit** (operator-sponsored

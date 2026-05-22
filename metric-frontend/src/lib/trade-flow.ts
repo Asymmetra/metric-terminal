@@ -25,6 +25,7 @@ import type {
   OrderResponse,
   RouteResponse,
   SyncSweepResponse,
+  VenueTag,
 } from "@/lib/imperial/types";
 import type { SignerProvider } from "@/lib/wallet/types";
 import {
@@ -37,31 +38,51 @@ import {
 // ───────────────────────────────────────────────────────────── pure math
 
 /**
- * USDC (native, 6-dec) to deposit so the profile can fund `collateralUsd`,
- * given its current free balance. Tops up to `collateral + feeBuffer`; returns
- * 0 when already covered.
+ * USDC (native, 6-dec) to deposit so the profile can fund exactly `collateralUsd`,
+ * given its current free balance. Returns 0 when already covered. No buffer —
+ * the order debits exactly `collateralAmount` and venue fees are netted into the
+ * position, not taken from the profile's free balance (verified live), so the
+ * deposit equals the collateral the user entered.
  */
-export function depositShortfallNative(
-  collateralUsd: number,
-  feeBufferUsd: number,
-  profileFreeNative: number
-): number {
-  const targetNative = toUsdFixed(collateralUsd) + toUsdFixed(feeBufferUsd);
-  return Math.max(0, targetNative - profileFreeNative);
+export function depositShortfallNative(collateralUsd: number, profileFreeNative: number): number {
+  return Math.max(0, toUsdFixed(collateralUsd) - profileFreeNative);
 }
 
 /**
- * Small USD cushion added to the deposit (not to collateral) so an open fee
- * debited at open can't underfund the profile. Uses the route's open
- * fee+slippage estimate when available; otherwise a flat 1% of collateral.
+ * Ordered venues to attempt a market order on. Imperial's /route ranks by COST
+ * and is order-type-blind — it can return Phoenix, which is a CLOB and rejects
+ * market orders. So for market orders we drop Phoenix and keep the remaining
+ * route candidates in cost order; the caller tries them in turn until one fills.
+ *
+ *  - market: route candidates with `!filteredReason && venue !== "phoenix"`, in
+ *    order; if the user explicitly picked a viable non-Phoenix venue, it goes
+ *    first. Empty array ⇒ no market-capable venue (e.g. a Phoenix-only synthetic)
+ *    so the caller should not deposit and should suggest a limit order. If /route
+ *    is unavailable, falls back to the selected non-Phoenix venue or GMTrade.
+ *  - limit: just the selected venue (or route's pick) — Phoenix limits rest fine.
  */
-export function feeBufferUsd(collateralUsd: number, route?: RouteResponse | null): number {
-  if (route?.costBreakdown) {
-    const { openFee, openSlip } = route.costBreakdown;
-    const buf = (Number(openFee) || 0) + (Number(openSlip) || 0);
-    if (buf > 0) return buf;
+export function marketVenueCandidates(args: {
+  type: "market" | "limit";
+  selectedVenue: VenueTag | "auto";
+  route?: RouteResponse | null;
+}): VenueTag[] {
+  const { type, selectedVenue, route } = args;
+  if (type === "limit") {
+    const v = selectedVenue !== "auto" ? selectedVenue : route?.venue ?? "phoenix";
+    return [v];
   }
-  return collateralUsd * 0.01;
+  const cands = route?.candidates ?? [];
+  if (cands.length === 0) {
+    // Route unavailable — best effort. Honor an explicit non-Phoenix pick, else GMTrade.
+    return [selectedVenue !== "auto" && selectedVenue !== "phoenix" ? selectedVenue : "gmtrade"];
+  }
+  const viable = cands.filter((c) => !c.filteredReason && c.venue !== "phoenix").map((c) => c.venue);
+  if (viable.length === 0) return []; // Phoenix-only asset → market unsupported here
+  let ordered = viable;
+  if (selectedVenue !== "auto" && selectedVenue !== "phoenix" && viable.includes(selectedVenue)) {
+    ordered = [selectedVenue, ...viable.filter((v) => v !== selectedVenue)];
+  }
+  return [...new Set(ordered)];
 }
 
 function profileFree(balances: BalancesResponse, profileIndex: number): number {
@@ -106,8 +127,12 @@ export type ConfirmFn = (signature: string) => Promise<void>;
 export interface FlowDeps {
   signer: SignerProvider;
   jwt: string;
-  /** Pre-fetched route for the order, used only to size the deposit fee buffer. */
-  route?: RouteResponse | null;
+  /**
+   * Ordered venues to attempt the open on (from `marketVenueCandidates`). The
+   * deposit happens once; the order is tried on each venue until one fills.
+   * Defaults to `[input.venue]` when omitted.
+   */
+  venues?: VenueTag[];
   confirm?: ConfirmFn;
   onStep?: (p: FlowProgress) => void;
   /** Throws a human error if the wallet can't cover the deposit (gas / USDC). */
@@ -148,11 +173,15 @@ async function pollUntil(
 export interface OpenResult {
   depositedNative: number;
   order: OrderResponse;
+  /** The venue the order actually filled on. */
+  venue: VenueTag;
 }
 
 /**
  * Fund the profile (if needed) then open the position — one wallet signature.
- * Throws TradeFlowError (carrying any deposited amount) on order rejection.
+ * The order is attempted across `deps.venues` (cost-ordered, Phoenix excluded for
+ * market) until one fills; only if all reject does it throw TradeFlowError
+ * (carrying any deposited amount — funds remain safe in the profile).
  */
 export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Promise<OpenResult> {
   const api = deps.api ?? defaultImperial;
@@ -161,12 +190,13 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
   const settleTimeout = deps.settleTimeoutMs ?? 45_000;
   const step = deps.onStep ?? (() => {});
 
+  const venues = deps.venues && deps.venues.length ? deps.venues : [input.venue];
+
   const requiredNative = toUsdFixed(input.collateralUsd);
-  const buffer = feeBufferUsd(input.collateralUsd, deps.route);
 
   const balances = await api.getBalances(deps.jwt);
   const free = profileFree(balances, input.profileIndex);
-  const depositNative = depositShortfallNative(input.collateralUsd, buffer, free);
+  const depositNative = depositShortfallNative(input.collateralUsd, free);
 
   let depositedNative = 0;
   if (depositNative > 0) {
@@ -201,18 +231,33 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
     }
   }
 
-  step({ step: "order", message: `Opening ${input.side} ${input.symbol}…` });
-  const order = await api.placeOrder(buildOrderRequest(input), deps.jwt);
-  if (!order.success) {
-    throw new TradeFlowError(
-      depositedNative > 0
-        ? `Deposited $${(depositedNative / 1e6).toFixed(2)} to profile ${input.profileIndex}, but the order was rejected: ${order.error ?? "unknown"}. Funds are safe — retry or withdraw.`
-        : `Order rejected: ${order.error ?? "unknown"}.`,
-      depositedNative
-    );
+  // Attempt the order across the candidate venues until one fills. A rejected
+  // order opens no position (no charge), so falling through is cheap; the
+  // deposit already landed and is venue-agnostic, so we never re-deposit.
+  let lastError = "unknown";
+  for (let i = 0; i < venues.length; i += 1) {
+    const v = venues[i];
+    step({
+      step: "order",
+      message:
+        venues.length > 1
+          ? `Opening ${input.side} ${input.symbol} on ${v} (${i + 1}/${venues.length})…`
+          : `Opening ${input.side} ${input.symbol} on ${v}…`,
+    });
+    const order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
+    if (order.success) {
+      step({ step: "done", message: `Position opened on ${v}.`, signature: order.signature ?? undefined });
+      return { depositedNative, order, venue: v };
+    }
+    lastError = order.error ?? "unknown";
   }
-  step({ step: "done", message: "Position opened.", signature: order.signature ?? undefined });
-  return { depositedNative, order };
+
+  throw new TradeFlowError(
+    depositedNative > 0
+      ? `Deposited $${(depositedNative / 1e6).toFixed(2)} to profile ${input.profileIndex}, but the order was rejected on ${venues.join(", ")}: ${lastError}. Funds are safe — retry or withdraw.`
+      : `Order rejected on ${venues.join(", ")}: ${lastError}.`,
+    depositedNative
+  );
 }
 
 // ───────────────────────────────────────────────────────────── close

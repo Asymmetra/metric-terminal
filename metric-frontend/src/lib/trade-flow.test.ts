@@ -1,31 +1,63 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   depositShortfallNative,
-  feeBufferUsd,
+  marketVenueCandidates,
   openWithDeposit,
   closeAndWithdraw,
   TradeFlowError,
   type FlowApi,
   type FlowDeps,
 } from "./trade-flow";
-import type { BalancesResponse, OrderResponse, SyncSweepResponse } from "./imperial/types";
+import type { BalancesResponse, OrderResponse, RouteResponse, SyncSweepResponse } from "./imperial/types";
 import type { OrderFormInput } from "./order-builder";
 
 // ───────────────────────────── pure math
 
 describe("trade-flow math", () => {
-  it("depositShortfallNative tops up to collateral + buffer", () => {
-    expect(depositShortfallNative(10, 0.1, 0)).toBe(10_100_000);
-    expect(depositShortfallNative(10, 0.1, 5_000_000)).toBe(5_100_000);
+  it("depositShortfallNative deposits exactly the collateral shortfall (no buffer)", () => {
+    expect(depositShortfallNative(10, 0)).toBe(10_000_000);
+    expect(depositShortfallNative(10, 5_000_000)).toBe(5_000_000);
   });
   it("depositShortfallNative is 0 when already funded", () => {
-    expect(depositShortfallNative(10, 0.1, 10_100_000)).toBe(0);
-    expect(depositShortfallNative(10, 0.1, 50_000_000)).toBe(0);
+    expect(depositShortfallNative(10, 10_000_000)).toBe(0);
+    expect(depositShortfallNative(10, 50_000_000)).toBe(0);
   });
-  it("feeBufferUsd prefers route open fee+slip, else 1%", () => {
-    expect(feeBufferUsd(100, null)).toBeCloseTo(1, 6);
-    const route = { costBreakdown: { openFee: 0.3, openSlip: 0.2 } } as never;
-    expect(feeBufferUsd(100, route)).toBeCloseTo(0.5, 6);
+});
+
+// ───────────────────────────── venue routing
+
+const route = (candidates: { venue: string; filteredReason?: string | null }[], venue = candidates[0]?.venue): RouteResponse =>
+  ({ venue, candidates: candidates.map((c) => ({ ...c, filteredReason: c.filteredReason ?? null })) } as never);
+
+describe("marketVenueCandidates", () => {
+  it("drops Phoenix for market orders, keeps cost order", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "flash_trade" }, { venue: "gmtrade" }, { venue: "jupiter" }]);
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual([
+      "flash_trade",
+      "gmtrade",
+      "jupiter",
+    ]);
+  });
+  it("returns [] for a Phoenix-only asset on a market order", () => {
+    const r = route([{ venue: "phoenix" }]);
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual([]);
+  });
+  it("drops candidates with a filteredReason", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "flash_trade", filteredReason: "too large" }, { venue: "gmtrade" }]);
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual(["gmtrade"]);
+  });
+  it("puts an explicitly-selected non-Phoenix venue first", () => {
+    const r = route([{ venue: "flash_trade" }, { venue: "gmtrade" }]);
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "gmtrade", route: r })).toEqual([
+      "gmtrade",
+      "flash_trade",
+    ]);
+  });
+  it("falls back to GMTrade when route is unavailable (market)", () => {
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: null })).toEqual(["gmtrade"]);
+  });
+  it("keeps the selected venue for limit orders (Phoenix is fine)", () => {
+    expect(marketVenueCandidates({ type: "limit", selectedVenue: "phoenix", route: null })).toEqual(["phoenix"]);
   });
 });
 
@@ -48,7 +80,7 @@ function balances(free: number): BalancesResponse {
 function makeApi(opts: {
   startFree: number;
   onDeposit?: (amount: number) => void; // mutate free to simulate landing
-  onOrder?: () => OrderResponse; // override order outcome
+  onOrder?: (req: { underwriter: number; action: number }) => OrderResponse; // override order outcome
   onClose?: () => void; // mutate free to simulate proceeds
   sweepStatus?: SyncSweepResponse["status"];
 }) {
@@ -65,7 +97,7 @@ function makeApi(opts: {
         opts.onClose?.();
         return ORDER_OK;
       }
-      return opts.onOrder ? opts.onOrder() : ORDER_OK;
+      return opts.onOrder ? opts.onOrder(req) : ORDER_OK;
     },
     async buildDepositTx(req) {
       calls.buildDeposit.push({ amount: req.amount, mode: req.mode });
@@ -126,13 +158,14 @@ const fastDeps = (extra: Partial<FlowDeps>): FlowDeps => ({
 // ───────────────────────────── open
 
 describe("openWithDeposit", () => {
-  it("deposits the shortfall, waits for funds, then opens", async () => {
+  it("deposits exactly the collateral shortfall, waits for funds, then opens", async () => {
     const f = makeApi({ startFree: 0, onDeposit: (amt) => f.setFree(amt) });
     const onStep = vi.fn();
-    const res = await openWithDeposit(baseInput, fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_100_000)), onStep }));
-    expect(f.calls.buildDeposit).toEqual([{ amount: 10_100_000, mode: "deposit" }]);
-    expect(res.depositedNative).toBe(10_100_000);
+    const res = await openWithDeposit(baseInput, fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), onStep }));
+    expect(f.calls.buildDeposit).toEqual([{ amount: 10_000_000, mode: "deposit" }]);
+    expect(res.depositedNative).toBe(10_000_000);
     expect(res.order.success).toBe(true);
+    expect(res.venue).toBe("phoenix"); // baseInput.venue, no candidates passed
     expect(onStep.mock.calls.map((c) => c[0].step)).toContain("done");
   });
 
@@ -145,15 +178,36 @@ describe("openWithDeposit", () => {
     expect(res.order.success).toBe(true);
   });
 
-  it("throws TradeFlowError carrying the deposit when the order is rejected", async () => {
+  it("falls through venues until one fills, depositing only once", async () => {
+    // gmtrade (underwriter 3) accepts; flash_trade (1) rejects.
     const f = makeApi({
       startFree: 0,
       onDeposit: (amt) => f.setFree(amt),
-      onOrder: () => ({ success: false, signature: null, orderPda: null, error: "slippage exceeded" }),
+      onOrder: (req) =>
+        req.underwriter === 3 ? ORDER_OK : { success: false, signature: null, orderPda: null, error: "route too large" },
+    });
+    const res = await openWithDeposit(
+      baseInput,
+      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), venues: ["flash_trade", "gmtrade"] })
+    );
+    expect(res.venue).toBe("gmtrade");
+    expect(res.order.success).toBe(true);
+    expect(f.calls.buildDeposit.length).toBe(1); // deposited once despite the fall-through
+    expect(f.calls.orders).toBe(2); // flash rejected, gmtrade filled
+  });
+
+  it("throws TradeFlowError (funds safe) when every venue rejects", async () => {
+    const f = makeApi({
+      startFree: 0,
+      onDeposit: (amt) => f.setFree(amt),
+      onOrder: () => ({ success: false, signature: null, orderPda: null, error: "rejected" }),
     });
     await expect(
-      openWithDeposit(baseInput, fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_100_000)) }))
-    ).rejects.toMatchObject({ name: "TradeFlowError", depositedNative: 10_100_000 });
+      openWithDeposit(
+        baseInput,
+        fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), venues: ["flash_trade", "gmtrade"] })
+      )
+    ).rejects.toMatchObject({ name: "TradeFlowError", depositedNative: 10_000_000 });
   });
 
   it("calls assertDepositReady before depositing", async () => {
@@ -161,9 +215,9 @@ describe("openWithDeposit", () => {
     const assertDepositReady = vi.fn(async () => {});
     await openWithDeposit(
       baseInput,
-      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_100_000)), assertDepositReady })
+      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), assertDepositReady })
     );
-    expect(assertDepositReady).toHaveBeenCalledWith(10_100_000);
+    expect(assertDepositReady).toHaveBeenCalledWith(10_000_000);
   });
 });
 

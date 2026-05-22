@@ -29,6 +29,7 @@ import * as limitUpdateCancel from "./scenarios/limit-update-cancel.mjs";
 import * as accountBootstrap from "./scenarios/account-bootstrap.mjs";
 import * as depositWithdraw from "./scenarios/deposit-withdraw.mjs";
 import * as roundtripMarket from "./scenarios/roundtrip-market.mjs";
+import * as roundtripAuto from "./scenarios/roundtrip-auto.mjs";
 import * as partialClose from "./scenarios/partial-close.mjs";
 import * as collateralAdjust from "./scenarios/collateral-adjust.mjs";
 
@@ -39,6 +40,7 @@ const SCENARIOS = [
   limitUpdateCancel,
   accountBootstrap,
   depositWithdraw,
+  roundtripAuto,
   roundtripMarket,
   partialClose,
   collateralAdjust,
