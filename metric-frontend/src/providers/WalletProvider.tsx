@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   ConnectionProvider,
   WalletProvider,
@@ -8,10 +8,7 @@ import {
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import "@solana/wallet-adapter-react-ui/styles.css";
-import {
-  SOLANA_RPC_URL,
-  selectBestRpc,
-} from "@/lib/solana-rpc";
+import { SOLANA_RPC_URL } from "@/lib/solana-rpc";
 
 export function WalletProviderWrapper({
   children,
@@ -20,26 +17,14 @@ export function WalletProviderWrapper({
 }) {
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
-  // Start with the synchronous primary (env var if set, else first public
-  // fallback). At mount, race the candidates and swap to whichever
-  // responds first — so a stale env var or a degraded primary doesn't
-  // brick deposits.
-  const [endpoint, setEndpoint] = useState<string>(SOLANA_RPC_URL);
-  useEffect(() => {
-    let cancelled = false;
-    selectBestRpc().then((url) => {
-      if (!cancelled && url !== endpoint) {
-        setEndpoint(url);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // Use the configured endpoint directly. We deliberately do NOT probe/race
+  // RPCs at boot — the ConnectionProvider only hits the endpoint when a request
+  // is actually made (deposit/withdraw), so probing just spammed the console
+  // with errors from rate-limited/forbidden public endpoints on every load.
+  // The trading UI (chart, orders, positions) runs entirely off Imperial and
+  // needs no RPC.
   return (
-    <ConnectionProvider endpoint={endpoint}>
+    <ConnectionProvider endpoint={SOLANA_RPC_URL}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>
