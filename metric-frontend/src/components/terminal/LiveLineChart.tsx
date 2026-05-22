@@ -121,7 +121,6 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
         windowStyle="rounded"
         onWindowChange={setWindowSecs}
         lerpSpeed={0.03}
-        exaggerate
         degen={{ downMomentum: true }}
         momentum
         valueMomentumColor
