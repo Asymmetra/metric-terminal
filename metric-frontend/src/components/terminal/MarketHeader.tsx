@@ -10,7 +10,7 @@ import { formatPriceAuto, abbreviateNumber } from "@/lib/format";
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col">
+    <div className="flex shrink-0 flex-col whitespace-nowrap">
       <span className="font-mono text-[9px] uppercase tracking-wider text-text-secondary/60">
         {label}
       </span>
@@ -102,10 +102,14 @@ export function MarketHeader() {
   const fundingPct = funding?.longPerHourPct ?? null;
 
   return (
-    <div className="flex items-center gap-6 border-b border-metric-border bg-surface-1 px-4 py-2.5">
-      <SymbolSelector />
+    <div className="flex items-center gap-3 border-b border-metric-border bg-surface-1 px-3 py-2 sm:gap-6 sm:px-4 sm:py-2.5">
+      <div className="shrink-0">
+        <SymbolSelector />
+      </div>
 
-      <div className="flex flex-1 items-center gap-6">
+      {/* Stats scroll horizontally on narrow screens instead of squeezing the
+          wallet button off the edge. */}
+      <div className="flex min-w-0 flex-1 items-center gap-4 overflow-x-auto sm:gap-6 scrollbar-hide">
         <Stat label="Mark">{mark != null ? `$${formatPriceAuto(mark)}` : "—"}</Stat>
         <Stat label="24h Change">
           {change != null ? (
@@ -134,7 +138,9 @@ export function MarketHeader() {
         </Stat>
       </div>
 
-      <WalletMultiButton />
+      <div className="shrink-0">
+        <WalletMultiButton />
+      </div>
     </div>
   );
 }

@@ -155,6 +155,48 @@ body {
   text-transform: uppercase;
 }
 
+/* ── Wallet trigger button (header "Select Wallet" / address pill) ── */
+/* Retheme the default purple pill to the metric sky look, mono + uppercase,
+   and keep it on one line / compact so it never wraps or overflows on mobile. */
+.wallet-adapter-button-trigger {
+  background-color: #0EA5E9 !important; /* sky-500 */
+  color: #020617 !important; /* slate-950 text on sky */
+}
+.wallet-adapter-button.wallet-adapter-button-trigger {
+  height: 34px !important;
+  line-height: 34px !important;
+  padding: 0 14px !important;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap !important;
+  border: 1px solid #0EA5E9 !important;
+  transition: background-color 150ms, border-color 150ms !important;
+}
+.wallet-adapter-button.wallet-adapter-button-trigger:not([disabled]):hover {
+  background-color: #38BDF8 !important; /* sky-400 */
+  border-color: #38BDF8 !important;
+}
+/* The wallet icon inside the trigger — keep it tight on small screens. */
+.wallet-adapter-button-trigger .wallet-adapter-button-start-icon {
+  margin-right: 6px;
+  width: 16px;
+  height: 16px;
+}
+@media (max-width: 640px) {
+  .wallet-adapter-button.wallet-adapter-button-trigger {
+    height: 30px !important;
+    line-height: 30px !important;
+    padding: 0 10px !important;
+    font-size: 10px !important;
+  }
+  .wallet-adapter-button-trigger .wallet-adapter-button-start-icon {
+    margin-right: 4px;
+  }
+}
+
 /* ── Scrollbar Hide Utility ── */
 .scrollbar-hide {
   -ms-overflow-style: none;

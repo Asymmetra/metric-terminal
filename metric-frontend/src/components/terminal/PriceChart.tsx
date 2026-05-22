@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStatsStore } from "@/stores/statsStore";
+import { useTraderStore } from "@/stores/traderStore";
 import { COLORS } from "@/lib/constants";
 import { fetchCandles, type Candle, type Timeframe } from "@/lib/phoenix-candles";
 
@@ -50,6 +51,10 @@ export function PriceChart({
   tfRef.current = timeframe;
   const kindRef = useRef<ChartKind>(kind);
   kindRef.current = kind;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priceLinesRef = useRef<any[]>([]);
+  const [seriesEpoch, setSeriesEpoch] = useState(0);
+  const positions = useTraderStore((s) => s.positions);
   const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">("loading");
 
   useEffect(() => {
@@ -155,6 +160,7 @@ export function PriceChart({
         allRef.current = candles;
         currentRef.current = candles[candles.length - 1];
         setStatus("ready");
+        setSeriesEpoch((n) => n + 1); // tell the price-line effect a fresh series exists
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         console.error("Failed to load candles:", e);
@@ -213,8 +219,37 @@ export function PriceChart({
       priceSeriesRef.current = null;
       volumeSeriesRef.current = null;
       currentRef.current = null;
+      priceLinesRef.current = [];
     };
   }, [symbol, timeframe, kind]);
+
+  // Entry + liquidation price lines for an open position on this symbol.
+  useEffect(() => {
+    const series = priceSeriesRef.current;
+    if (!series) return;
+    for (const l of priceLinesRef.current) {
+      try {
+        series.removePriceLine(l);
+      } catch {
+        /* series may be gone */
+      }
+    }
+    priceLinesRef.current = [];
+
+    const pos = positions.find(
+      (p) => p.asset === symbol && (p.status?.toLowerCase() === "open" || Number(p.sizeUsd) > 0)
+    );
+    if (!pos) return;
+
+    const addLine = (price: number, color: string, title: string) => {
+      if (!(price > 0)) return;
+      priceLinesRef.current.push(
+        series.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title })
+      );
+    };
+    addLine(Number(pos.entryPrice), "#0EA5E9", "Entry");
+    addLine(Number(pos.liquidationPrice), "#F97316", "Liq");
+  }, [positions, symbol, seriesEpoch]);
 
   // Live in-progress point from the mark stream (OHLC for candles, value for area).
   useEffect(() => {
