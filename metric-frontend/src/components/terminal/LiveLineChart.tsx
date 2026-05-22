@@ -109,8 +109,11 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
   const referenceLine =
     entry && entry > 0 ? { value: entry, label: `Entry $${formatPriceAuto(entry)}` } : undefined;
 
+  // Inset the canvas 6px at the bottom so the line never kisses the very edge
+  // on a dip (liveline maps the data min to the canvas floor; its `padding`
+  // prop only positions axis labels, not the data range).
   return (
-    <div className="absolute inset-0">
+    <div className="absolute inset-x-0 top-0 bottom-[6px]">
       <Liveline
         data={points}
         value={value}
