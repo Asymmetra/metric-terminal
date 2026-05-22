@@ -7,6 +7,7 @@ import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { fetch24hStats, type DayStats } from "@/lib/phoenix-candles";
 import { formatPriceAuto, abbreviateNumber } from "@/lib/format";
+import { HealthIndicator } from "@/components/terminal/HealthIndicator";
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -138,7 +139,8 @@ export function MarketHeader() {
         </Stat>
       </div>
 
-      <div className="shrink-0">
+      <div className="flex shrink-0 items-center gap-3">
+        <HealthIndicator />
         <WalletMultiButton />
       </div>
     </div>

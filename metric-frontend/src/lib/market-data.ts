@@ -18,6 +18,8 @@ import { PhoenixSymbolFeed } from "@/lib/phoenix-ws";
 import { useMarketStore, type MarketInfo } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useOrderbookStore } from "@/stores/orderbookStore";
+import { priceHistory } from "@/lib/price-history";
+import { noteWsHealth } from "@/lib/health";
 import type { MarkPriceRow } from "@/lib/imperial/types";
 
 interface MarkPriceMsg {
@@ -60,7 +62,16 @@ class MarketDataController {
   private refcount = 0;
   private depthSymbol: string | null = null;
   private staleTimer: ReturnType<typeof setInterval> | null = null;
+  private recordTimer: ReturnType<typeof setInterval> | null = null;
   private lastMsgAt = 0;
+
+  /** Append the active symbol's canonical mark into the session price buffer. */
+  private recordActive() {
+    const symbol = this.depthSymbol;
+    if (!symbol) return;
+    const v = useStatsStore.getState().marks[symbol];
+    if (typeof v === "number") priceHistory.record(symbol, v);
+  }
 
   start() {
     this.refcount += 1;
@@ -85,6 +96,12 @@ class MarketDataController {
         useMarketStore.getState().setConnected(alive);
       }
     }, 2_000);
+
+    // Session price buffer: re-record the active symbol's mark every 500ms so
+    // the live-line always reaches "now" and keeps filling in the background
+    // (candle view, other pages) regardless of which chart is mounted. The
+    // buffer itself throttles to ~5/s, so feed ticks + this heartbeat coexist.
+    this.recordTimer = setInterval(() => this.recordActive(), 500);
   }
 
   stop() {
@@ -96,6 +113,9 @@ class MarketDataController {
     this.phoenixFeed = null;
     if (this.staleTimer) clearInterval(this.staleTimer);
     this.staleTimer = null;
+    if (this.recordTimer) clearInterval(this.recordTimer);
+    this.recordTimer = null;
+    priceHistory.save();
     useMarketStore.getState().setConnected(false);
   }
 
@@ -113,6 +133,10 @@ class MarketDataController {
     // direct feed even when Imperial's relayed WS is down.
     this.phoenixFeed = new PhoenixSymbolFeed(symbol, () => {
       this.lastMsgAt = Date.now();
+      noteWsHealth("phoenix-ws");
+      // Record the fresh mark immediately so the line advances on real ticks,
+      // not only on the 500ms heartbeat. (priceHistory throttles to ~5/s.)
+      this.recordActive();
     });
     this.phoenixFeed.start();
   }
@@ -140,6 +164,7 @@ class MarketDataController {
 
   private onMessage(raw: unknown) {
     this.lastMsgAt = Date.now();
+    noteWsHealth("imperial-ws");
     const msg = raw as { type?: string };
     if (!msg || typeof msg.type !== "string") return;
 

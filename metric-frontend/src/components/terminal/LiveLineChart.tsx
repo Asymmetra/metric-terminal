@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Liveline, type LivelinePoint } from "liveline";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
-import { fetchCandles } from "@/lib/phoenix-candles";
+import { priceHistory } from "@/lib/price-history";
 import { formatPriceAuto } from "@/lib/format";
 
 /**
@@ -13,10 +13,16 @@ import { formatPriceAuto } from "@/lib/format";
  * wall-clock time and feeds the latest mark as `value`; liveline scrolls by
  * wall-clock and lerps the tip at 60fps.
  *
- * Default window is 1 minute. Phoenix's finest candle is 1m, so a 60s window has
- * no real sub-minute history — we seed a *dense* synthetic backfill (~1pt/sec)
- * interpolated from the most recent mark-closes so the line is full-width from
- * the first frame (no blank start / mid-canvas dot), then real ticks stream in.
+ * Points come from the session `priceHistory` buffer (fed continuously by the
+ * market-data feed, independent of which chart is showing). So:
+ *   - switching the window (1m/5m/15m/1H) just re-windows the same buffer —
+ *     no reset of accumulated history;
+ *   - time spent on the candle view / other pages still fills the buffer, so
+ *     returning shows the gap, not a cold start.
+ *
+ * Cold start (empty buffer): a short flat baseline at the current mark keeps the
+ * line full-width instead of blank until real ticks accumulate. Phoenix has no
+ * sub-minute history to backfill, so a flat baseline is the honest placeholder.
  */
 
 const WINDOWS = [
@@ -28,14 +34,7 @@ const WINDOWS = [
 
 const fmt = (v: number) => `$${formatPriceAuto(v)}`;
 
-/**
- * Seed a flat baseline (~1pt/sec) at `price` across [now-windowSecs, now].
- * Phoenix has no sub-minute history, so a flat line at the current price is the
- * honest placeholder: the chart is full-width instantly (no blank / mid-canvas
- * dot), then real live ticks animate the right edge and scroll the baseline off
- * within one window-duration. (Interpolating a "shape" from sparse 1m closes
- * just draws fake straight-line ramps, so we don't.)
- */
+/** Flat baseline (~1pt/sec, capped) at `price` across [now-windowSecs, now]. */
 function flatSeed(price: number, windowSecs: number, now: number): LivelinePoint[] {
   const step = Math.max(1, Math.round(windowSecs / 90));
   const out: LivelinePoint[] = [];
@@ -47,56 +46,32 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
   const mark = useStatsStore((s) => s.marks[symbol]);
   const positions = useTraderStore((s) => s.positions);
 
-  const [points, setPoints] = useState<LivelinePoint[]>([]);
   const [windowSecs, setWindowSecs] = useState(60);
-  const windowRef = useRef(windowSecs);
-  windowRef.current = windowSecs;
+  // Tick state forces a re-derive of `points` on each buffer change + 500ms beat.
+  const [, setTick] = useState(0);
+  const bump = () => setTick((n) => (n + 1) % 1_000_000);
 
-  // Flat baseline seed so the window is full-width immediately. Re-runs on
-  // symbol or window change (so 5m/15m/1h fill too).
+  // Re-render when the buffer gets new data and on a steady 500ms beat (so the
+  // trailing edge keeps advancing toward "now" even between buffer writes).
   useEffect(() => {
-    let cancelled = false;
-    const ctrl = new AbortController();
-    const apply = (price: number) => {
-      if (!cancelled && price > 0) setPoints(flatSeed(price, windowRef.current, Date.now() / 1000));
-    };
-    const live = useStatsStore.getState().marks[symbol];
-    if (typeof live === "number") {
-      apply(live); // instant seed from the live mark when we already have it
-    } else {
-      // otherwise grab the last Phoenix close to baseline against
-      fetchCandles(symbol, "1m", { limit: 1, signal: ctrl.signal })
-        .then((c) => apply(c[c.length - 1]?.markClose ?? 0))
-        .catch(() => {});
-    }
+    const unsub = priceHistory.subscribe(bump);
+    const id = setInterval(bump, 500);
     return () => {
-      cancelled = true;
-      ctrl.abort();
+      unsub();
+      clearInterval(id);
     };
-  }, [symbol, windowSecs]);
+  }, []);
 
-  // Heartbeat: append the latest mark at wall-clock time every 500ms (plus
-  // immediately on each change). This guarantees the line always reaches "now"
-  // even if the feed pauses — otherwise liveline scrolls by wall-clock and the
-  // stale data drifts left, leaving empty space on the right ("falling off").
-  const markRef = useRef(mark);
-  markRef.current = mark;
-  useEffect(() => {
-    const append = () => {
-      const v = markRef.current;
-      if (typeof v !== "number") return;
-      const now = Date.now() / 1000;
-      setPoints((prev) => {
-        const next = [...prev, { time: now, value: v }];
-        const cutoff = now - (windowRef.current + 30);
-        const trimmed = next.filter((p) => p.time >= cutoff);
-        return trimmed.length > 5000 ? trimmed.slice(-5000) : trimmed;
-      });
-    };
-    append();
-    const id = setInterval(append, 500);
-    return () => clearInterval(id);
-  }, [symbol]);
+  // Derive the windowed view from the session buffer each render.
+  const now = Date.now() / 1000;
+  const buffered = priceHistory.getSince(symbol, now - windowSecs);
+  let points: LivelinePoint[] = buffered.map((p) => ({ time: p.t, value: p.v }));
+
+  // Cold start: nothing buffered yet → flat baseline at the live mark so the
+  // chart is full-width immediately rather than blank.
+  if (points.length < 2 && typeof mark === "number" && mark > 0) {
+    points = flatSeed(mark, windowSecs, now);
+  }
 
   const value = mark ?? points[points.length - 1]?.value ?? 0;
 
