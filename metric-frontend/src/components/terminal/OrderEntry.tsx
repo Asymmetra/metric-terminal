@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import clsx from "clsx";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
 import { ImperialError } from "@/lib/imperial/client";
@@ -11,15 +12,20 @@ import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useToastStore } from "@/stores/toastStore";
 import {
-  buildOrderRequest,
   impliedLeverage,
   validateOrder,
   MIN_COLLATERAL_USD,
   type OrderFormInput,
 } from "@/lib/order-builder";
+import { openWithDeposit, feeBufferUsd, TradeFlowError } from "@/lib/trade-flow";
 import { formatPriceAuto } from "@/lib/format";
 
-const VENUES: { tag: VenueTag; label: string }[] = [
+// "auto" lets Imperial's /route pick the cheapest venue that supports the order
+// (e.g. SOL market orders route to GMTrade; Phoenix is CLOB/limit-only via this
+// path). Users can still force a specific venue.
+type VenueChoice = VenueTag | "auto";
+const VENUES: { tag: VenueChoice; label: string }[] = [
+  { tag: "auto", label: "Auto (best route)" },
   { tag: "phoenix", label: "Phoenix" },
   { tag: "jupiter", label: "Jupiter" },
   { tag: "flash_trade", label: "Flash" },
@@ -45,6 +51,7 @@ const inputCls =
 export function OrderEntry() {
   const signer = useSigner();
   const wallet = signer.publicKey;
+  const { connection } = useConnection();
 
   const symbol = useMarketStore((s) => s.selectedSymbol);
   const mark = useStatsStore((s) => s.marks[symbol]);
@@ -58,7 +65,7 @@ export function OrderEntry() {
   const addToast = useToastStore((s) => s.addToast);
   const updateToast = useToastStore((s) => s.updateToast);
 
-  const [venue, setVenue] = useState<VenueTag>("phoenix");
+  const [venue, setVenue] = useState<VenueChoice>("auto");
   const [type, setType] = useState<"market" | "limit">("market");
   const [profileIndex, setProfileIndex] = useState(0);
   const [collateral, setCollateral] = useState("");
@@ -76,6 +83,15 @@ export function OrderEntry() {
   const collateralNum = Number(collateral) || 0;
   const sizeNum = Number(size) || 0;
   const lev = impliedLeverage(sizeNum, collateralNum);
+
+  // How much (if any) we'd auto-deposit to fund this order's collateral. The
+  // order debits collateral from the profile, so we top up to collateral + a
+  // small fee buffer when the profile can't already cover it.
+  const depositNeeded = useMemo(() => {
+    if (!(collateralNum > 0)) return 0;
+    const target = collateralNum + feeBufferUsd(collateralNum, null);
+    return Math.max(0, +(target - profileBalance).toFixed(2));
+  }, [collateralNum, profileBalance]);
 
   const refreshBalances = useCallback(
     async (token: string) => {
@@ -138,14 +154,69 @@ export function OrderEntry() {
     }
   }, [depositAmt, wallet, profileIndex, ensureJwt, signer, addToast, updateToast, refreshBalances]);
 
+  // Gas / wallet-USDC preflight before signing a deposit. The operator sponsors
+  // rent + ATA creation, but the wallet still pays the base tx fee, so it needs
+  // a little SOL; and the deposit pulls from the wallet's USDC ATA.
+  const assertDepositReady = useCallback(
+    async (depositNative: number) => {
+      if (!wallet) throw new Error("Connect a wallet first.");
+      const pk = signer.publicKey;
+      if (!pk) throw new Error("Connect a wallet first.");
+      const { PublicKey } = await import("@solana/web3.js");
+      const owner = new PublicKey(pk);
+      const lamports = await connection.getBalance(owner).catch(() => null);
+      if (lamports != null && lamports < 0.005 * 1e9) {
+        throw new Error(`Need a little SOL for gas (have ${(lamports / 1e9).toFixed(4)}).`);
+      }
+      // Best-effort USDC check; if it fails we let the tx surface the error.
+      try {
+        const USDC = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const accs = await connection.getParsedTokenAccountsByOwner(owner, { mint: USDC });
+        const have = accs.value.reduce(
+          (a, x) => a + Number(x.account.data.parsed?.info?.tokenAmount?.amount ?? 0),
+          0
+        );
+        if (have < depositNative) {
+          throw new Error(
+            `Insufficient wallet USDC: need $${(depositNative / 1e6).toFixed(2)}, have $${(have / 1e6).toFixed(2)}.`
+          );
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith("Insufficient wallet USDC")) throw e;
+        /* RPC couldn't read token accounts — let the deposit tx fail loudly instead */
+      }
+    },
+    [wallet, signer, connection]
+  );
+
   const submit = useCallback(
     async (side: "long" | "short") => {
       if (!wallet || busy) return;
+      // Resolve the venue. "auto" asks Imperial's router for the cheapest venue
+      // that supports this order — important because Phoenix is CLOB/limit-only
+      // via this path, so a Phoenix market order is rejected. Fall back to
+      // GMTrade (the reliable market venue) if /route is unavailable.
+      let resolvedVenue: VenueTag = venue === "auto" ? "gmtrade" : venue;
+      if (venue === "auto") {
+        try {
+          const route = await imperial.getRoute({
+            asset: symbol,
+            side,
+            notional: sizeNum,
+            desiredLeverage: Math.max(1, lev),
+            wallet,
+            profileIndex,
+          });
+          if (route?.venue) resolvedVenue = route.venue;
+        } catch {
+          /* keep the gmtrade fallback */
+        }
+      }
       const input: OrderFormInput = {
         wallet,
         profileIndex,
         symbol,
-        venue,
+        venue: resolvedVenue,
         side,
         type,
         sizeUsd: sizeNum,
@@ -161,26 +232,36 @@ export function OrderEntry() {
       }
       setBusy(true);
       const verb = type === "limit" ? "Limit" : "Market";
-      const tid = addToast("loading", `${verb} ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
+      const via = venue === "auto" ? ` via ${resolvedVenue}` : "";
+      const tid = addToast("loading", `${verb} ${side} ${symbol}${via}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
       try {
         const token = await ensureJwt();
-        const res = await imperial.placeOrder(buildOrderRequest(input), token);
-        if (!res.success) throw new Error(res.error ?? "Order rejected");
+        const { depositedNative, order } = await openWithDeposit(input, {
+          signer,
+          jwt: token,
+          confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+          assertDepositReady,
+          onStep: (p) => updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}`, detail: p.message }),
+        });
         updateToast(tid, {
           type: "success",
-          title: `${verb} ${side} placed`,
-          detail: res.orderPda ? `orderPda ${res.orderPda.slice(0, 10)}…` : undefined,
-          txid: res.signature ?? undefined,
+          title: `${verb} ${side} ${symbol} opened`,
+          detail:
+            (depositedNative > 0 ? `Deposited $${(depositedNative / 1e6).toFixed(2)} · ` : "") +
+            (order.orderPda ? `orderPda ${order.orderPda.slice(0, 8)}…` : "filled"),
+          txid: order.signature ?? undefined,
         });
         bumpRefresh();
         void refreshBalances(token);
       } catch (e) {
-        updateToast(tid, { type: "error", title: "Order failed", detail: errMsg(e) });
+        const title = e instanceof TradeFlowError && e.depositedNative > 0 ? "Order failed (funds safe)" : "Order failed";
+        updateToast(tid, { type: "error", title, detail: errMsg(e) });
+        void ensureJwt().then((t) => refreshBalances(t)).catch(() => {});
       } finally {
         setBusy(false);
       }
     },
-    [wallet, busy, profileIndex, symbol, venue, type, sizeNum, collateralNum, mark, limitPrice, slippageBps, lev, ensureJwt, addToast, updateToast, bumpRefresh, refreshBalances]
+    [wallet, busy, profileIndex, symbol, venue, type, sizeNum, collateralNum, mark, limitPrice, slippageBps, lev, ensureJwt, signer, connection, assertDepositReady, addToast, updateToast, bumpRefresh, refreshBalances]
   );
 
   const notConnected = !signer.isReady;
@@ -192,7 +273,7 @@ export function OrderEntry() {
       <div className="flex items-center justify-between">
         <select
           value={venue}
-          onChange={(e) => setVenue(e.target.value as VenueTag)}
+          onChange={(e) => setVenue(e.target.value as VenueChoice)}
           className="border border-metric-border bg-metric-bg px-2 py-1 font-mono text-[11px] text-text-primary outline-none"
         >
           {VENUES.map((v) => (
@@ -286,6 +367,9 @@ export function OrderEntry() {
         <Row label="Mark" value={mark != null ? `$${formatPriceAuto(mark)}` : "—"} />
         <Row label="Est. Entry" value={type === "limit" && limitPrice ? `$${limitPrice}` : mark != null ? `$${formatPriceAuto(mark)}` : "—"} />
         <Row label="Leverage" value={lev > 0 ? `${lev.toFixed(2)}x` : "—"} />
+        {depositNeeded > 0 && (
+          <Row label="Auto-deposit" value={`$${depositNeeded.toFixed(2)} (1 signature)`} />
+        )}
       </div>
 
       {/* Action */}
@@ -309,14 +393,14 @@ export function OrderEntry() {
               disabled={busy}
               className="bg-metric-buy py-2.5 font-mono text-[13px] font-semibold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              Long
+              {depositNeeded > 0 ? "Deposit & Long" : "Long"}
             </button>
             <button
               onClick={() => submit("short")}
               disabled={busy}
               className="bg-metric-sell py-2.5 font-mono text-[13px] font-semibold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              Short
+              {depositNeeded > 0 ? "Deposit & Short" : "Short"}
             </button>
           </div>
         )}

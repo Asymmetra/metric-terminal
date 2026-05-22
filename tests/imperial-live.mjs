@@ -2,6 +2,11 @@
 /**
  * Real-network integration suite for the metric-terminal ↔ Imperial stack.
  *
+ * NOTE: superseded by the modular suite in tests/live/ (run via
+ * `node tests/live/run.mjs`), which covers these tiers plus order updates,
+ * partial closes, collateral edits, and account bootstrap. This single-file
+ * version is kept as a quick baseline check.
+ *
  * Uses the test wallet at .keys/test-wallet.json. Runs three escalating
  * tiers; each tier is opt-in via an env flag so you can run the safe
  * tier alone without on-chain side effects.
@@ -12,9 +17,14 @@
  *                             on-chain → re-fetch balances
  *   T3  (ORDER=1)             POST /mobile/orders (limit, well off-market)
  *                             → /mobile/orders/cancel
+ *   T4  (ROUNDTRIP=1)         Full orchestrated round-trip: deposit shortfall →
+ *                             market open ($10 col / $20 size Phoenix SOL) →
+ *                             verify position → market close → settle → sweep →
+ *                             withdraw full free balance. Spends real fees +
+ *                             brief market exposure; funds return to the wallet.
  *
  * Env:
- *   SOLANA_RPC   Required for T2 + T3. Use a Helius/QuickNode endpoint;
+ *   SOLANA_RPC   Required for T2 + T3 + T4. Use a Helius/QuickNode endpoint;
  *                public mainnet-beta will rate-limit aggressively.
  *   DEPOSIT_USDC Default 1. Amount in dollars to deposit when T2 is on.
  *   PROFILE      Default 0. Sub-account index 0..5.
@@ -23,6 +33,7 @@
  *   node tests/imperial-live.mjs           # T1 only
  *   DEPOSIT=1 SOLANA_RPC=... node ...      # T1 + T2
  *   ORDER=1 SOLANA_RPC=... node ...        # T1 + T3
+ *   ROUNDTRIP=1 SOLANA_RPC=... node ...    # T1 + T4 (real fees)
  */
 
 import fs from "node:fs";
@@ -365,6 +376,154 @@ if (process.env.ORDER === "1") {
   }
 } else {
   process.stdout.write(`${DIM}\nT3 order flow skipped (set ORDER=1 SOLANA_RPC=… to run).${RESET}\n`);
+}
+
+// ──────────────────────────────────────── T4: full deposit→open→close→withdraw
+
+if (process.env.ROUNDTRIP === "1") {
+  tier("T4 · round-trip  deposit → open → close → withdraw");
+  if (!JWT) {
+    bad("round-trip", new Error("no JWT — T1 must succeed first"));
+  } else if (!process.env.SOLANA_RPC) {
+    bad("round-trip", new Error("set SOLANA_RPC=https://… to submit on-chain"));
+  } else {
+    try {
+      const rpc = new Connection(process.env.SOLANA_RPC, "confirmed");
+      const COLLATERAL_USD = 10; // Imperial's enforced minimum
+      const SIZE_USD = 20; // 2x leverage
+      const BUFFER_USD = Number(process.env.BUFFER_USD ?? "0.3"); // fee cushion added to the deposit only
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      const profileFree = async () =>
+        (await http("GET", "/mobile/balances", { jwt: JWT })).body.profiles[PROFILE].usdc / 1e6;
+
+      const signSubmitConfirm = async (b64, label) => {
+        const vtx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
+        vtx.sign([kp]);
+        const sig = await rpc.sendTransaction(vtx, { skipPreflight: false });
+        const conf = await rpc.confirmTransaction(sig, "confirmed");
+        if (conf.value.err) throw new Error(`${label} on-chain err: ${JSON.stringify(conf.value.err)}`);
+        return sig;
+      };
+      const pollUntil = async (pred, timeoutMs = 60_000, intervalMs = 3_000) => {
+        const start = Date.now();
+        for (;;) {
+          if (await pred()) return true;
+          if (Date.now() - start >= timeoutMs) return false;
+          await sleep(intervalMs);
+        }
+      };
+
+      // gas check
+      const lamports = await rpc.getBalance(kp.publicKey);
+      info(`SOL gas balance: ${(lamports / 1e9).toFixed(6)} SOL`);
+      if (lamports < 0.01 * 1e9) throw new Error(`need ≥0.01 SOL for gas (have ${(lamports / 1e9).toFixed(6)})`);
+
+      // ── 1. fund profile to COLLATERAL + buffer (deposit only the shortfall)
+      const target = COLLATERAL_USD + BUFFER_USD;
+      const before = await profileFree();
+      info(`profile ${PROFILE} free before: $${before.toFixed(4)}`);
+      if (before < target) {
+        const depositUsd = +(target - before).toFixed(6);
+        const build = await http("POST", "/deposit/build-tx", {
+          body: { wallet: WALLET, profileIndex: PROFILE, amount: Math.round(depositUsd * 1e6), mode: "deposit" },
+        });
+        if (build.status !== 200 || !build.body?.transaction) {
+          throw new Error(`deposit build-tx ${build.status}: ${JSON.stringify(build.body)}`);
+        }
+        const sig = await signSubmitConfirm(build.body.transaction, "deposit");
+        ok("deposit confirmed", `$${depositUsd.toFixed(2)} → profile ${PROFILE}  ${sig.slice(0, 12)}…`);
+        const landed = await pollUntil(async () => (await profileFree()) >= target);
+        if (!landed) throw new Error("deposit didn't reflect in balance within 60s");
+      } else {
+        ok("deposit skipped", `profile already funded ($${before.toFixed(2)} ≥ $${target})`);
+      }
+
+      // ── 2. open market position
+      const marks = await fetch(`${API}/api/v1/mark-prices`).then((r) => r.json());
+      const solRow = marks.rows.find((r) => r.symbol === "SOL");
+      const mark = solRow?.phoenix?.price ?? solRow?.flash?.price;
+      if (!mark) throw new Error("no SOL mark price");
+      const openBody = {
+        wallet: WALLET,
+        profileIndex: PROFILE,
+        underwriter: 3, // GMTrade — reliable for market opens (Phoenix is limit-only here)
+        side: 0, // Long
+        action: 0, // Increase
+        orderType: 0, // Market
+        sizeUsd: Math.round(SIZE_USD * 1e6),
+        collateralAmount: Math.round(COLLATERAL_USD * 1e6),
+        slippageBps: 200,
+        triggerCondition: 0,
+        triggerPrice: 0,
+        priority: 0,
+        fundingStatus: 0,
+        marketPrice: Math.round(mark * 1e9),
+        symbol: "SOL",
+      };
+      info(`opening market long SOL: $${SIZE_USD} @ ~$${mark.toFixed(2)} (collateral $${COLLATERAL_USD})`);
+      const open = await http("POST", "/mobile/orders", { body: openBody, jwt: JWT });
+      if (open.status !== 200 || !open.body.success) {
+        throw new Error(`open rejected: ${open.body?.error ?? JSON.stringify(open.body)}`);
+      }
+      ok("market open", `signature=${open.body.signature?.slice(0, 12)}…`);
+
+      // ── 3. verify the position is open
+      const openPos = await pollUntil(async () => {
+        const r = await http("GET", `/positions?walletAddress=${WALLET}`);
+        return (r.body.dataList ?? []).some(
+          (p) => p.asset === "SOL" && (p.status?.toLowerCase() === "open" || Number(p.sizeUsd) > 0)
+        );
+      }, 30_000, 3_000);
+      if (!openPos) throw new Error("no open SOL position appeared after open");
+      const posRow = (await http("GET", `/positions?walletAddress=${WALLET}`)).body.dataList.find(
+        (p) => p.asset === "SOL" && (p.status?.toLowerCase() === "open" || Number(p.sizeUsd) > 0)
+      );
+      ok("position open", `size=$${Number(posRow.sizeUsd).toFixed(2)} side=${posRow.side} lev=${posRow.leverageX}`);
+
+      // ── 4. close (full size, market Decrease)
+      const closeSizeUsd = Math.max(Math.round(Number(posRow.sizeUsd) * 1e6), Math.round(SIZE_USD * 1e6));
+      const preCloseFree = await profileFree();
+      const closeBody = {
+        ...openBody,
+        action: 1, // Decrease
+        sizeUsd: closeSizeUsd,
+        collateralAmount: 0,
+        marketPrice: Math.round(mark * 1e9),
+      };
+      const close = await http("POST", "/mobile/orders", { body: closeBody, jwt: JWT });
+      if (close.status !== 200 || !close.body.success) {
+        throw new Error(`close rejected: ${close.body?.error ?? JSON.stringify(close.body)}`);
+      }
+      ok("market close", `signature=${close.body.signature?.slice(0, 12)}…`);
+
+      // ── 5. settle + sweep
+      await pollUntil(async () => (await profileFree()) > preCloseFree, 60_000, 3_000);
+      const sweep = await http("POST", `/passthrough/users/${WALLET}/profiles/${PROFILE}/sync`, { body: {} });
+      ok("sweep", `status=${sweep.body?.status ?? sweep.status}`);
+      if (sweep.body?.status === "swept") await pollUntil(async () => (await profileFree()) > preCloseFree, 30_000, 3_000);
+
+      // ── 6. withdraw the full free balance back to the wallet
+      const freeAfter = await profileFree();
+      info(`profile ${PROFILE} free after close: $${freeAfter.toFixed(4)}`);
+      if (freeAfter > 0) {
+        const wb = await http("POST", "/deposit/build-tx", {
+          body: { wallet: WALLET, profileIndex: PROFILE, amount: Math.round(freeAfter * 1e6), mode: "withdraw" },
+        });
+        if (wb.status !== 200 || !wb.body?.transaction) throw new Error(`withdraw build-tx ${wb.status}: ${JSON.stringify(wb.body)}`);
+        const sig = await signSubmitConfirm(wb.body.transaction, "withdraw");
+        ok("withdraw confirmed", `$${freeAfter.toFixed(2)} → wallet  ${sig.slice(0, 12)}…`);
+        const drained = await pollUntil(async () => (await profileFree()) < 0.01, 30_000, 3_000);
+        ok("round-trip complete", drained ? `profile ${PROFILE} drained` : `profile residual $${(await profileFree()).toFixed(4)}`);
+      } else {
+        bad("withdraw", new Error("nothing free to withdraw after close — settlement may have lagged"));
+      }
+    } catch (e) {
+      bad("round-trip flow", e);
+    }
+  }
+} else {
+  process.stdout.write(`${DIM}\nT4 round-trip skipped (set ROUNDTRIP=1 SOLANA_RPC=… to run — spends real fees).${RESET}\n`);
 }
 
 // ─────────────────────────────────────────────────────────── summary

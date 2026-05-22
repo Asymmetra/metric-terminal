@@ -163,6 +163,37 @@ export interface DepositResponse {
   transaction: string;
 }
 
+// ─────────────────────────────────────────────── profile sweep / activation
+
+/** Body of POST /phoenix/register — optional Phoenix pre-activation (no auth). */
+export interface RegisterPhoenixRequest {
+  wallet: string;
+  profileIndex?: number; // 0..5; defaults to 0 server-side
+}
+export interface RegisterPhoenixResponse {
+  profilePda: string;
+  activated: boolean;
+  message: string;
+}
+
+/** Pre-sweep snapshot of tokenized residue (native scales). */
+export interface SweepBalances {
+  SOL: number;
+  BTC: number;
+  ETH: number;
+}
+/**
+ * Response of POST /passthrough/users/{wallet}/profiles/{index}/sync.
+ * `status`: "clean" (nothing to sweep) | "queued" (recent sweep in flight) |
+ * "swept" (operator submitted instructions to return WSOL/WBTC/WETH residue
+ * to the wallet as USDC).
+ */
+export interface SyncSweepResponse {
+  status: "clean" | "queued" | "swept" | string;
+  message: string;
+  balances?: SweepBalances | null;
+}
+
 // ──────────────────────────────────────────────────────────── reads
 
 export interface ProfileBalance {

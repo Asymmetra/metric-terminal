@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
 import type { PositionLifecycle, VenueTag } from "@/lib/imperial/types";
@@ -9,6 +10,7 @@ import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useToastStore } from "@/stores/toastStore";
 import { buildCloseRequest } from "@/lib/order-builder";
+import { closeAndWithdraw, TradeFlowError } from "@/lib/trade-flow";
 import { formatPriceAuto, formatUsdPrecise } from "@/lib/format";
 
 type Tab = "positions" | "history";
@@ -30,6 +32,7 @@ function num(v: string | null): number {
 export function Positions() {
   const signer = useSigner();
   const wallet = signer.publicKey;
+  const { connection } = useConnection();
   const [tab, setTab] = useState<Tab>("positions");
 
   const positions = useTraderStore((s) => s.positions);
@@ -47,38 +50,56 @@ export function Positions() {
 
   const [closing, setClosing] = useState<string | null>(null);
 
-  const closePosition = useCallback(
-    async (p: PositionLifecycle) => {
+  const runClose = useCallback(
+    async (p: PositionLifecycle, withdraw: boolean) => {
       if (!wallet) return;
       setClosing(p.id);
-      const tid = addToast("loading", `Closing ${p.asset}…`);
+      const tid = addToast("loading", withdraw ? `Closing ${p.asset} & withdrawing…` : `Closing ${p.asset}…`);
       try {
         const token = jwt ?? (await imperial.ensureAuth(signer));
         if (!jwt) setJwt(token);
         const mark = useStatsStore.getState().marks[p.asset] ?? num(p.markPrice);
-        const res = await imperial.placeOrder(
-          buildCloseRequest({
-            wallet,
-            profileIndex: p.profileIndex ?? 0,
-            symbol: p.asset,
-            venue: venueOf(p.underwriter),
-            positionSide: sideOf(p.side),
-            sizeUsd: num(p.sizeUsd),
-            markPrice: mark,
-            slippageBps: 100,
-          }),
-          token
-        );
-        if (!res.success) throw new Error(res.error ?? "Close rejected");
-        updateToast(tid, { type: "success", title: `${p.asset} close submitted`, txid: res.signature ?? undefined });
+        const params = {
+          wallet,
+          profileIndex: p.profileIndex ?? 0,
+          symbol: p.asset,
+          venue: venueOf(p.underwriter),
+          positionSide: sideOf(p.side),
+          sizeUsd: num(p.sizeUsd),
+          markPrice: mark,
+          slippageBps: 100,
+        };
+        if (withdraw) {
+          const res = await closeAndWithdraw(params, {
+            signer,
+            jwt: token,
+            confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+            onStep: (s) => updateToast(tid, { type: "loading", title: `${p.asset}`, detail: s.message }),
+          });
+          updateToast(tid, {
+            type: "success",
+            title: `${p.asset} closed & withdrawn`,
+            detail: res.withdrawnNative > 0 ? `$${(res.withdrawnNative / 1e6).toFixed(2)} → wallet` : "no free balance to withdraw",
+            txid: res.withdrawSignature ?? res.close.signature ?? undefined,
+          });
+        } else {
+          const res = await imperial.placeOrder(buildCloseRequest(params), token);
+          if (!res.success) throw new Error(res.error ?? "Close rejected");
+          updateToast(tid, { type: "success", title: `${p.asset} close submitted`, txid: res.signature ?? undefined });
+        }
         bumpRefresh();
       } catch (e) {
-        updateToast(tid, { type: "error", title: "Close failed", detail: e instanceof Error ? e.message : String(e) });
+        const safe = e instanceof TradeFlowError;
+        updateToast(tid, {
+          type: "error",
+          title: safe ? "Action failed (funds safe)" : "Close failed",
+          detail: e instanceof Error ? e.message : String(e),
+        });
       } finally {
         setClosing(null);
       }
     },
-    [wallet, jwt, signer, setJwt, addToast, updateToast, bumpRefresh]
+    [wallet, jwt, signer, connection, setJwt, addToast, updateToast, bumpRefresh]
   );
 
   return (
@@ -113,7 +134,7 @@ export function Positions() {
           open.length === 0 ? (
             <Empty>{wallet ? "No open positions" : "Connect a wallet to see positions"}</Empty>
           ) : (
-            <PositionsTable positions={open} closing={closing} onClose={closePosition} />
+            <PositionsTable positions={open} closing={closing} onClose={runClose} />
           )
         ) : (
           <TradeHistory wallet={wallet} />
@@ -141,7 +162,7 @@ function PositionsTable({
 }: {
   positions: PositionLifecycle[];
   closing: string | null;
-  onClose: (p: PositionLifecycle) => void;
+  onClose: (p: PositionLifecycle, withdraw: boolean) => void;
 }) {
   return (
     <table className="w-full font-mono text-[11px]">
@@ -177,13 +198,24 @@ function PositionsTable({
               <td className={pnl >= 0 ? "text-metric-buy" : "text-metric-sell"}>{formatUsdPrecise(pnl)}</td>
               <td className="text-text-secondary">{p.leverageX ? `${num(p.leverageX).toFixed(1)}x` : "—"}</td>
               <td className="text-right">
-                <button
-                  onClick={() => onClose(p)}
-                  disabled={closing === p.id}
-                  className="border border-metric-border px-2 py-0.5 text-[10px] text-text-secondary transition-colors hover:border-metric-sell/50 hover:text-metric-sell disabled:opacity-40"
-                >
-                  {closing === p.id ? "…" : "Close"}
-                </button>
+                <div className="flex items-center justify-end gap-1">
+                  <button
+                    onClick={() => onClose(p, true)}
+                    disabled={closing === p.id}
+                    title="Close the position and withdraw the freed balance to your wallet (1 signature)"
+                    className="border border-metric-border px-2 py-0.5 text-[10px] text-text-secondary transition-colors hover:border-metric-sell/50 hover:text-metric-sell disabled:opacity-40"
+                  >
+                    {closing === p.id ? "…" : "Close & Withdraw"}
+                  </button>
+                  <button
+                    onClick={() => onClose(p, false)}
+                    disabled={closing === p.id}
+                    title="Close only — leave the freed balance in the profile to re-trade"
+                    className="border border-metric-border px-1.5 py-0.5 text-[10px] text-text-secondary/60 transition-colors hover:text-text-secondary disabled:opacity-40"
+                  >
+                    Close
+                  </button>
+                </div>
               </td>
             </tr>
           );

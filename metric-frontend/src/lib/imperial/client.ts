@@ -18,7 +18,9 @@ import type {
   OrderRequest,
   OrderResponse,
   PositionList,
+  RegisterPhoenixResponse,
   RouteResponse,
+  SyncSweepResponse,
   UpdateRequest,
   VenueTag,
 } from "./types";
@@ -120,6 +122,28 @@ export class ImperialClient {
    */
   buildDepositTx(req: DepositRequest): Promise<DepositResponse> {
     return this.post("/deposit/build-tx", req);
+  }
+
+  /**
+   * Sweep a profile's non-USDC residue (WSOL/WBTC/WETH left over from closing a
+   * token-collateralized position) back to USDC, routed to the user wallet.
+   * Idempotent; rate-limited ~10s per profile. No JWT required. Call after a
+   * full Decrease that closes a non-USDC-collateralized position.
+   */
+  syncProfileSweep(wallet: string, profileIndex: number): Promise<SyncSweepResponse> {
+    return this.post(
+      `/passthrough/users/${encodeURIComponent(wallet)}/profiles/${profileIndex}/sync`,
+      {}
+    );
+  }
+
+  /**
+   * Optional Phoenix pre-activation under Imperial's referral. `/mobile/orders`
+   * already auto-activates on first use, so this only warms the cache before a
+   * latency-sensitive first Phoenix order. Unauthenticated + idempotent.
+   */
+  registerPhoenix(wallet: string, profileIndex = 0): Promise<RegisterPhoenixResponse> {
+    return this.post("/phoenix/register", { wallet, profileIndex });
   }
 
   // ────────────────────────────────────────────── reads (no auth)
