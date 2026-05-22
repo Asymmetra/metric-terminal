@@ -14,6 +14,7 @@
 
 import { imperial } from "@/lib/imperial";
 import { ImperialMarketWs } from "@/lib/imperial/ws";
+import { PhoenixSymbolFeed } from "@/lib/phoenix-ws";
 import { useMarketStore, type MarketInfo } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useOrderbookStore } from "@/stores/orderbookStore";
@@ -55,6 +56,7 @@ function venuesOf(row: MarkPriceRow): string[] {
 
 class MarketDataController {
   private ws: ImperialMarketWs | null = null;
+  private phoenixFeed: PhoenixSymbolFeed | null = null;
   private refcount = 0;
   private depthSymbol: string | null = null;
   private staleTimer: ReturnType<typeof setInterval> | null = null;
@@ -72,7 +74,9 @@ class MarketDataController {
     ws.connect();
     ws.subscribeMarkPrices();
     ws.subscribeFundingRates();
-    if (this.depthSymbol) ws.subscribePhoenixDepth([this.depthSymbol]);
+    // Order book + active-symbol price come straight from Phoenix's WS (more
+    // reliable + faster than Imperial's relayed depth), not subscribePhoenixDepth.
+    if (this.depthSymbol) this.openPhoenixFeed(this.depthSymbol);
 
     // Connection liveness: marks "connected" off the message heartbeat.
     this.staleTimer = setInterval(() => {
@@ -88,17 +92,29 @@ class MarketDataController {
     if (this.refcount > 0) return;
     this.ws?.disconnect();
     this.ws = null;
+    this.phoenixFeed?.stop();
+    this.phoenixFeed = null;
     if (this.staleTimer) clearInterval(this.staleTimer);
     this.staleTimer = null;
     useMarketStore.getState().setConnected(false);
   }
 
-  /** (Re)point the Phoenix depth subscription at a symbol. */
+  /** (Re)point the direct Phoenix order-book + price feed at a symbol. */
   setDepthSymbol(symbol: string) {
     if (this.depthSymbol === symbol) return;
     this.depthSymbol = symbol;
     useOrderbookStore.getState().setSnapshot(null);
-    this.ws?.subscribePhoenixDepth([symbol]);
+    if (this.ws) this.openPhoenixFeed(symbol);
+  }
+
+  private openPhoenixFeed(symbol: string) {
+    this.phoenixFeed?.stop();
+    // Count Phoenix ticks toward liveness so the "connected" banner reflects the
+    // direct feed even when Imperial's relayed WS is down.
+    this.phoenixFeed = new PhoenixSymbolFeed(symbol, () => {
+      this.lastMsgAt = Date.now();
+    });
+    this.phoenixFeed.start();
   }
 
   private async hydrateSymbols() {

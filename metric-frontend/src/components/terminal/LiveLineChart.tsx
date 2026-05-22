@@ -75,17 +75,28 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
     };
   }, [symbol, windowSecs]);
 
-  // Append each new mark at wall-clock time; trim to the visible window + slack.
+  // Heartbeat: append the latest mark at wall-clock time every 500ms (plus
+  // immediately on each change). This guarantees the line always reaches "now"
+  // even if the feed pauses — otherwise liveline scrolls by wall-clock and the
+  // stale data drifts left, leaving empty space on the right ("falling off").
+  const markRef = useRef(mark);
+  markRef.current = mark;
   useEffect(() => {
-    if (typeof mark !== "number") return;
-    const now = Date.now() / 1000;
-    setPoints((prev) => {
-      const next = [...prev, { time: now, value: mark }];
-      const cutoff = now - (windowRef.current + 30);
-      const trimmed = next.filter((p) => p.time >= cutoff);
-      return trimmed.length > 5000 ? trimmed.slice(-5000) : trimmed;
-    });
-  }, [mark, symbol]);
+    const append = () => {
+      const v = markRef.current;
+      if (typeof v !== "number") return;
+      const now = Date.now() / 1000;
+      setPoints((prev) => {
+        const next = [...prev, { time: now, value: v }];
+        const cutoff = now - (windowRef.current + 30);
+        const trimmed = next.filter((p) => p.time >= cutoff);
+        return trimmed.length > 5000 ? trimmed.slice(-5000) : trimmed;
+      });
+    };
+    append();
+    const id = setInterval(append, 500);
+    return () => clearInterval(id);
+  }, [symbol]);
 
   const value = mark ?? points[points.length - 1]?.value ?? 0;
 
