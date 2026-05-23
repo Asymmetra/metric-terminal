@@ -84,11 +84,6 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
   const referenceLine =
     entry && entry > 0 ? { value: entry, label: `Entry $${formatPriceAuto(entry)}` } : undefined;
 
-  // Give the line real vertical headroom via liveline's `padding`, which insets
-  // the *data range* (chartH = h − pad.top − pad.bottom; the data-min maps to
-  // h − pad.bottom). A bare wrapper inset only adds empty space below the canvas
-  // while the line still hugs the floor — hence the prior bottom-clipping. We
-  // keep enough right/left for the value pill + axis labels.
   return (
     <div className="absolute inset-0">
       <Liveline
@@ -109,7 +104,6 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
         showValue
         grid
         lineWidth={2}
-        padding={{ top: 14, right: 56, bottom: 20, left: 8 }}
         referenceLine={referenceLine}
         loading={points.length === 0 && typeof mark !== "number"}
         emptyText={`Waiting for ${symbol} feed…`}
