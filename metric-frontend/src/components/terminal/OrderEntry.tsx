@@ -33,7 +33,7 @@ const VENUES: { tag: VenueChoice; label: string }[] = [
   { tag: "flash_trade", label: "Flash" },
   { tag: "gmtrade", label: "GMTrade" },
 ];
-const MAX_LEVERAGE = 20;
+const DEFAULT_MAX_LEVERAGE = 20; // fallback until /route reports the per-venue max
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
@@ -75,6 +75,7 @@ export function OrderEntry() {
   const [venue, setVenue] = useState<VenueChoice>("auto");
   const [type, setType] = useState<"market" | "limit">("market");
   const [walletUsdc, setWalletUsdc] = useState<number | null>(null);
+  const [maxLev, setMaxLev] = useState(DEFAULT_MAX_LEVERAGE);
   const [collateral, setCollateral] = useState("");
   const [size, setSize] = useState("");
   const [limitPrice, setLimitPrice] = useState("");
@@ -133,6 +134,35 @@ export function OrderEntry() {
       setBusy(false);
     }
   }, [signer, addToast, updateToast, setJwt, refreshBalances]);
+
+  // Resolve the leverage-slider ceiling from /route's per-venue maxLeverage.
+  // Phoenix is market-specific (SOL ~14×, BTC ~19×); Jupiter/Flash/GMTrade go far
+  // higher (up to ~250–500×). For "auto" we offer the highest any viable venue
+  // supports (high leverage then steers the router to that venue); for an explicit
+  // venue we offer that venue's max. Re-fetched on symbol/venue change.
+  useEffect(() => {
+    let cancelled = false;
+    imperial
+      .getRoute({ asset: symbol, side: "long", notional: 100, desiredLeverage: 2 })
+      .then((r) => {
+        if (cancelled) return;
+        const cands = r.candidates ?? [];
+        const viable = cands.filter((c) => !c.filteredReason);
+        let m: number;
+        if (venue !== "auto") {
+          m = cands.find((c) => c.venue === venue)?.maxLeverage ?? r.maxLeverage ?? DEFAULT_MAX_LEVERAGE;
+        } else {
+          m = viable.length ? Math.max(...viable.map((c) => c.maxLeverage)) : r.maxLeverage ?? DEFAULT_MAX_LEVERAGE;
+        }
+        setMaxLev(Math.max(2, Math.round(m || DEFAULT_MAX_LEVERAGE)));
+      })
+      .catch(() => {
+        if (!cancelled) setMaxLev(DEFAULT_MAX_LEVERAGE);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, venue]);
 
   // Returning wallets: hydrate the cached 30-day JWT from localStorage so a valid
   // session skips the "Authenticate" prompt (no re-sign). loadJwt enforces expiry,
@@ -406,7 +436,8 @@ export function OrderEntry() {
         <input className={inputCls} inputMode="decimal" placeholder="0.00" value={size} onChange={(e) => setSize(e.target.value)} />
       </Field>
 
-      {/* Leverage slider — drives size = collateral × leverage */}
+      {/* Leverage slider — drives size = collateral × leverage. Max is the highest
+          leverage available for this symbol (per venue, from /route). */}
       <Field
         label="Leverage"
         right={<span className="font-mono text-[11px] text-metric-primary">{(lev > 0 ? lev : 1).toFixed(1)}×</span>}
@@ -414,16 +445,16 @@ export function OrderEntry() {
         <input
           type="range"
           min={1}
-          max={MAX_LEVERAGE}
-          step={0.5}
-          value={Math.min(MAX_LEVERAGE, Math.max(1, lev > 0 ? lev : 1))}
+          max={maxLev}
+          step={maxLev > 25 ? 1 : 0.5}
+          value={Math.min(maxLev, Math.max(1, lev > 0 ? lev : 1))}
           onChange={(e) => collateralNum > 0 && setSize(String(+(collateralNum * Number(e.target.value)).toFixed(2)))}
           disabled={!(collateralNum > 0)}
           className="h-1 w-full cursor-pointer appearance-none rounded bg-metric-border accent-metric-primary disabled:cursor-not-allowed disabled:opacity-40"
         />
         <div className="mt-1 flex justify-between font-mono text-[9px] text-text-secondary/50">
           <span>1×</span>
-          <span>{MAX_LEVERAGE}×</span>
+          <span>{maxLev}× max{venue === "auto" ? "" : ` · ${venue.replace("_", " ")}`}</span>
         </div>
       </Field>
 
