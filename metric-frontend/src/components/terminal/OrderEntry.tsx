@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
 import { ImperialError } from "@/lib/imperial/client";
+import { loadJwt } from "@/lib/imperial/jwt";
 import type { VenueTag } from "@/lib/imperial/types";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
@@ -31,7 +32,7 @@ const VENUES: { tag: VenueChoice; label: string }[] = [
   { tag: "flash_trade", label: "Flash" },
   { tag: "gmtrade", label: "GMTrade" },
 ];
-const LEVERAGE_PRESETS = [2, 5, 10, 25];
+const MAX_LEVERAGE = 20;
 
 function Field({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -73,7 +74,6 @@ export function OrderEntry() {
   const [limitPrice, setLimitPrice] = useState("");
   const [slippageBps, setSlippageBps] = useState(100);
   const [busy, setBusy] = useState(false);
-  const [depositAmt, setDepositAmt] = useState("");
 
   const profileBalance = useMemo(() => {
     const p = balances.find((b) => b.profileIndex === profileIndex);
@@ -128,30 +128,17 @@ export function OrderEntry() {
     }
   }, [signer, addToast, updateToast, setJwt, refreshBalances]);
 
-  const handleDeposit = useCallback(async () => {
-    const amt = Number(depositAmt);
-    if (!wallet || !(amt > 0)) return;
-    setBusy(true);
-    const tid = addToast("loading", `Depositing $${amt} to profile ${profileIndex}…`);
-    try {
-      const token = await ensureJwt();
-      const { transaction } = await imperial.buildDepositTx({
-        wallet,
-        profileIndex,
-        amount: Math.round(amt * 1e6),
-        mode: "deposit",
-      });
-      const { signature } = await signer.signAndSendTransaction({ kind: "solana-versioned", base64: transaction });
-      updateToast(tid, { type: "success", title: "Deposit submitted", detail: `$${amt} → profile ${profileIndex}`, txid: signature });
-      setDepositAmt("");
-      // Balances settle a few seconds after confirmation.
-      setTimeout(() => void refreshBalances(token), 4000);
-    } catch (e) {
-      updateToast(tid, { type: "error", title: "Deposit failed", detail: errMsg(e) });
-    } finally {
-      setBusy(false);
+  // Returning wallets: hydrate the cached 30-day JWT from localStorage so a valid
+  // session skips the "Authenticate" prompt (no re-sign). loadJwt enforces expiry,
+  // so an expired token falls back to the auth button.
+  useEffect(() => {
+    if (!wallet || jwt) return;
+    const cached = loadJwt(wallet);
+    if (cached) {
+      setJwt(cached);
+      void refreshBalances(cached);
     }
-  }, [depositAmt, wallet, profileIndex, ensureJwt, signer, addToast, updateToast, refreshBalances]);
+  }, [wallet, jwt, setJwt, refreshBalances]);
 
   // Gas / wallet-USDC preflight before signing a deposit. The operator sponsors
   // rent + ATA creation, but the wallet still pays the base tx fee, so it needs
@@ -342,18 +329,26 @@ export function OrderEntry() {
         <input className={inputCls} inputMode="decimal" placeholder="0.00" value={size} onChange={(e) => setSize(e.target.value)} />
       </Field>
 
-      {/* Leverage presets — set size from collateral × leverage */}
-      <div className="flex gap-1">
-        {LEVERAGE_PRESETS.map((x) => (
-          <button
-            key={x}
-            onClick={() => collateralNum > 0 && setSize(String(+(collateralNum * x).toFixed(2)))}
-            className="flex-1 border border-metric-border py-1 font-mono text-[10px] text-text-secondary/70 transition-colors hover:border-metric-primary/40 hover:text-metric-primary"
-          >
-            {x}x
-          </button>
-        ))}
-      </div>
+      {/* Leverage slider — drives size = collateral × leverage */}
+      <Field
+        label="Leverage"
+        right={<span className="font-mono text-[11px] text-metric-primary">{(lev > 0 ? lev : 1).toFixed(1)}×</span>}
+      >
+        <input
+          type="range"
+          min={1}
+          max={MAX_LEVERAGE}
+          step={0.5}
+          value={Math.min(MAX_LEVERAGE, Math.max(1, lev > 0 ? lev : 1))}
+          onChange={(e) => collateralNum > 0 && setSize(String(+(collateralNum * Number(e.target.value)).toFixed(2)))}
+          disabled={!(collateralNum > 0)}
+          className="h-1 w-full cursor-pointer appearance-none rounded bg-metric-border accent-metric-primary disabled:cursor-not-allowed disabled:opacity-40"
+        />
+        <div className="mt-1 flex justify-between font-mono text-[9px] text-text-secondary/50">
+          <span>1×</span>
+          <span>{MAX_LEVERAGE}×</span>
+        </div>
+      </Field>
 
       <Field label="Slippage (bps)">
         <input
@@ -403,26 +398,6 @@ export function OrderEntry() {
               className="bg-metric-sell py-2.5 font-mono text-[13px] font-semibold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {depositNeeded > 0 ? "Deposit & Short" : "Short"}
-            </button>
-          </div>
-        )}
-
-        {/* Deposit affordance */}
-        {signer.isReady && (
-          <div className="flex gap-1">
-            <input
-              className="min-w-0 flex-1 border border-metric-border bg-metric-bg px-2 py-1 font-mono text-[11px] text-text-primary outline-none focus:border-metric-primary/60"
-              inputMode="decimal"
-              placeholder="USDC"
-              value={depositAmt}
-              onChange={(e) => setDepositAmt(e.target.value)}
-            />
-            <button
-              onClick={handleDeposit}
-              disabled={busy || !(Number(depositAmt) > 0)}
-              className="border border-metric-border px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-text-secondary transition-colors hover:border-metric-primary/40 hover:text-metric-primary disabled:opacity-40"
-            >
-              Deposit
             </button>
           </div>
         )}
