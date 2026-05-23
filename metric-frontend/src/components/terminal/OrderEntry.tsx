@@ -286,6 +286,30 @@ export function OrderEntry() {
     [wallet, busy, profileIndex, symbol, venue, type, sizeNum, collateralNum, mark, limitPrice, slippageBps, lev, ensureJwt, signer, connection, assertDepositReady, addToast, updateToast, bumpRefresh, refreshBalances]
   );
 
+  // Manual "withdraw all" — pull the active profile's entire free USDC back to the
+  // wallet (one signature). build-tx is unauthenticated (wallet-keyed). Distinct from
+  // trading; useful when funds sit idle in a profile after a close.
+  const withdrawProfile = useCallback(async () => {
+    if (!wallet || busy) return;
+    const native = balances.find((b) => b.profileIndex === profileIndex)?.usdc ?? 0;
+    if (!(native > 0)) return;
+    setBusy(true);
+    const tid = addToast("loading", `Withdrawing $${(native / 1e6).toFixed(2)} from profile ${profileIndex}…`);
+    try {
+      const { transaction } = await imperial.buildDepositTx({ wallet, profileIndex, amount: native, mode: "withdraw" });
+      const { signature } = await signer.signAndSendTransaction({ kind: "solana-versioned", base64: transaction });
+      await connection.confirmTransaction(signature, "confirmed").catch(() => {});
+      updateToast(tid, { type: "success", title: "Withdrawn to wallet", detail: `$${(native / 1e6).toFixed(2)} → wallet`, txid: signature });
+      bumpRefresh();
+      if (jwt) void refreshBalances(jwt);
+      void fetchWalletUsdc().then((v) => setWalletUsdc(v));
+    } catch (e) {
+      updateToast(tid, { type: "error", title: "Withdraw failed", detail: errMsg(e) });
+    } finally {
+      setBusy(false);
+    }
+  }, [wallet, busy, balances, profileIndex, signer, connection, jwt, refreshBalances, fetchWalletUsdc, addToast, updateToast, bumpRefresh]);
+
   const notConnected = !signer.isReady;
   const needsAuth = signer.isReady && !jwt;
 
@@ -334,8 +358,24 @@ export function OrderEntry() {
       <Field
         label="Collateral (USDC)"
         right={
-          <span className="font-mono text-[10px] text-text-secondary/60">
-            wallet ${walletUsdc != null ? walletUsdc.toFixed(2) : "—"} · profile ${profileBalance.toFixed(2)}
+          <span className="flex items-center gap-2 font-mono text-[10px] text-text-secondary/60">
+            <span>
+              wallet ${walletUsdc != null ? walletUsdc.toFixed(2) : "—"} · profile ${profileBalance.toFixed(2)}
+            </span>
+            {profileBalance > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void withdrawProfile();
+                }}
+                disabled={busy}
+                title={`Withdraw all $${profileBalance.toFixed(2)} from profile ${profileIndex} to your wallet (1 signature)`}
+                className="uppercase tracking-wider text-metric-primary transition-colors hover:text-metric-primary/80 disabled:opacity-40"
+              >
+                withdraw
+              </button>
+            )}
           </span>
         }
       >
