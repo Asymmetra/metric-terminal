@@ -50,15 +50,16 @@ export function depositShortfallNative(collateralUsd: number, profileFreeNative:
 
 /**
  * Ordered venues to attempt a market order on. Imperial's /route ranks by COST
- * and is order-type-blind — it can return Phoenix, which is a CLOB and rejects
- * market orders. So for market orders we drop Phoenix and keep the remaining
- * route candidates in cost order; the caller tries them in turn until one fills.
+ * and is order-type-blind. We **honor its pick** (including Phoenix — Phoenix
+ * market orders fill once `marketPrice` is sent at the right scale; see
+ * `toMarketPrice` in order-builder) and list the remaining candidates after it in
+ * cost order, so the caller falls through to the next-cheapest venue only if the
+ * router's choice genuinely rejects. We never hardcode GMTrade (it has issues at
+ * scale); GMTrade is used only as a last resort when `/route` is unavailable.
  *
- *  - market: route candidates with `!filteredReason && venue !== "phoenix"`, in
- *    order; if the user explicitly picked a viable non-Phoenix venue, it goes
- *    first. Empty array ⇒ no market-capable venue (e.g. a Phoenix-only synthetic)
- *    so the caller should not deposit and should suggest a limit order. If /route
- *    is unavailable, falls back to the selected non-Phoenix venue or GMTrade.
+ *  - market: `[route.venue, ...other viable candidates in cost order]`, filtering
+ *    only `filteredReason`. An explicit user venue choice goes first. If `/route`
+ *    is down, falls back to the selected venue or GMTrade.
  *  - limit: just the selected venue (or route's pick) — Phoenix limits rest fine.
  */
 export function marketVenueCandidates(args: {
@@ -73,14 +74,17 @@ export function marketVenueCandidates(args: {
   }
   const cands = route?.candidates ?? [];
   if (cands.length === 0) {
-    // Route unavailable — best effort. Honor an explicit non-Phoenix pick, else GMTrade.
-    return [selectedVenue !== "auto" && selectedVenue !== "phoenix" ? selectedVenue : "gmtrade"];
+    // Router unavailable — honor an explicit pick, else GMTrade (generic market venue).
+    return [selectedVenue !== "auto" ? selectedVenue : "gmtrade"];
   }
-  const viable = cands.filter((c) => !c.filteredReason && c.venue !== "phoenix").map((c) => c.venue);
-  if (viable.length === 0) return []; // Phoenix-only asset → market unsupported here
-  let ordered = viable;
-  if (selectedVenue !== "auto" && selectedVenue !== "phoenix" && viable.includes(selectedVenue)) {
-    ordered = [selectedVenue, ...viable.filter((v) => v !== selectedVenue)];
+  const viable = cands.filter((c) => !c.filteredReason).map((c) => c.venue); // keep Phoenix
+  // Honor the router: its chosen venue first, then the rest in cost order.
+  const head = route?.venue;
+  let ordered = head ? [head, ...viable.filter((v) => v !== head)] : viable;
+  if (ordered.length === 0) return [];
+  // An explicit (non-auto) venue choice wins.
+  if (selectedVenue !== "auto") {
+    ordered = [selectedVenue, ...ordered.filter((v) => v !== selectedVenue)];
   }
   return [...new Set(ordered)];
 }

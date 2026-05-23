@@ -29,11 +29,11 @@ export default async function run(ctx) {
   const rpc = getRpc();
   if ((await walletSol(rpc)) < 0.01) throw new Error("need ≥0.01 SOL for gas");
 
-  // 1. real route — show what Auto would have picked, then apply the rule.
+  // 1. real route — honor the router's pick (Phoenix included), list rest after.
   const route = await getRoute({ asset: "SOL", side: "long", notional: SIZE, desiredLeverage: SIZE / COL });
   r.info(`/route picked: ${route.venue}   candidates: ${(route.candidates || []).map((c) => c.venue).join(",")}`);
   const venues = marketVenues(route, "auto");
-  r.assert(!venues.includes("phoenix"), "Phoenix excluded from market venues", `venues=[${venues.join(",")}]`);
+  r.assert(venues[0] === route.venue, "router's pick is tried first (honored, not excluded)", `venues=[${venues.join(",")}]`);
   if (!r.assert(venues.length > 0, "a market-capable venue is available")) return;
 
   // 2. fund EXACTLY the collateral (no buffer) — verifies $10 in == $10 deposited.

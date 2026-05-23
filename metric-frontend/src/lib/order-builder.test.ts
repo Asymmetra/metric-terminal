@@ -81,10 +81,15 @@ describe("buildOrderRequest — market long (matches live test shape)", () => {
     expect(req.action).toBe(Action.Increase);
     expect(req.orderType).toBe(OrderType.Market);
   });
-  it("scales size + collateral + mark", () => {
+  it("scales size + collateral, and marketPrice at the Phoenix venue scale (1e6)", () => {
     expect(req.sizeUsd).toBe(20_000_000);
     expect(req.collateralAmount).toBe(10_000_000);
-    expect(req.marketPrice).toBe(87_600_000_000);
+    // Phoenix market orders want marketPrice in 1e6 (USD 6-dec), not 1e9 — the bug fix.
+    expect(req.marketPrice).toBe(87_600_000);
+  });
+  it("uses the 1e9 oracle scale for non-Phoenix market venues", () => {
+    expect(buildOrderRequest({ ...base, venue: "gmtrade" }).marketPrice).toBe(87_600_000_000);
+    expect(buildOrderRequest({ ...base, venue: "jupiter" }).marketPrice).toBe(87_600_000_000);
   });
   it("carries the symbol and no trigger for market", () => {
     expect(req.symbol).toBe("SOL");

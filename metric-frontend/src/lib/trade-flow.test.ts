@@ -30,34 +30,56 @@ const route = (candidates: { venue: string; filteredReason?: string | null }[], 
   ({ venue, candidates: candidates.map((c) => ({ ...c, filteredReason: c.filteredReason ?? null })) } as never);
 
 describe("marketVenueCandidates", () => {
-  it("drops Phoenix for market orders, keeps cost order", () => {
-    const r = route([{ venue: "phoenix" }, { venue: "flash_trade" }, { venue: "gmtrade" }, { venue: "jupiter" }]);
+  it("honors the router's pick first and KEEPS Phoenix (its market orders fill)", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "flash_trade" }, { venue: "gmtrade" }, { venue: "jupiter" }]); // venue=phoenix
     expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual([
+      "phoenix",
       "flash_trade",
       "gmtrade",
       "jupiter",
     ]);
   });
-  it("returns [] for a Phoenix-only asset on a market order", () => {
-    const r = route([{ venue: "phoenix" }]);
-    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual([]);
-  });
-  it("drops candidates with a filteredReason", () => {
-    const r = route([{ venue: "phoenix" }, { venue: "flash_trade", filteredReason: "too large" }, { venue: "gmtrade" }]);
-    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual(["gmtrade"]);
-  });
-  it("puts an explicitly-selected non-Phoenix venue first", () => {
-    const r = route([{ venue: "flash_trade" }, { venue: "gmtrade" }]);
-    expect(marketVenueCandidates({ type: "market", selectedVenue: "gmtrade", route: r })).toEqual([
+  it("puts the router venue first, then the rest in cost order", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "gmtrade" }, { venue: "flash_trade" }], "gmtrade");
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual([
       "gmtrade",
+      "phoenix",
       "flash_trade",
     ]);
   });
-  it("falls back to GMTrade when route is unavailable (market)", () => {
+  it("Phoenix-only asset → just Phoenix (no longer excluded)", () => {
+    const r = route([{ venue: "phoenix" }]);
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual(["phoenix"]);
+  });
+  it("drops candidates with a filteredReason (but keeps the router venue)", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "flash_trade", filteredReason: "too large" }, { venue: "gmtrade" }]); // venue=phoenix
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toEqual(["phoenix", "gmtrade"]);
+  });
+  it("an explicit venue choice wins, ahead of the router pick", () => {
+    const r = route([{ venue: "phoenix" }, { venue: "gmtrade" }, { venue: "flash_trade" }]); // venue=phoenix
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "gmtrade", route: r })).toEqual([
+      "gmtrade",
+      "phoenix",
+      "flash_trade",
+    ]);
+  });
+  it("falls back to GMTrade only when route is unavailable (market)", () => {
     expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: null })).toEqual(["gmtrade"]);
   });
   it("keeps the selected venue for limit orders (Phoenix is fine)", () => {
     expect(marketVenueCandidates({ type: "limit", selectedVenue: "phoenix", route: null })).toEqual(["phoenix"]);
+  });
+});
+
+// ───────────────────────────── venue-aware marketPrice scale (regression for the bug)
+
+describe("toMarketPrice (venue-specific scale)", () => {
+  it("scales Phoenix marketPrice at 1e6, others at 1e9", async () => {
+    const { toMarketPrice } = await import("./order-builder");
+    expect(toMarketPrice(84.66, "phoenix")).toBe(84_660_000); // 1e6 — the fix
+    expect(toMarketPrice(84.66, "gmtrade")).toBe(84_660_000_000); // 1e9
+    expect(toMarketPrice(84.66, "jupiter")).toBe(84_660_000_000);
+    expect(toMarketPrice(84.66, "flash_trade")).toBe(84_660_000_000);
   });
 });
 

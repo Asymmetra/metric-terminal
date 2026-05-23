@@ -39,6 +39,11 @@ export const TriggerCondition = { above: 0, below: 1 };
 export const usdFixed = (d) => Math.round(d * USD_SCALE);
 export const oracle = (d) => Math.round(d * PRICE_SCALE);
 
+// MIRROR of src/lib/order-builder.ts toMarketPrice: a MARKET order's marketPrice
+// scale is venue-specific — Phoenix wants 1e6 (USD 6-dec), the rest want 1e9.
+const MARKET_PRICE_SCALE = { phoenix: USD_SCALE, jupiter: PRICE_SCALE, flash_trade: PRICE_SCALE, gmtrade: PRICE_SCALE };
+export const marketPriceFixed = (d, venue) => Math.round(d * (MARKET_PRICE_SCALE[venue] ?? PRICE_SCALE));
+
 // ───────────────────────────── colored reporter
 
 const C = { reset: "\x1b[0m", green: "\x1b[32m", red: "\x1b[31m", dim: "\x1b[2m", cyan: "\x1b[36m", yellow: "\x1b[33m" };
@@ -278,13 +283,12 @@ export async function getRoute({ asset, side = "long", notional, desiredLeverage
  */
 export function marketVenues(route, selectedVenue = "auto") {
   const cands = route?.candidates ?? [];
-  if (cands.length === 0) return [selectedVenue !== "auto" && selectedVenue !== "phoenix" ? selectedVenue : "gmtrade"];
-  const viable = cands.filter((c) => !c.filteredReason && c.venue !== "phoenix").map((c) => c.venue);
-  if (viable.length === 0) return [];
-  let ordered = viable;
-  if (selectedVenue !== "auto" && selectedVenue !== "phoenix" && viable.includes(selectedVenue)) {
-    ordered = [selectedVenue, ...viable.filter((v) => v !== selectedVenue)];
-  }
+  if (cands.length === 0) return [selectedVenue !== "auto" ? selectedVenue : "gmtrade"];
+  const viable = cands.filter((c) => !c.filteredReason).map((c) => c.venue); // keep Phoenix
+  const head = route?.venue;
+  let ordered = head ? [head, ...viable.filter((v) => v !== head)] : viable;
+  if (ordered.length === 0) return [];
+  if (selectedVenue !== "auto") ordered = [selectedVenue, ...ordered.filter((v) => v !== selectedVenue)];
   return [...new Set(ordered)];
 }
 
@@ -311,7 +315,7 @@ export function buildOrder(o) {
     triggerPrice: isLimit ? oracle(o.limitPriceUsd) : 0,
     priority: 0,
     fundingStatus: 0,
-    marketPrice: oracle(o.markPrice),
+    marketPrice: marketPriceFixed(o.markPrice, o.venue),
     symbol: o.symbol,
   };
 }
@@ -331,7 +335,7 @@ export function buildClose(o) {
     triggerPrice: 0,
     priority: 0,
     fundingStatus: 0,
-    marketPrice: oracle(o.markPrice),
+    marketPrice: marketPriceFixed(o.markPrice, o.venue),
     symbol: o.symbol,
   };
 }

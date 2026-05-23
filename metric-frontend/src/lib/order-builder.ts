@@ -58,6 +58,24 @@ export function toOracle(dollars: number): number {
   return Math.round(dollars * PRICE_SCALE);
 }
 
+/**
+ * Scale for a MARKET order's `marketPrice` — venue-specific. Imperial's docs say
+ * oracle scale (1e9), and that's what GMTrade/Jupiter/Flash accept, but **Phoenix
+ * market orders want the 6-decimal USD scale (1e6)** — passing 1e9 there is "1000×
+ * off" and the keeper rejects with a generic "Failed to place order" (confirmed
+ * live + by the Imperial dev). Phoenix *limit* triggerPrice still uses 1e9, so this
+ * applies only to the market-order `marketPrice` field.
+ */
+export const MARKET_PRICE_SCALE: Record<VenueTag, number> = {
+  phoenix: USD_SCALE, // 1e6
+  jupiter: PRICE_SCALE, // 1e9
+  flash_trade: PRICE_SCALE, // 1e9
+  gmtrade: PRICE_SCALE, // 1e9
+};
+export function toMarketPrice(dollars: number, venue: VenueTag): number {
+  return Math.round(dollars * MARKET_PRICE_SCALE[venue]);
+}
+
 /** Returns a human error string if the input can't be submitted, else null. */
 export function validateOrder(input: OrderFormInput): string | null {
   if (!input.wallet) return "Connect a wallet first.";
@@ -100,7 +118,7 @@ export function buildOrderRequest(input: OrderFormInput): OrderRequest {
     triggerPrice: isLimit ? toOracle(Number(input.limitPrice)) : 0,
     priority: 0,
     fundingStatus: FundingStatus.FundedAtCreation,
-    marketPrice: toOracle(input.markPrice),
+    marketPrice: toMarketPrice(input.markPrice, input.venue),
     symbol: input.symbol,
   };
 }
@@ -131,7 +149,7 @@ export function buildCloseRequest(params: {
     triggerPrice: 0,
     priority: 0,
     fundingStatus: FundingStatus.FundedAtCreation,
-    marketPrice: toOracle(params.markPrice),
+    marketPrice: toMarketPrice(params.markPrice, params.venue),
     symbol: params.symbol,
   };
 }

@@ -191,12 +191,11 @@ export function OrderEntry() {
   const submit = useCallback(
     async (side: "long" | "short") => {
       if (!wallet || busy) return;
-      // Resolve which venue(s) to attempt. Imperial /route ranks purely by cost
-      // and is order-type-blind, so for a MARKET order it can return Phoenix —
-      // which is a CLOB and rejects market orders. marketVenueCandidates drops
-      // Phoenix for market and yields a cost-ordered fall-through list that
-      // openWithDeposit tries in turn; limit orders keep the selected/routed
-      // venue (Phoenix limits rest fine).
+      // Resolve which venue(s) to attempt. We honor Imperial /route's pick (incl.
+      // Phoenix — its market orders fill once marketPrice is sent at the right
+      // venue scale, see toMarketPrice) and list the other candidates after it in
+      // cost order; openWithDeposit tries them in turn, falling through only if the
+      // router's choice genuinely rejects.
       let route: Awaited<ReturnType<typeof imperial.getRoute>> | null = null;
       try {
         route = await imperial.getRoute({
@@ -212,11 +211,7 @@ export function OrderEntry() {
       }
       const venues = marketVenueCandidates({ type, selectedVenue: venue, route });
       if (type === "market" && venues.length === 0) {
-        addToast(
-          "error",
-          "Market order unavailable",
-          `${symbol} only trades on Phoenix, which doesn't support market orders here — place a Limit order instead.`
-        );
+        addToast("error", "Market order unavailable", `No venue is currently available to market-trade ${symbol}.`);
         return;
       }
       const input: OrderFormInput = {

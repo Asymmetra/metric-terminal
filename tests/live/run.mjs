@@ -30,6 +30,7 @@ import * as accountBootstrap from "./scenarios/account-bootstrap.mjs";
 import * as depositWithdraw from "./scenarios/deposit-withdraw.mjs";
 import * as roundtripMarket from "./scenarios/roundtrip-market.mjs";
 import * as roundtripAuto from "./scenarios/roundtrip-auto.mjs";
+import * as phoenixMarket from "./scenarios/phoenix-market.mjs";
 import * as partialClose from "./scenarios/partial-close.mjs";
 import * as collateralAdjust from "./scenarios/collateral-adjust.mjs";
 
@@ -41,6 +42,7 @@ const SCENARIOS = [
   accountBootstrap,
   depositWithdraw,
   roundtripAuto,
+  phoenixMarket,
   roundtripMarket,
   partialClose,
   collateralAdjust,
