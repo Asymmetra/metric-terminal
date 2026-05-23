@@ -26,12 +26,38 @@ export const USD_SCALE = 1_000_000; // 6-decimal fixed point
 export const PRICE_SCALE = 1_000_000_000; // 1e9 oracle scale
 export const MIN_COLLATERAL_USD = 10;
 
-export const VENUE_TO_UNDERWRITER: Record<VenueTag, Underwriter> = {
-  jupiter: Underwriter.Jupiter,
-  flash_trade: Underwriter.FlashTrade,
-  phoenix: Underwriter.Phoenix,
-  gmtrade: Underwriter.GMTrade,
+/**
+ * SINGLE SOURCE OF TRUTH for the per-venue facts Imperial does NOT expose at
+ * runtime: the numeric `underwriter` code for `/mobile/orders`, the market-order
+ * `marketPrice` scale, the key the venue uses in `/mark-prices` rows, and a display
+ * label. Everything else is fetched live — which assets exist (`/mark-prices`),
+ * per-venue max leverage + fees + quotes (`/route`, `/mark-prices`), and routing
+ * (`/route` candidates). To support a new venue Imperial adds, add its tag to
+ * `VenueTag` (imperial/types) and one entry here; the dropdown, venue-quotes panel,
+ * routing, and order builder all read from this.
+ */
+export interface VenueConfig {
+  label: string;
+  underwriter: Underwriter;
+  /** Scale for a market order's `marketPrice` (Phoenix wants 1e6; others 1e9). */
+  marketPriceScale: number;
+  /** Key this venue uses in a `/mark-prices` row / `marksByVenue`. */
+  markKey: string;
+}
+export const VENUE_CONFIG: Record<VenueTag, VenueConfig> = {
+  phoenix: { label: "Phoenix", underwriter: Underwriter.Phoenix, marketPriceScale: USD_SCALE, markKey: "phoenix" },
+  jupiter: { label: "Jupiter", underwriter: Underwriter.Jupiter, marketPriceScale: PRICE_SCALE, markKey: "jupiter" },
+  flash_trade: { label: "Flash", underwriter: Underwriter.FlashTrade, marketPriceScale: PRICE_SCALE, markKey: "flash" },
+  gmtrade: { label: "GMTrade", underwriter: Underwriter.GMTrade, marketPriceScale: PRICE_SCALE, markKey: "gmtrade" },
 };
+
+/** Venue tags in display order, derived from the config (no separate hardcoded list). */
+export const ALL_VENUE_TAGS = Object.keys(VENUE_CONFIG) as VenueTag[];
+
+/** Human label for any venue string — falls back to a title-cased tag for unknowns. */
+export function venueLabel(v: string): string {
+  return VENUE_CONFIG[v as VenueTag]?.label ?? v.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export interface OrderFormInput {
   wallet: string;
@@ -59,21 +85,14 @@ export function toOracle(dollars: number): number {
 }
 
 /**
- * Scale for a MARKET order's `marketPrice` — venue-specific. Imperial's docs say
- * oracle scale (1e9), and that's what GMTrade/Jupiter/Flash accept, but **Phoenix
- * market orders want the 6-decimal USD scale (1e6)** — passing 1e9 there is "1000×
- * off" and the keeper rejects with a generic "Failed to place order" (confirmed
- * live + by the Imperial dev). Phoenix *limit* triggerPrice still uses 1e9, so this
- * applies only to the market-order `marketPrice` field.
+ * A MARKET order's `marketPrice` is venue-scaled (see `VENUE_CONFIG`): Phoenix wants
+ * the 6-decimal USD scale (1e6) while GMTrade/Jupiter/Flash want oracle scale (1e9).
+ * Passing 1e9 to Phoenix is "1000× off" → the keeper rejects with a generic error.
+ * (Phoenix *limit* `triggerPrice` still uses 1e9 — only market `marketPrice` differs.)
+ * Unknown venues default to oracle scale.
  */
-export const MARKET_PRICE_SCALE: Record<VenueTag, number> = {
-  phoenix: USD_SCALE, // 1e6
-  jupiter: PRICE_SCALE, // 1e9
-  flash_trade: PRICE_SCALE, // 1e9
-  gmtrade: PRICE_SCALE, // 1e9
-};
 export function toMarketPrice(dollars: number, venue: VenueTag): number {
-  return Math.round(dollars * MARKET_PRICE_SCALE[venue]);
+  return Math.round(dollars * (VENUE_CONFIG[venue]?.marketPriceScale ?? PRICE_SCALE));
 }
 
 /** Returns a human error string if the input can't be submitted, else null. */
@@ -107,7 +126,7 @@ export function buildOrderRequest(input: OrderFormInput): OrderRequest {
   return {
     wallet: input.wallet,
     profileIndex: input.profileIndex,
-    underwriter: VENUE_TO_UNDERWRITER[input.venue],
+    underwriter: VENUE_CONFIG[input.venue].underwriter,
     side,
     action: Action.Increase,
     orderType: isLimit ? OrderType.Limit : OrderType.Market,
@@ -138,7 +157,7 @@ export function buildCloseRequest(params: {
   return {
     wallet: params.wallet,
     profileIndex: params.profileIndex,
-    underwriter: VENUE_TO_UNDERWRITER[params.venue],
+    underwriter: VENUE_CONFIG[params.venue].underwriter,
     side,
     action: Action.Decrease,
     orderType: OrderType.Market,

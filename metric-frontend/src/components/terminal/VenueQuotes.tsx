@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { useMarketStore } from "@/stores/marketStore";
 import { imperial } from "@/lib/imperial";
-import type { CostBreakdown, MarkPriceRow, RouteResponse, VenueTag } from "@/lib/imperial/types";
+import type { CostBreakdown, MarkPriceRow, RouteResponse, VenueMarkPrice } from "@/lib/imperial/types";
+import { ALL_VENUE_TAGS, VENUE_CONFIG, venueLabel } from "@/lib/order-builder";
 import { formatPriceAuto } from "@/lib/format";
 
 /**
@@ -15,13 +16,6 @@ import { formatPriceAuto } from "@/lib/format";
  * Both `/mark-prices` and `/route` are polled every 5s so this works regardless
  * of WS health.
  */
-
-const VENUES: { tag: VenueTag; label: string; markKey: "phoenix" | "jupiter" | "flash" | "gmtrade" }[] = [
-  { tag: "phoenix", label: "Phoenix", markKey: "phoenix" },
-  { tag: "jupiter", label: "Jupiter", markKey: "jupiter" },
-  { tag: "flash_trade", label: "Flash", markKey: "flash" },
-  { tag: "gmtrade", label: "GMTrade", markKey: "gmtrade" },
-];
 
 function ago(ms: number | undefined, now: number): string {
   if (!ms) return "—";
@@ -73,6 +67,16 @@ export function VenueQuotes() {
     cand[c.venue] = { cost: c.expectedCostUsd, cb: c.costBreakdown, maxLev: c.maxLeverage, filtered: c.filteredReason };
   }
 
+  // Venues to render: the known config in display order, plus any venue Imperial's
+  // /route returns that we don't have a config for yet (so a new venue shows up
+  // without a code change). markKey falls back to the tag for unknown venues.
+  const tags = [...ALL_VENUE_TAGS, ...Object.keys(cand).filter((t) => !ALL_VENUE_TAGS.includes(t as never))];
+  const venues = tags.map((tag) => ({
+    tag,
+    label: venueLabel(tag),
+    markKey: VENUE_CONFIG[tag as keyof typeof VENUE_CONFIG]?.markKey ?? tag,
+  }));
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex shrink-0 items-center justify-between border-b border-metric-border/40 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wider text-text-secondary/40">
@@ -81,8 +85,8 @@ export function VenueQuotes() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {VENUES.map((v) => {
-          const mp = row?.[v.markKey] ?? null;
+        {venues.map((v) => {
+          const mp = (row?.[v.markKey as keyof MarkPriceRow] as VenueMarkPrice | null) ?? null;
           const c = cand[v.tag];
           const isBest = route?.venue === v.tag;
           const fee = c?.cb ? (Number(c.cb.openFee) || 0) + (Number(c.cb.closeFee) || 0) : null;

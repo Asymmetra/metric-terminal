@@ -17,6 +17,8 @@ import {
   impliedLeverage,
   validateOrder,
   MIN_COLLATERAL_USD,
+  ALL_VENUE_TAGS,
+  venueLabel,
   type OrderFormInput,
 } from "@/lib/order-builder";
 import { openWithDeposit, marketVenueCandidates, TradeFlowError } from "@/lib/trade-flow";
@@ -26,14 +28,34 @@ import { formatPriceAuto } from "@/lib/format";
 // (e.g. SOL market orders route to GMTrade; Phoenix is CLOB/limit-only via this
 // path). Users can still force a specific venue.
 type VenueChoice = VenueTag | "auto";
+// Derived from VENUE_CONFIG's single source of truth (order-builder) so a new venue
+// only needs one config entry, not an edit here.
 const VENUES: { tag: VenueChoice; label: string }[] = [
   { tag: "auto", label: "Auto (best route)" },
-  { tag: "phoenix", label: "Phoenix" },
-  { tag: "jupiter", label: "Jupiter" },
-  { tag: "flash_trade", label: "Flash" },
-  { tag: "gmtrade", label: "GMTrade" },
+  ...ALL_VENUE_TAGS.map((tag) => ({ tag, label: venueLabel(tag) })),
 ];
 const DEFAULT_MAX_LEVERAGE = 20; // fallback until /route reports the per-venue max
+
+// Leverage slider scale: linear 1..50, then LOGARITHMIC 50..max (so the common
+// low-leverage range stays fine-grained while still reaching 250×/500×). The slider
+// position is a 0..1 unit; these map it ↔ leverage. When max ≤ 50 it's plain linear.
+const LOG_SPLIT = 0.55; // fraction of the track devoted to the linear 1..50 segment
+function posToLev(pos: number, max: number): number {
+  if (max <= 50) return 1 + pos * (max - 1);
+  if (pos <= LOG_SPLIT) return 1 + (pos / LOG_SPLIT) * 49;
+  return 50 * Math.pow(max / 50, (pos - LOG_SPLIT) / (1 - LOG_SPLIT));
+}
+function levToPos(lev: number, max: number): number {
+  const L = Math.min(max, Math.max(1, lev));
+  if (max <= 50) return (L - 1) / (max - 1);
+  if (L <= 50) return ((L - 1) / 49) * LOG_SPLIT;
+  return LOG_SPLIT + (Math.log(L / 50) / Math.log(max / 50)) * (1 - LOG_SPLIT);
+}
+function roundLev(l: number): number {
+  if (l >= 50) return Math.round(l / 5) * 5; // nice round steps up high
+  if (l >= 10) return Math.round(l);
+  return Math.round(l * 2) / 2; // 0.5 granularity at the low end
+}
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
@@ -313,7 +335,10 @@ export function OrderEntry() {
           });
           // Show the venue it filled on, noting a fall-through if the router's pick differed.
           const routed = route?.venue;
-          const venueNote = routed && routed !== filledVenue ? `${filledVenue} (routed ${routed})` : filledVenue;
+          const venueNote =
+            routed && routed !== filledVenue
+              ? `${venueLabel(filledVenue)} (routed ${venueLabel(routed)})`
+              : venueLabel(filledVenue);
           updateToast(tid, {
             type: "success",
             title: `${verb} ${side} ${symbol} opened on ${venueNote}`,
@@ -444,17 +469,21 @@ export function OrderEntry() {
       >
         <input
           type="range"
-          min={1}
-          max={maxLev}
-          step={maxLev > 25 ? 1 : 0.5}
-          value={Math.min(maxLev, Math.max(1, lev > 0 ? lev : 1))}
-          onChange={(e) => collateralNum > 0 && setSize(String(+(collateralNum * Number(e.target.value)).toFixed(2)))}
+          min={0}
+          max={1}
+          step={0.005}
+          value={levToPos(lev > 0 ? lev : 1, maxLev)}
+          onChange={(e) =>
+            collateralNum > 0 &&
+            setSize(String(+(collateralNum * roundLev(posToLev(Number(e.target.value), maxLev))).toFixed(2)))
+          }
           disabled={!(collateralNum > 0)}
           className="h-1 w-full cursor-pointer appearance-none rounded bg-metric-border accent-metric-primary disabled:cursor-not-allowed disabled:opacity-40"
         />
         <div className="mt-1 flex justify-between font-mono text-[9px] text-text-secondary/50">
           <span>1×</span>
-          <span>{maxLev}× max{venue === "auto" ? "" : ` · ${venue.replace("_", " ")}`}</span>
+          {maxLev > 50 && <span>50×</span>}
+          <span>{maxLev}× max{venue === "auto" ? "" : ` · ${venueLabel(venue)}`}</span>
         </div>
       </Field>
 

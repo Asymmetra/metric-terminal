@@ -6,7 +6,7 @@ import {
   impliedLeverage,
   toUsdFixed,
   toOracle,
-  VENUE_TO_UNDERWRITER,
+  VENUE_CONFIG,
   type OrderFormInput,
 } from "./order-builder";
 import { Action, OrderType, Side, TriggerCondition, Underwriter } from "./imperial/types";
@@ -35,10 +35,10 @@ describe("unit scaling", () => {
     expect(toOracle(87.6)).toBe(87_600_000_000);
   });
   it("maps venues to underwriter enum", () => {
-    expect(VENUE_TO_UNDERWRITER.phoenix).toBe(Underwriter.Phoenix);
-    expect(VENUE_TO_UNDERWRITER.jupiter).toBe(Underwriter.Jupiter);
-    expect(VENUE_TO_UNDERWRITER.flash_trade).toBe(Underwriter.FlashTrade);
-    expect(VENUE_TO_UNDERWRITER.gmtrade).toBe(Underwriter.GMTrade);
+    expect(VENUE_CONFIG.phoenix.underwriter).toBe(Underwriter.Phoenix);
+    expect(VENUE_CONFIG.jupiter.underwriter).toBe(Underwriter.Jupiter);
+    expect(VENUE_CONFIG.flash_trade.underwriter).toBe(Underwriter.FlashTrade);
+    expect(VENUE_CONFIG.gmtrade.underwriter).toBe(Underwriter.GMTrade);
   });
 });
 
