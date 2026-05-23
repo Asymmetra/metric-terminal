@@ -33,6 +33,7 @@ const VENUES: { tag: VenueChoice; label: string }[] = [
   { tag: "gmtrade", label: "GMTrade" },
 ];
 const MAX_LEVERAGE = 20;
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 function Field({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -55,6 +56,7 @@ export function OrderEntry() {
   const { connection } = useConnection();
 
   const symbol = useMarketStore((s) => s.selectedSymbol);
+  const profileIndex = useMarketStore((s) => s.profileIndex);
   const mark = useStatsStore((s) => s.marks[symbol]);
 
   const jwt = useTraderStore((s) => s.jwt);
@@ -62,13 +64,14 @@ export function OrderEntry() {
   const balances = useTraderStore((s) => s.balances);
   const setBalances = useTraderStore((s) => s.setBalances);
   const bumpRefresh = useTraderStore((s) => s.bumpRefresh);
+  const lastRefresh = useTraderStore((s) => s.lastRefresh);
 
   const addToast = useToastStore((s) => s.addToast);
   const updateToast = useToastStore((s) => s.updateToast);
 
   const [venue, setVenue] = useState<VenueChoice>("auto");
   const [type, setType] = useState<"market" | "limit">("market");
-  const [profileIndex, setProfileIndex] = useState(0);
+  const [walletUsdc, setWalletUsdc] = useState<number | null>(null);
   const [collateral, setCollateral] = useState("");
   const [size, setSize] = useState("");
   const [limitPrice, setLimitPrice] = useState("");
@@ -140,112 +143,135 @@ export function OrderEntry() {
     }
   }, [wallet, jwt, setJwt, refreshBalances]);
 
+  // Read the wallet's USDC balance (display dollars), null if unreadable.
+  const fetchWalletUsdc = useCallback(async (): Promise<number | null> => {
+    if (!wallet) return null;
+    try {
+      const { PublicKey } = await import("@solana/web3.js");
+      const accs = await connection.getParsedTokenAccountsByOwner(new PublicKey(wallet), {
+        mint: new PublicKey(USDC_MINT),
+      });
+      const native = accs.value.reduce(
+        (a, x) => a + Number(x.account.data.parsed?.info?.tokenAmount?.amount ?? 0),
+        0
+      );
+      return native / 1e6;
+    } catch {
+      return null;
+    }
+  }, [wallet, connection]);
+
+  // Keep the wallet-USDC display fresh on connect + after each trade.
+  useEffect(() => {
+    let cancelled = false;
+    if (!wallet) {
+      setWalletUsdc(null);
+      return;
+    }
+    void fetchWalletUsdc().then((v) => !cancelled && setWalletUsdc(v));
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet, lastRefresh, fetchWalletUsdc]);
+
   // Gas / wallet-USDC preflight before signing a deposit. The operator sponsors
   // rent + ATA creation, but the wallet still pays the base tx fee, so it needs
   // a little SOL; and the deposit pulls from the wallet's USDC ATA.
   const assertDepositReady = useCallback(
     async (depositNative: number) => {
       if (!wallet) throw new Error("Connect a wallet first.");
-      const pk = signer.publicKey;
-      if (!pk) throw new Error("Connect a wallet first.");
       const { PublicKey } = await import("@solana/web3.js");
-      const owner = new PublicKey(pk);
+      const owner = new PublicKey(wallet);
       const lamports = await connection.getBalance(owner).catch(() => null);
       if (lamports != null && lamports < 0.005 * 1e9) {
         throw new Error(`Need a little SOL for gas (have ${(lamports / 1e9).toFixed(4)}).`);
       }
       // Best-effort USDC check; if it fails we let the tx surface the error.
-      try {
-        const USDC = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-        const accs = await connection.getParsedTokenAccountsByOwner(owner, { mint: USDC });
-        const have = accs.value.reduce(
-          (a, x) => a + Number(x.account.data.parsed?.info?.tokenAmount?.amount ?? 0),
-          0
-        );
-        if (have < depositNative) {
-          throw new Error(
-            `Insufficient wallet USDC: need $${(depositNative / 1e6).toFixed(2)}, have $${(have / 1e6).toFixed(2)}.`
-          );
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message.startsWith("Insufficient wallet USDC")) throw e;
-        /* RPC couldn't read token accounts — let the deposit tx fail loudly instead */
+      const have = await fetchWalletUsdc();
+      if (have != null && have < depositNative / 1e6) {
+        throw new Error(`Insufficient wallet USDC: need $${(depositNative / 1e6).toFixed(2)}, have $${have.toFixed(2)}.`);
       }
     },
-    [wallet, signer, connection]
+    [wallet, connection, fetchWalletUsdc]
   );
 
   const submit = useCallback(
     async (side: "long" | "short") => {
       if (!wallet || busy) return;
-      // Resolve which venue(s) to attempt. We honor Imperial /route's pick (incl.
-      // Phoenix — its market orders fill once marketPrice is sent at the right
-      // venue scale, see toMarketPrice) and list the other candidates after it in
-      // cost order; openWithDeposit tries them in turn, falling through only if the
-      // router's choice genuinely rejects.
-      let route: Awaited<ReturnType<typeof imperial.getRoute>> | null = null;
+      // Lock immediately (before any await) so a second click during the /route
+      // fetch can't fire a second concurrent order. The finally always unlocks.
+      setBusy(true);
       try {
-        route = await imperial.getRoute({
-          asset: symbol,
-          side,
-          notional: sizeNum,
-          desiredLeverage: Math.max(1, lev),
+        // Honor Imperial /route's pick (incl. Phoenix — its market orders fill once
+        // marketPrice is sent at the right venue scale); list the other candidates
+        // after it in cost order. openWithDeposit tries them in turn, falling through
+        // only if the router's choice genuinely rejects.
+        let route: Awaited<ReturnType<typeof imperial.getRoute>> | null = null;
+        try {
+          route = await imperial.getRoute({
+            asset: symbol,
+            side,
+            notional: sizeNum,
+            desiredLeverage: Math.max(1, lev),
+            wallet,
+            profileIndex,
+          });
+        } catch {
+          /* route unavailable — marketVenueCandidates falls back */
+        }
+        const venues = marketVenueCandidates({ type, selectedVenue: venue, route });
+        if (type === "market" && venues.length === 0) {
+          addToast("error", "Market order unavailable", `No venue is currently available to market-trade ${symbol}.`);
+          return;
+        }
+        const input: OrderFormInput = {
           wallet,
           profileIndex,
-        });
-      } catch {
-        /* route unavailable — marketVenueCandidates falls back */
-      }
-      const venues = marketVenueCandidates({ type, selectedVenue: venue, route });
-      if (type === "market" && venues.length === 0) {
-        addToast("error", "Market order unavailable", `No venue is currently available to market-trade ${symbol}.`);
-        return;
-      }
-      const input: OrderFormInput = {
-        wallet,
-        profileIndex,
-        symbol,
-        venue: venues[0] ?? "gmtrade",
-        side,
-        type,
-        sizeUsd: sizeNum,
-        collateralUsd: collateralNum,
-        markPrice: mark ?? 0,
-        limitPrice: Number(limitPrice) || undefined,
-        slippageBps,
-      };
-      const err = validateOrder(input);
-      if (err) {
-        addToast("error", "Can't place order", err);
-        return;
-      }
-      setBusy(true);
-      const verb = type === "limit" ? "Limit" : "Market";
-      const tid = addToast("loading", `${verb} ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
-      try {
-        const token = await ensureJwt();
-        const { depositedNative, order, venue: filledVenue } = await openWithDeposit(input, {
-          signer,
-          jwt: token,
-          venues,
-          confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
-          assertDepositReady,
-          onStep: (p) => updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}`, detail: p.message }),
-        });
-        updateToast(tid, {
-          type: "success",
-          title: `${verb} ${side} ${symbol} opened on ${filledVenue}`,
-          detail:
-            (depositedNative > 0 ? `Deposited $${(depositedNative / 1e6).toFixed(2)} · ` : "") +
-            (order.orderPda ? `orderPda ${order.orderPda.slice(0, 8)}…` : "filled"),
-          txid: order.signature ?? undefined,
-        });
-        bumpRefresh();
-        void refreshBalances(token);
-      } catch (e) {
-        const title = e instanceof TradeFlowError && e.depositedNative > 0 ? "Order failed (funds safe)" : "Order failed";
-        updateToast(tid, { type: "error", title, detail: errMsg(e) });
-        void ensureJwt().then((t) => refreshBalances(t)).catch(() => {});
+          symbol,
+          venue: venues[0] ?? "gmtrade",
+          side,
+          type,
+          sizeUsd: sizeNum,
+          collateralUsd: collateralNum,
+          markPrice: mark ?? 0,
+          limitPrice: Number(limitPrice) || undefined,
+          slippageBps,
+        };
+        const err = validateOrder(input);
+        if (err) {
+          addToast("error", "Can't place order", err);
+          return;
+        }
+        const verb = type === "limit" ? "Limit" : "Market";
+        const tid = addToast("loading", `${verb} ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
+        try {
+          const token = await ensureJwt();
+          const { depositedNative, order, venue: filledVenue } = await openWithDeposit(input, {
+            signer,
+            jwt: token,
+            venues,
+            confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+            assertDepositReady,
+            onStep: (p) => updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}`, detail: p.message }),
+          });
+          // Show the venue it filled on, noting a fall-through if the router's pick differed.
+          const routed = route?.venue;
+          const venueNote = routed && routed !== filledVenue ? `${filledVenue} (routed ${routed})` : filledVenue;
+          updateToast(tid, {
+            type: "success",
+            title: `${verb} ${side} ${symbol} opened on ${venueNote}`,
+            detail:
+              (depositedNative > 0 ? `Deposited $${(depositedNative / 1e6).toFixed(2)} · ` : "") +
+              (order.orderPda ? `orderPda ${order.orderPda.slice(0, 8)}…` : "filled"),
+            txid: order.signature ?? undefined,
+          });
+          bumpRefresh();
+          void refreshBalances(token);
+        } catch (e) {
+          const title = e instanceof TradeFlowError && e.depositedNative > 0 ? "Order failed (funds safe)" : "Order failed";
+          updateToast(tid, { type: "error", title, detail: errMsg(e) });
+          void ensureJwt().then((t) => refreshBalances(t)).catch(() => {});
+        }
       } finally {
         setBusy(false);
       }
@@ -272,7 +298,7 @@ export function OrderEntry() {
           ))}
         </select>
         <span className="font-mono text-[11px] text-text-secondary">
-          {lev > 0 ? `${lev.toFixed(1)}x` : "—"} · Isolated
+          {lev > 0 ? `${lev.toFixed(1)}x` : "—"} · Isolated · P{profileIndex}
         </span>
       </div>
 
@@ -292,26 +318,6 @@ export function OrderEntry() {
         ))}
       </div>
 
-      {/* Profile selector */}
-      <Field label="Profile (isolated 0–5)">
-        <div className="flex gap-1">
-          {[0, 1, 2, 3, 4, 5].map((i) => (
-            <button
-              key={i}
-              onClick={() => setProfileIndex(i)}
-              className={clsx(
-                "flex-1 border py-1 font-mono text-[11px] transition-colors",
-                profileIndex === i
-                  ? "border-metric-primary/60 bg-surface-2 text-metric-primary"
-                  : "border-metric-border text-text-secondary/70 hover:text-text-secondary"
-              )}
-            >
-              {i}
-            </button>
-          ))}
-        </div>
-      </Field>
-
       {type === "limit" && (
         <Field label="Limit Price (USD)">
           <input className={inputCls} inputMode="decimal" placeholder={mark ? formatPriceAuto(mark) : "0.00"} value={limitPrice} onChange={(e) => setLimitPrice(e.target.value)} />
@@ -320,7 +326,11 @@ export function OrderEntry() {
 
       <Field
         label="Collateral (USDC)"
-        right={<span className="font-mono text-[10px] text-text-secondary/60">bal: ${profileBalance.toFixed(2)}</span>}
+        right={
+          <span className="font-mono text-[10px] text-text-secondary/60">
+            wallet ${walletUsdc != null ? walletUsdc.toFixed(2) : "—"} · profile ${profileBalance.toFixed(2)}
+          </span>
+        }
       >
         <input className={inputCls} inputMode="decimal" placeholder={`min $${MIN_COLLATERAL_USD}`} value={collateral} onChange={(e) => setCollateral(e.target.value)} />
       </Field>

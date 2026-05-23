@@ -74,7 +74,7 @@ export function Positions() {
             signer,
             jwt: token,
             confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
-            onStep: (s) => updateToast(tid, { type: "loading", title: `${p.asset}`, detail: s.message }),
+            onStep: (s) => updateToast(tid, { type: "loading", title: `${p.asset} · close & withdraw`, detail: s.message }),
           });
           updateToast(tid, {
             type: "success",
@@ -89,12 +89,15 @@ export function Positions() {
         }
         bumpRefresh();
       } catch (e) {
-        const safe = e instanceof TradeFlowError;
-        updateToast(tid, {
-          type: "error",
-          title: safe ? "Action failed (funds safe)" : "Close failed",
-          detail: e instanceof Error ? e.message : String(e),
-        });
+        if (e instanceof TradeFlowError && e.closed) {
+          // Position closed; only the withdrawal didn't go through (e.g. user
+          // rejected the popup). Calm note, not a failure — and refresh so the
+          // closed position clears. Funds are safe in the profile.
+          updateToast(tid, { type: "info", title: `${p.asset} closed`, detail: e.message });
+          bumpRefresh();
+        } else {
+          updateToast(tid, { type: "error", title: "Close failed", detail: e instanceof Error ? e.message : String(e) });
+        }
       } finally {
         setClosing(null);
       }
@@ -202,7 +205,7 @@ function PositionsTable({
                   <button
                     onClick={() => onClose(p, true)}
                     disabled={closing === p.id}
-                    title="Close the position and withdraw the freed balance to your wallet (1 signature)"
+                    title="Closes immediately (no signature), then asks you to sign the withdrawal. If you reject that popup, the position stays closed and your funds are safe in the profile."
                     className="border border-metric-border px-2 py-0.5 text-[10px] text-text-secondary transition-colors hover:border-metric-sell/50 hover:text-metric-sell disabled:opacity-40"
                   >
                     {closing === p.id ? "…" : "Close & Withdraw"}

@@ -31,11 +31,6 @@ export function Orderbook() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center justify-between border-b border-metric-border bg-surface-1 px-3 py-2">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-text-secondary">Order Book</span>
-        <span className="font-mono text-[9px] uppercase text-text-secondary/50">Phoenix</span>
-      </div>
-
       {!snapshot ? (
         <div className="flex flex-1 items-center justify-center px-3 text-center font-mono text-[11px] text-text-secondary/50">
           {market && !market.phoenix ? "No order book — AMM venue routing" : "Waiting for depth…"}

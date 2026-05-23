@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { WalletMenu } from "@/components/terminal/WalletMenu";
 import clsx from "clsx";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
@@ -141,7 +141,7 @@ export function MarketHeader() {
 
       <div className="flex shrink-0 items-center gap-3">
         <HealthIndicator />
-        <WalletMultiButton />
+        <WalletMenu />
       </div>
     </div>
   );

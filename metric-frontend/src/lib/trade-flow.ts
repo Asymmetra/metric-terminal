@@ -147,9 +147,18 @@ export interface FlowDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Order rejected after a deposit already landed — funds are safe in the profile. */
+/**
+ * Recoverable trade-flow failure — funds are always safe in the profile.
+ *   - `depositedNative`: a deposit landed before the open was rejected.
+ *   - `closed`: the position WAS closed but the subsequent withdrawal didn't go
+ *     through (e.g. user rejected the wallet popup) — funds sit in the profile.
+ */
 export class TradeFlowError extends Error {
-  constructor(message: string, public readonly depositedNative = 0) {
+  constructor(
+    message: string,
+    public readonly depositedNative = 0,
+    public readonly closed = false
+  ) {
     super(message);
     this.name = "TradeFlowError";
   }
@@ -299,7 +308,7 @@ export async function closeAndWithdraw(params: CloseParams, deps: FlowDeps): Pro
 
   const preCloseFree = profileFree(await api.getBalances(deps.jwt), params.profileIndex);
 
-  step({ step: "close", message: `Closing ${params.symbol}…` });
+  step({ step: "close", message: `Closing ${params.symbol} — no signature needed…` });
   const close = await api.placeOrder(
     buildCloseRequest({
       wallet: params.wallet,
@@ -346,7 +355,10 @@ export async function closeAndWithdraw(params: CloseParams, deps: FlowDeps): Pro
   const withdrawNative = profileFree(await api.getBalances(deps.jwt), params.profileIndex);
   let withdrawSignature: string | undefined;
   if (withdrawNative > 0) {
-    step({ step: "withdraw", message: `Withdrawing $${(withdrawNative / 1e6).toFixed(2)} to wallet…` });
+    step({
+      step: "withdraw",
+      message: `Closed. Approve the wallet popup to withdraw $${(withdrawNative / 1e6).toFixed(2)} to your wallet…`,
+    });
     const { transaction } = await api.buildDepositTx({
       wallet: params.wallet,
       profileIndex: params.profileIndex,
@@ -358,9 +370,13 @@ export async function closeAndWithdraw(params: CloseParams, deps: FlowDeps): Pro
       withdrawSignature = res.signature;
       step({ step: "withdraw-confirm", message: "Confirming withdrawal…", signature: withdrawSignature });
       if (deps.confirm) await deps.confirm(withdrawSignature).catch(() => {});
-    } catch (e) {
+    } catch {
+      // The position is already closed; only the withdrawal didn't go through.
+      // Flag `closed` so the UI shows a calm note, not a hard error.
       throw new TradeFlowError(
-        `Closed ${params.symbol}, but the withdrawal failed: ${e instanceof Error ? e.message : String(e)}. Funds are safe in profile ${params.profileIndex} — retry the withdrawal.`
+        `${params.symbol} closed. Withdrawal cancelled — $${(withdrawNative / 1e6).toFixed(2)} is safe in profile ${params.profileIndex}; withdraw anytime.`,
+        0,
+        true
       );
     }
   }

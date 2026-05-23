@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { TerminalGrid } from "@/components/layout/TerminalGrid";
 import { MarketHeader } from "@/components/terminal/MarketHeader";
 import { Chart } from "@/components/terminal/Chart";
-import { Orderbook } from "@/components/terminal/Orderbook";
+import { MarketDepthPanel } from "@/components/terminal/MarketDepthPanel";
 import { OrderEntry } from "@/components/terminal/OrderEntry";
 import { Positions } from "@/components/terminal/Positions";
 import { ConnectionStatus } from "@/components/shared/ConnectionStatus";
@@ -36,7 +36,7 @@ function DesktopTerminal() {
       <ConnectionStatus />
       <MarketHeader />
       <TerminalGrid
-        marketData={<ErrorBoundary name="Order Book"><Orderbook /></ErrorBoundary>}
+        marketData={<ErrorBoundary name="Order Book"><MarketDepthPanel /></ErrorBoundary>}
         chart={<ErrorBoundary name="Chart"><Chart /></ErrorBoundary>}
         orderEntry={<ErrorBoundary name="Order Entry"><OrderEntry /></ErrorBoundary>}
         positions={<ErrorBoundary name="Positions"><Positions /></ErrorBoundary>}
@@ -63,7 +63,7 @@ function MobileTerminal() {
         <ErrorBoundary name="Chart"><Chart /></ErrorBoundary>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {mobileTab === "book" && <ErrorBoundary name="Order Book"><Orderbook /></ErrorBoundary>}
+        {mobileTab === "book" && <ErrorBoundary name="Order Book"><MarketDepthPanel /></ErrorBoundary>}
         {mobileTab === "trade" && <ErrorBoundary name="Order Entry"><OrderEntry /></ErrorBoundary>}
         {mobileTab === "positions" && <ErrorBoundary name="Positions"><Positions /></ErrorBoundary>}
       </div>
