@@ -75,9 +75,9 @@ export function VenueQuotes() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="grid shrink-0 grid-cols-[1fr_auto] gap-3 border-b border-metric-border/40 px-3 py-1 font-mono text-[9px] uppercase text-text-secondary/40">
+      <div className="flex shrink-0 items-center justify-between border-b border-metric-border/40 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wider text-text-secondary/40">
         <span>Venue</span>
-        <span className="text-right">Quote · age</span>
+        <span>Quote · age</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
@@ -88,42 +88,48 @@ export function VenueQuotes() {
           const fee = c?.cb ? (Number(c.cb.openFee) || 0) + (Number(c.cb.closeFee) || 0) : null;
           const slip = c?.cb ? (Number(c.cb.openSlip) || 0) + (Number(c.cb.closeSlip) || 0) : null;
           return (
-            <div key={v.tag} className={clsx("border-b border-metric-border/30 px-3 py-2", isBest && "bg-metric-primary/10")}>
-              <div className="flex items-center justify-between font-mono text-[12px]">
+            <div key={v.tag} className={clsx("border-b border-metric-border/30 px-3 py-2.5", isBest && "bg-metric-primary/[0.07]")}>
+              <div className="flex items-baseline justify-between font-mono text-[13px]">
                 <span className="flex items-center gap-2">
                   {isBest && (
-                    <span className="rounded-sm bg-metric-primary/20 px-1 text-[8px] uppercase tracking-wider text-metric-primary">
+                    <span className="rounded-sm bg-metric-primary/20 px-1 py-px text-[8px] font-semibold uppercase tracking-wider text-metric-primary">
                       best
                     </span>
                   )}
                   <span className={isBest ? "text-metric-primary" : "text-text-primary"}>{v.label}</span>
                 </span>
-                <span className="text-right text-text-secondary">
+                <span className="flex items-baseline gap-1.5 text-text-primary">
                   {mp?.price != null ? `$${formatPriceAuto(mp.price)}` : "—"}
-                  <span className="ml-2 text-[10px] text-text-secondary/40">{ago(mp?.fetchedAtUnixMs, now)}</span>
+                  <span className="text-[9px] font-normal text-text-secondary/40">{ago(mp?.fetchedAtUnixMs, now)}</span>
                 </span>
               </div>
-              <div className="mt-0.5 flex items-center justify-between font-mono text-[9.5px] text-text-secondary/50">
-                <span>
-                  {c?.filtered ? (
-                    <span className="text-metric-sell/70">unavailable for size</span>
-                  ) : (
-                    <>
-                      fee ${fee != null ? fee.toFixed(3) : "—"} · slip ${slip != null ? slip.toFixed(3) : "—"} · max{" "}
-                      {c?.maxLev ? `${Math.round(c.maxLev)}×` : "—"}
-                    </>
-                  )}
-                </span>
-                <span>{c?.filtered ? "" : `RT $${c?.cost != null ? c.cost.toFixed(4) : "—"}`}</span>
-              </div>
+              {c?.filtered ? (
+                <div className="mt-1 font-mono text-[10px] text-metric-sell/70">unavailable for this size</div>
+              ) : (
+                <div className="mt-1.5 grid grid-cols-4 gap-1 font-mono">
+                  <Stat label="cost" value={c?.cost != null ? `$${c.cost.toFixed(3)}` : "—"} />
+                  <Stat label="fee" value={fee != null ? `$${fee.toFixed(3)}` : "—"} />
+                  <Stat label="slip" value={slip != null ? `$${slip.toFixed(3)}` : "—"} />
+                  <Stat label="max lev" value={c?.maxLev ? `${Math.round(c.maxLev)}×` : "—"} />
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
       <div className="shrink-0 border-t border-metric-border px-3 py-1.5 font-mono text-[9px] text-text-secondary/50">
-        {route ? `Auto → ${route.venue} · ${route.reason}` : "Resolving best route…"}
+        {route ? `Auto routes to ${route.venue} · ${route.reason}` : "Resolving best route…"}
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[8px] uppercase tracking-wide text-text-secondary/40">{label}</span>
+      <span className="text-[10px] text-text-secondary">{value}</span>
     </div>
   );
 }
