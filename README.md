@@ -103,6 +103,7 @@ If your eng says "trading works without auth", they almost certainly mean **depo
 - **Numeric enum codes:** `side` 0=long / 1=short, `action` 0=Increase / 1=Decrease, `underwriter` 0=Jupiter / 1=Flash / 2=Phoenix / 3=GMTrade, `orderType` 0=Market / 1=Limit / 2=StopLimit (+ exotic 3-16: LandMine, Ratchet, Dca, FibRatchet, DcaTime, DcaRatchet, etc.). See `src/lib/imperial/types.ts` for the full set as named TS consts.
 - **`triggerPrice` is in oracle scale (1e9)**, not USD. A SOL limit at $43 = `43 * 1_000_000_000`.
 - **`sizeUsd` and `collateralAmount` are 6-decimal fixed point.** $20 notional = `20_000_000`. USDC's native units.
+- **`marketPrice` scale is venue-specific — the subtle one that cost us the most.** For a market order, `marketPrice` is the slippage reference forwarded to the on-chain instruction. **Phoenix wants it in 6-decimal USD (`1e6`)** — the same scale as `sizeUsd`/`collateralAmount` — while **Jupiter / Flash / GMTrade want oracle scale (`1e9`)**, the documented default. Send a Phoenix market order with `1e9` and it's "1000× off": the keeper rejects with a generic `success:false, error:"Failed to place order — please try again"` and *no hint* that it's a scale problem. (Phoenix *limit* `triggerPrice` still uses `1e9` — only the market-order `marketPrice` differs.) We resolve this per-underwriter in `src/lib/order-builder.ts` → `toMarketPrice(dollars, venue)`. Confirmed live + by the Imperial team.
 - **`symbol` vs `marketMint`** — pass the canonical symbol (`"SOL"`, `"XAU"`, `"GOLD"`) and Imperial resolves it per-venue. Phoenix synthetics have no SPL mint, so symbol is the only addressable form for them. Explicit `marketMint` still works for venues that have one.
 - **`profileIndex` 0..5 only.** Every wallet has six implicit isolated-margin profiles; balances and positions never mix across them. They're created lazily on first `/deposit/build-tx` or first `/mobile/orders`. `/mobile/balances` returns `usdc: 0` for uninitialized profiles without erroring — that's normal, not a provisioning gate.
 - **Phoenix orders auto-activate** the trader account on first use. `POST /phoenix/register` is unauthed and idempotent but rarely needed.
@@ -158,17 +159,46 @@ The canonical sequence for opening + hedging a position:
 7. **Close the legs** — `/mobile/orders` with `action=1`. `sizeUsd` = open size for a full close.
 8. **Reclaim residue** — `POST /passthrough/users/{wallet}/profiles/{index}/sync` after closing non-USDC custody (long SOL/BTC/ETH on Jupiter or Flash leaves wrapped tokens on the profile). Idempotent. Pure-USDC venues (Phoenix shorts) skip this.
 
+### Routing & the one-signature deposit→open / close→withdraw flow
+
+This terminal lets a user open with a single wallet signature and close+withdraw with
+a single wallet signature. The orchestration lives in `src/lib/trade-flow.ts`
+(`openWithDeposit`, `closeAndWithdraw`, `marketVenueCandidates`) — useful reference if
+you're building the same UX.
+
+- **`/route` is cost-ranked and order-type-blind.** It ranks venues purely by expected
+  round-trip cost (which shifts with funding/fees), so it can return Phoenix for a
+  *market* order. Honor its pick — but for market orders be ready to **fall through** to
+  the next candidate if a venue rejects (Flash sometimes returns "route too large";
+  Jupiter has a different collateral unit). Don't hardcode a venue — the router favors
+  Phoenix at low leverage by design, and that's usually the cheapest fill. Once you send
+  the correct venue-specific `marketPrice` scale (above), Phoenix market orders fill.
+- **Account creation folds into the first deposit.** `/deposit/build-tx` (`mode:"deposit"`)
+  creates the user-account PDA + the profile's USDC ATA when missing (operator-sponsored
+  rent) before transferring USDC. So a brand-new user's first "deposit & trade" bootstraps
+  the whole account in that one signature — no separate init step.
+- **Open = one signature; the order itself needs none.** Deposit the collateral (the wallet
+  signs once), wait for it to land in the profile, then `POST /mobile/orders` — the order
+  bot signs/submits via the JWT delegation, so there's no second wallet prompt.
+- **Close+withdraw is two on-chain steps and is NOT atomic.** The close runs on the order
+  bot (no signature); the withdraw is the only wallet tx. If the user rejects the withdraw
+  popup, the position is still closed and the funds sit in the profile (recoverable —
+  withdraw later). Make this legible in your UI; it can't be made all-or-nothing because
+  the two halves have different signers.
+
 ### Reference implementations in this repo
 
-| Concern | File | Lines of code |
+| Concern | File | Notes |
 |---|---|---|
-| JWT auth + REST client | `metric-frontend/src/lib/imperial/client.ts` | ~200 |
+| JWT auth + REST client | `metric-frontend/src/lib/imperial/client.ts` | connect/exchange, all `/mobile/*` + reads + `/deposit/build-tx` + sweep/register |
+| Order-request builder + scales | `metric-frontend/src/lib/order-builder.ts` | enum mapping, `toUsdFixed`/`toOracle`, **`toMarketPrice` (per-venue scale)** |
+| Deposit→open / close→withdraw orchestration | `metric-frontend/src/lib/trade-flow.ts` | `openWithDeposit`, `closeAndWithdraw`, `marketVenueCandidates` (honor `/route` + fall-through) |
 | Imperial DTOs (TS) | `metric-frontend/src/lib/imperial/types.ts` | full enum set + request/response shapes |
-| Imperial DTOs (Rust) | `metric-backend/src/imperial/types.rs` | |
-| Upstream WS client (Rust) | `metric-backend/src/imperial/ws.rs` | reconnect + ping + snake_case mapping |
-| Pluggable signer abstraction | `metric-frontend/src/lib/wallet/{types,phantom-signer,privy-stub,useSigner}.ts` | |
-| Live integration suite | `tests/imperial-live.mjs` | T1 auth + T2 deposit + T3 order place/cancel |
-| Backend integration suite | `tests/e2e-imperial.mjs` | covers backend boundary + WS fan-out |
+| JWT cache (30-day, localStorage) | `metric-frontend/src/lib/imperial/jwt.ts` | per-wallet, expiry-guarded |
+| Pluggable signer abstraction | `metric-frontend/src/lib/wallet/{types,phantom-signer,privy-stub,useSigner}.ts` | swap Phantom ↔ Privy+paymaster |
+| Imperial DTOs / WS client (Rust) | `metric-backend/src/imperial/{types,ws}.rs` | reconnect + ping + snake_case mapping |
+| **Live integration suite (modular)** | `tests/live/` (`run.mjs` + `scenarios/`) | auth/reads, deposit/withdraw, order place/update/cancel, full market round-trip, Phoenix market, partial close — all against real mainnet |
+| Backend integration suite | `tests/e2e-imperial.mjs` | backend boundary + WS fan-out |
 | Local Solana signing validation | `tests/signing-local.mjs` | no Imperial dependency |
 
 ## Repo layout
@@ -196,22 +226,34 @@ metric-frontend/
 ├── src/
 │   ├── app/
 │   │   ├── page.tsx         landing
-│   │   ├── imperial/        the working trading demo
+│   │   ├── terminal/        the working trading view (Terminal.tsx)
 │   │   ├── status/          health-status view
 │   │   └── layout.tsx       root layout with WalletProvider
 │   ├── components/
-│   │   ├── health/HealthPanel.tsx
-│   │   └── landing/{HeroSection,MetricParticles}.tsx
+│   │   ├── terminal/        OrderEntry, Orderbook, VenueQuotes, MarketDepthPanel,
+│   │   │                    Chart, PriceChart, LiveLineChart, Positions,
+│   │   │                    MarketHeader, WalletMenu, HealthIndicator
+│   │   └── health/HealthPanel.tsx
 │   ├── lib/
 │   │   ├── wallet/          SignerProvider + Phantom + Privy stub + useSigner
-│   │   ├── imperial/        ImperialClient + types + jwt cache + ws adapters
-│   │   ├── constants.ts     API_BASE_URL, WS_URL
+│   │   ├── imperial/        ImperialClient + types + jwt cache + config + ws adapters
+│   │   ├── order-builder.ts request builder + scales (toMarketPrice per venue)
+│   │   ├── trade-flow.ts    openWithDeposit / closeAndWithdraw / marketVenueCandidates
+│   │   ├── price-history.ts session price buffer for the live line
+│   │   ├── phoenix-*.ts     direct Phoenix WS (depth/mid) + candle REST
 │   │   └── format.ts
+│   ├── stores/             zustand: market, stats, orderbook, trader, toast, health
 │   └── providers/WalletProvider.tsx
 
 tests/
-├── e2e-imperial.mjs         backend integration suite (10 checks, runs against local metric-backend)
-├── imperial-live.mjs        live Imperial suite: T1 auth+reads, T2 deposit, T3 order place+cancel
+├── live/                    modular live Imperial suite (real mainnet) — see tests/live/README.md
+│   ├── run.mjs              CLI runner: `node tests/live/run.mjs --list | --orderbot | --all | <scenario>`
+│   ├── harness.mjs          shared: wallet, JWT, RPC, sign/confirm, builders, reporter
+│   └── scenarios/           auth-reads, deposit-withdraw, account-bootstrap, limit-cancel,
+│                            limit-update-cancel, roundtrip-auto, phoenix-market,
+│                            roundtrip-market, partial-close, collateral-adjust
+├── e2e-imperial.mjs         backend integration suite (runs against local metric-backend)
+├── imperial-live.mjs        legacy single-file live suite (superseded by tests/live/)
 ├── signing-local.mjs        Solana signing path validation (no Imperial needed)
 └── mock-imperial-server.mjs minimal Imperial mock for offline integration testing
 ```
@@ -241,17 +283,20 @@ tests/
 ### Run
 
 ```bash
-# Backend (port 3001)
-cd metric-backend
-cargo run
-
-# Frontend (port 3000)
+# Frontend (port 3000) — works standalone; calls Imperial + Phoenix directly
 cd metric-frontend
 npm install
+cp .env.example .env.local      # optional — sane public defaults work out of the box
 npm run dev
+
+# Backend (port 3001) — OPTIONAL: WS fan-out, candle aggregation, health probe
+cd metric-backend
+cargo run
 ```
 
-Open <http://localhost:3000>. The hero CTA goes to `/terminal`, the working trading view.
+Open <http://localhost:3000> → `/terminal`. The terminal is fully functional without
+the backend (the health panel just shows it as down). Connect Phantom, place a trade —
+deposits/withdraws sign in your wallet; orders execute via Imperial's delegated bot.
 
 ### Tests
 
@@ -264,20 +309,27 @@ cargo clippy -- -D warnings
 # Frontend (unit + tsc)
 cd metric-frontend
 npx tsc --noEmit
-npm test                                   # 14 Vitest cases
+npm test                                   # Vitest (order-builder, trade-flow, imperial, wallet, …)
 
 # Backend integration (boot metric-backend, then)
-node tests/e2e-imperial.mjs                # 10 checks against http://127.0.0.1:3457
+node tests/e2e-imperial.mjs                # checks against http://127.0.0.1:3457
 
 # Solana signing path (no Imperial needed)
-node tests/signing-local.mjs               # 6 checks
+node tests/signing-local.mjs
 
-# Live against api.imperial.space (test wallet HP29cxeY…)
-cd metric-frontend                         # so node resolves @solana/web3.js
-node ../tests/imperial-live.mjs            # T1 auth + reads
-DEPOSIT=1 SOLANA_RPC=https://… node ../tests/imperial-live.mjs   # +T2 deposit
-ORDER=1   SOLANA_RPC=https://… node ../tests/imperial-live.mjs   # +T3 order place + cancel
+# Live against api.imperial.space — modular suite, funded test wallet (.keys/test-wallet.json)
+node tests/live/run.mjs --list             # list scenarios + their cost
+node tests/live/run.mjs                     # "safe" tier only — reads, no money
+node tests/live/run.mjs --orderbot          # + order-bot writes (place/update/cancel; no wallet signature)
+SOLANA_RPC=https://… node tests/live/run.mjs --all            # everything (real mainnet fees)
+SOLANA_RPC=https://… node tests/live/run.mjs roundtrip-auto   # one scenario (the UI's deposit→open→close→withdraw)
 ```
+
+`--all` and the `onchain` scenarios spend real fees and need a mainnet `SOLANA_RPC`
+that accepts `sendTransaction` (Helius / QuickNode / Triton; the public
+`solana-rpc.publicnode.com` works for light use). See `tests/live/README.md` for the
+full scenario list, env knobs (`PROFILE`, `AMOUNT_USD`, `BUFFER_USD`), and how to add a
+scenario.
 
 ### Environment variables
 
@@ -290,7 +342,11 @@ ORDER=1   SOLANA_RPC=https://… node ../tests/imperial-live.mjs   # +T3 order p
 | `PORT`             | 3001                      | backend listen port |
 | `NEXT_PUBLIC_API_URL` | http://localhost:3001 | frontend → backend |
 | `NEXT_PUBLIC_WS_URL`  | ws://localhost:3001/ws | frontend → backend WS |
-| `NEXT_PUBLIC_IMPERIAL_API_URL` | https://api.imperial.space | frontend → Imperial direct (JWT-authed paths) |
+| `NEXT_PUBLIC_IMPERIAL_API_URL` | https://api.imperial.space | frontend → Imperial REST direct (JWT-authed paths) |
+| `NEXT_PUBLIC_IMPERIAL_WS_URL` | wss://api.imperial.space | frontend → Imperial WS direct |
+| `NEXT_PUBLIC_PHOENIX_API_URL` | https://perp-api.phoenix.trade | direct Phoenix REST (candles, depth) |
+| `NEXT_PUBLIC_PHOENIX_WS_URL` | wss://perp-api.phoenix.trade/ws | direct Phoenix WS (live mid + order book) |
+| `NEXT_PUBLIC_SOLANA_RPC` | (public fallbacks) | mainnet RPC for deposit/withdraw signing — Helius/QuickNode/Triton recommended |
 | `NEXT_PUBLIC_SIGNER` | phantom | `phantom` or `privy-stub` |
 
 ## Deployment
@@ -339,7 +395,7 @@ The frontend has a built-in fallback chain (`src/lib/solana-rpc.ts`):
 
 ### Backend → Render (optional)
 
-The metric-backend serves the WS fan-out, candle aggregation, and the `/deposit/build-tx` proxy. The frontend works fully without it (`/imperial` page subscribes to Imperial's WS directly, calls Imperial REST directly), but health-status displays metric-backend as down until it's deployed.
+The metric-backend serves the WS fan-out, candle aggregation, and the `/deposit/build-tx` proxy. The frontend works fully without it — the `/terminal` page subscribes to Phoenix's WS directly and calls Imperial REST directly — but the health-status panel shows metric-backend as down until it's deployed.
 
 To deploy:
 
@@ -361,15 +417,23 @@ To deploy:
 - [ ] Test wallet (or your own) has ≥ 0.01 SOL for gas + ≥ $10 USDC for the Imperial minimum collateral
 - [ ] Optional: metric-backend deployed to Render and pointed at via `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` so HealthPanel shows green
 
-### What the user sees on `/imperial`
+### What the user sees on `/terminal`
 
-1. **Connect wallet** → standard Phantom prompt
-2. **Authenticate** → Phantom prompts to sign `imperial:mobile-connect:{wallet}:{unix-ms-nonce}`; the page exchanges the code for a 30-day JWT and caches it in localStorage keyed by wallet
-3. **Balances** populate with all 6 isolated-margin profiles
-4. **Positions** + **live mark prices** populate from Imperial directly
-5. **Deposit** form — enter USDC amount, click Build+Sign+Send, Phantom prompts to sign the partially-signed VersionedTransaction, the deposit lands on Solana mainnet in 5-10s
+1. **Connect wallet** → custom wallet menu (Select Wallet → Phantom prompt). On return,
+   a cached 30-day JWT is re-hydrated from localStorage, so no re-authentication.
+2. **First trade authenticates** → Phantom prompts to sign
+   `imperial:mobile-connect:{wallet}:{unix-ms-nonce}` once; the JWT is cached per wallet.
+3. **Deposit & Long/Short** (one signature) → if the profile is short on collateral, the
+   app deposits exactly what's needed (creating the account on a first trade), then the
+   order bot opens via Auto's routed venue — no second signature.
+4. **Close & Withdraw** → the order bot closes (no signature), then one signature withdraws
+   the freed balance back to the wallet.
+5. **Order book / Venues** tabs, candle + live-line charts, per-profile balances, and a
+   header health dot round out the view.
 
-If you see 404s or blank pages, 90% of the time it's #1 (Root Directory) or the CSP missing `api.imperial.space` (overridden somewhere, or Vercel project has a custom security header that takes precedence).
+If you see 404s or blank pages, 90% of the time it's the Vercel Root Directory (#1 above)
+or the CSP missing `api.imperial.space` (overridden somewhere, or a custom security header
+takes precedence).
 
 ## License
 
