@@ -18,7 +18,7 @@ export function MarketDepthPanel() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex shrink-0 items-center justify-between border-b border-metric-border bg-surface-1 px-3">
-        <div className="flex">
+        <div className="flex gap-4">
           {(
             [
               ["book", "Order Book"],
@@ -29,12 +29,12 @@ export function MarketDepthPanel() {
               key={key}
               onClick={() => setTab(key)}
               className={clsx(
-                "relative py-2 pr-4 font-mono text-[11px] uppercase tracking-wider transition-colors",
+                "relative py-2 font-mono text-[11px] uppercase tracking-wider transition-colors",
                 tab === key ? "text-metric-primary" : "text-text-secondary/60 hover:text-text-secondary"
               )}
             >
               {label}
-              {tab === key && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-metric-primary" />}
+              {tab === key && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-metric-primary" />}
             </button>
           ))}
         </div>

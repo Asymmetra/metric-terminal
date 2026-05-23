@@ -20,7 +20,7 @@
         { "key": "Strict-Transport-Security",   "value": "max-age=63072000; includeSubDomains; preload" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.imperial.space wss://api.imperial.space https://perp-api.phoenix.trade wss://perp-api.phoenix.trade https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com https://solana-rpc.publicnode.com wss://solana-rpc.publicnode.com https://*.helius-rpc.com wss://*.helius-rpc.com https://*.quiknode.pro wss://*.quiknode.pro https://*.mainnet.rpcpool.com wss://*.mainnet.rpcpool.com https://*.onrender.com wss://*.onrender.com; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; worker-src 'self' blob:"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.imperial.space wss://api.imperial.space https://perp-api.phoenix.trade wss://perp-api.phoenix.trade https://api.mainnet.solana.com wss://api.mainnet.solana.com https://solana-rpc.publicnode.com wss://solana-rpc.publicnode.com https://*.helius-rpc.com wss://*.helius-rpc.com https://*.quiknode.pro wss://*.quiknode.pro https://*.mainnet.rpcpool.com wss://*.mainnet.rpcpool.com https://*.onrender.com wss://*.onrender.com; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; worker-src 'self' blob:"
         }
       ]
     }

@@ -25,7 +25,7 @@
  *
  * Env:
  *   SOLANA_RPC   Required for T2 + T3 + T4. Use a Helius/QuickNode endpoint;
- *                public mainnet-beta will rate-limit aggressively.
+ *                public mainnet will rate-limit aggressively.
  *   DEPOSIT_USDC Default 1. Amount in dollars to deposit when T2 is on.
  *   PROFILE      Default 0. Sub-account index 0..5.
  *

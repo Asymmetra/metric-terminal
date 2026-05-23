@@ -8,7 +8,7 @@
  *      200 to browser-origin requests).
  *
  * NOTE: the official public endpoint per solana.com/docs/references/clusters
- * is https://api.mainnet-beta.solana.com, but it returns HTTP 403 to
+ * is https://api.mainnet.solana.com, but it returns HTTP 403 to
  * browser-origin POSTs (Solana Labs blocks anonymous web traffic), so it is
  * intentionally NOT raced here — including it just spams the console with 403s
  * while the env primary wins anyway. rpc.ankr.com/solana likewise 403s now.

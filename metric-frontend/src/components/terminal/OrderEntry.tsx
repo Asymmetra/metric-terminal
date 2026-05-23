@@ -34,6 +34,8 @@ const VENUES: { tag: VenueChoice; label: string }[] = [
 ];
 const MAX_LEVERAGE = 20;
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
 function Field({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -144,20 +146,25 @@ export function OrderEntry() {
   }, [wallet, jwt, setJwt, refreshBalances]);
 
   // Read the wallet's USDC balance (display dollars), null if unreadable.
+  // Reads the single USDC associated-token-account via getTokenAccountBalance
+  // (a light, single-account call). We avoid getParsedTokenAccountsByOwner — the
+  // public fallback RPC (publicnode) returns "Method not found" for it, which is
+  // why the wallet balance showed "—". getTokenAccountBalance is supported there.
   const fetchWalletUsdc = useCallback(async (): Promise<number | null> => {
     if (!wallet) return null;
     try {
       const { PublicKey } = await import("@solana/web3.js");
-      const accs = await connection.getParsedTokenAccountsByOwner(new PublicKey(wallet), {
-        mint: new PublicKey(USDC_MINT),
-      });
-      const native = accs.value.reduce(
-        (a, x) => a + Number(x.account.data.parsed?.info?.tokenAmount?.amount ?? 0),
-        0
+      const owner = new PublicKey(wallet);
+      const [ata] = PublicKey.findProgramAddressSync(
+        [owner.toBytes(), new PublicKey(TOKEN_PROGRAM).toBytes(), new PublicKey(USDC_MINT).toBytes()],
+        new PublicKey(ATA_PROGRAM)
       );
-      return native / 1e6;
-    } catch {
-      return null;
+      const res = await connection.getTokenAccountBalance(ata);
+      return res.value.uiAmount ?? 0;
+    } catch (e) {
+      // No USDC ATA yet → the wallet simply holds 0 USDC. Other errors → unreadable.
+      const msg = String((e as Error)?.message ?? e);
+      return /could not find|not found|does not exist/i.test(msg) ? 0 : null;
     }
   }, [wallet, connection]);
 

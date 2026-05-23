@@ -176,7 +176,7 @@ export function getRpc() {
 
 /**
  * Retry transient RPC failures (gateway 5xx, timeouts, rate limits). Free public
- * RPCs (publicnode, mainnet-beta) blip frequently; this keeps the money flows
+ * RPCs (publicnode, mainnet) blip frequently; this keeps the money flows
  * from aborting mid-sequence. Re-sending the same *signed* tx is idempotent
  * (same signature → the network dedupes), so retrying sends is safe.
  */

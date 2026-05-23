@@ -68,7 +68,7 @@ light use). Required for any `onchain` scenario.
   addressing. `collateral-adjust` still validates open/close/withdraw around it.
 - Free public RPCs blip; the harness retries transient 5xx/timeouts and confirms
   via HTTP `getSignatureStatuses` (not the WS `confirmTransaction`, which hangs on
-  endpoints that don't serve WS). `api.mainnet-beta.solana.com` has been the most
+  endpoints that don't serve WS). `api.mainnet.solana.com` has been the most
   reliable for these runs.
 
 ## Adding a scenario
