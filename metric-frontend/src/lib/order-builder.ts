@@ -48,6 +48,9 @@ export const VENUE_CONFIG: Record<VenueTag, VenueConfig> = {
   phoenix: { label: "Phoenix", underwriter: Underwriter.Phoenix, marketPriceScale: USD_SCALE, markKey: "phoenix" },
   jupiter: { label: "Jupiter", underwriter: Underwriter.Jupiter, marketPriceScale: PRICE_SCALE, markKey: "jupiter" },
   flash_trade: { label: "Flash", underwriter: Underwriter.FlashTrade, marketPriceScale: PRICE_SCALE, markKey: "flash" },
+  // Flash's higher-leverage v2 pool. Shares Flash's `flash` custody-oracle price feed
+  // (no distinct /mark-prices key), same 1e9 market-price scale, but its own underwriter code.
+  flash_v2: { label: "Flash v2", underwriter: Underwriter.FlashV2, marketPriceScale: PRICE_SCALE, markKey: "flash" },
   gmtrade: { label: "GMTrade", underwriter: Underwriter.GMTrade, marketPriceScale: PRICE_SCALE, markKey: "gmtrade" },
 };
 

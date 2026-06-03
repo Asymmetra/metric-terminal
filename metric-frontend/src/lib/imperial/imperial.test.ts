@@ -27,6 +27,7 @@ describe("Imperial DTO enums", () => {
     expect(Underwriter.FlashTrade).toBe(1);
     expect(Underwriter.Phoenix).toBe(2);
     expect(Underwriter.GMTrade).toBe(3);
+    expect(Underwriter.FlashV2).toBe(5); // 4 reserved for Pacifica
     expect(Side.Long).toBe(0);
     expect(Side.Short).toBe(1);
     expect(Action.Increase).toBe(0);

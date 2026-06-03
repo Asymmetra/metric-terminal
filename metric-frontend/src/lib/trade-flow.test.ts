@@ -63,6 +63,11 @@ describe("marketVenueCandidates", () => {
       "flash_trade",
     ]);
   });
+  it("includes flash_v2 when /route ranks it, and an explicit flash_v2 pick leads", () => {
+    const r = route([{ venue: "flash_v2" }, { venue: "phoenix" }, { venue: "gmtrade" }], "phoenix");
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: r })).toContain("flash_v2");
+    expect(marketVenueCandidates({ type: "market", selectedVenue: "flash_v2", route: r })[0]).toBe("flash_v2");
+  });
   it("falls back to GMTrade only when route is unavailable (market)", () => {
     expect(marketVenueCandidates({ type: "market", selectedVenue: "auto", route: null })).toEqual(["gmtrade"]);
   });
@@ -80,6 +85,7 @@ describe("toMarketPrice (venue-specific scale)", () => {
     expect(toMarketPrice(84.66, "gmtrade")).toBe(84_660_000_000); // 1e9
     expect(toMarketPrice(84.66, "jupiter")).toBe(84_660_000_000);
     expect(toMarketPrice(84.66, "flash_trade")).toBe(84_660_000_000);
+    expect(toMarketPrice(84.66, "flash_v2")).toBe(84_660_000_000);
   });
 });
 

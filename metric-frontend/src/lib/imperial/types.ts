@@ -17,6 +17,8 @@ export const Underwriter = {
   Phoenix: 2,
   GMTrade: 3,
   // 4 is reserved (Pacifica) and rejected today.
+  FlashV2: 5, // Flash's higher-leverage v2 pool (up to ~500×). Undocumented in the
+  // OpenAPI `underwriter` description, but present in the `Venue` enum and confirmed.
 } as const;
 export type Underwriter = (typeof Underwriter)[keyof typeof Underwriter];
 
@@ -56,7 +58,7 @@ export const FundingStatus = { FundedAtCreation: 0 } as const;
 export type FundingStatus = (typeof FundingStatus)[keyof typeof FundingStatus];
 
 /** String-form venue tag used on read endpoints (e.g. /route, /funding-rates). */
-export type VenueTag = "jupiter" | "flash_trade" | "phoenix" | "gmtrade";
+export type VenueTag = "jupiter" | "flash_trade" | "phoenix" | "gmtrade" | "flash_v2";
 
 // ──────────────────────────────────────────────────────────── auth
 

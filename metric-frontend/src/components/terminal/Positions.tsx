@@ -5,26 +5,17 @@ import clsx from "clsx";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
-import type { PositionLifecycle, VenueTag } from "@/lib/imperial/types";
+import type { PositionLifecycle } from "@/lib/imperial/types";
 import { useTraderStore } from "@/stores/traderStore";
 import { useStatsStore } from "@/stores/statsStore";
 import { useToastStore } from "@/stores/toastStore";
 import { buildCloseRequest } from "@/lib/order-builder";
 import { closeAndWithdraw, TradeFlowError } from "@/lib/trade-flow";
+import { venueOf, sideOf } from "@/lib/position-mapping";
 import { formatPriceAuto, formatUsdPrecise } from "@/lib/format";
 
 type Tab = "positions" | "history";
 
-function venueOf(underwriter: string): VenueTag {
-  const u = underwriter.toLowerCase();
-  if (u.includes("jupiter")) return "jupiter";
-  if (u.includes("flash")) return "flash_trade";
-  if (u.includes("gm")) return "gmtrade";
-  return "phoenix";
-}
-function sideOf(side: string): "long" | "short" {
-  return side.toLowerCase().includes("short") ? "short" : "long";
-}
 function num(v: string | null): number {
   return v == null ? 0 : Number(v) || 0;
 }
@@ -63,7 +54,7 @@ export function Positions() {
           wallet,
           profileIndex: p.profileIndex ?? 0,
           symbol: p.asset,
-          venue: venueOf(p.underwriter),
+          venue: venueOf(p),
           positionSide: sideOf(p.side),
           sizeUsd: num(p.sizeUsd),
           markPrice: mark,

@@ -39,6 +39,7 @@ describe("unit scaling", () => {
     expect(VENUE_CONFIG.jupiter.underwriter).toBe(Underwriter.Jupiter);
     expect(VENUE_CONFIG.flash_trade.underwriter).toBe(Underwriter.FlashTrade);
     expect(VENUE_CONFIG.gmtrade.underwriter).toBe(Underwriter.GMTrade);
+    expect(VENUE_CONFIG.flash_v2.underwriter).toBe(Underwriter.FlashV2);
   });
 });
 
@@ -90,6 +91,10 @@ describe("buildOrderRequest — market long (matches live test shape)", () => {
   it("uses the 1e9 oracle scale for non-Phoenix market venues", () => {
     expect(buildOrderRequest({ ...base, venue: "gmtrade" }).marketPrice).toBe(87_600_000_000);
     expect(buildOrderRequest({ ...base, venue: "jupiter" }).marketPrice).toBe(87_600_000_000);
+    expect(buildOrderRequest({ ...base, venue: "flash_v2" }).marketPrice).toBe(87_600_000_000);
+  });
+  it("addresses flash_v2 with underwriter code 5", () => {
+    expect(buildOrderRequest({ ...base, venue: "flash_v2" }).underwriter).toBe(Underwriter.FlashV2);
   });
   it("carries the symbol and no trigger for market", () => {
     expect(req.symbol).toBe("SOL");
