@@ -11,7 +11,7 @@ describe("venueOf — close-path underwriter resolution", () => {
     expect(venueOf(pos("flash_trade"))).toBe("flash_trade");
   });
   it("distinguishes flash_v2 from flash_trade (must NOT collapse to code-1)", () => {
-    // The load-bearing case: a flash_v2 position must close on FlashV2 (code 5),
+    // The load-bearing case: a flash_v2 position must close on FlashV2 (code 4),
     // never on Flash v1 (code 1). Both contain "flash"; only v2 carries the marker.
     expect(venueOf(pos("flash_v2"))).toBe("flash_v2");
     expect(venueOf(pos("flash"))).toBe("flash_trade"); // bare "flash" → v1

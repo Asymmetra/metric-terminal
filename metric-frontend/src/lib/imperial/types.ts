@@ -16,9 +16,11 @@ export const Underwriter = {
   FlashTrade: 1,
   Phoenix: 2,
   GMTrade: 3,
-  // 4 is reserved (Pacifica) and rejected today.
-  FlashV2: 5, // Flash's higher-leverage v2 pool (up to ~500×). Undocumented in the
-  // OpenAPI `underwriter` description, but present in the `Venue` enum and confirmed.
+  FlashV2: 4, // Flash's higher-leverage v2 pool (up to ~500×). Placed through the normal
+  // /mobile/orders path (no separate v2 orders endpoint); the order bot auto-stages collateral
+  // into the V2 UserDepositLedger at fill, so no manual /mobile/v2/deposit is required to trade.
+  // passthrough_client `from_u8` maps 4→FlashTradeV2 and rejects ≥5; the OpenAPI "4 = Pacifica"
+  // note is stale.
 } as const;
 export type Underwriter = (typeof Underwriter)[keyof typeof Underwriter];
 
