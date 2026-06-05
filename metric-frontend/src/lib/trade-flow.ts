@@ -93,6 +93,20 @@ function profileFree(balances: BalancesResponse, profileIndex: number): number {
   return balances.profiles.find((p) => p.profileIndex === profileIndex)?.usdc ?? 0;
 }
 
+/**
+ * True when an order rejection looks like a transient market-cache miss rather than
+ * a hard rejection. Imperial's Flash V2 market list is populated at RUNTIME (the
+ * `flash_v2_market_cache` refreshes ~every 60s and is empty until the first fetch),
+ * so a freshly-served instance can briefly fail to resolve a symbol that `/route`
+ * already offers ("could not resolve symbol SOL for underwriter 4; check that the
+ * venue lists this market"). That's worth one retry on the same venue, unlike a hard
+ * rejection (insufficient margin, max leverage, etc.) which should fall through.
+ */
+export function isTransientResolveError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return /could not resolve symbol|resolve market|venue lists this market|market cache/i.test(error);
+}
+
 // ───────────────────────────────────────────────────────────── deps + steps
 
 /** Subset of the Imperial client this module needs (injectable for tests). */
@@ -145,6 +159,8 @@ export interface FlowDeps {
   pollIntervalMs?: number;
   settleTimeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Delay before retrying a venue once on a transient market-cache miss. Default 2500ms. */
+  resolveRetryMs?: number;
 }
 
 /**
@@ -257,7 +273,15 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
           ? `Opening ${input.side} ${input.symbol} on ${v} (${i + 1}/${venues.length})…`
           : `Opening ${input.side} ${input.symbol} on ${v}…`,
     });
-    const order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
+    let order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
+    // Transient market-cache miss (e.g. Flash V2's runtime-warmed market list not yet
+    // hydrated on the serving instance): retry the SAME venue once after a short delay
+    // before falling through. A hard rejection isn't retried (see isTransientResolveError).
+    if (!order.success && isTransientResolveError(order.error)) {
+      step({ step: "order", message: `Warming ${v} market data, retrying…` });
+      await sleep(deps.resolveRetryMs ?? 2500);
+      order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
+    }
     if (order.success) {
       step({ step: "done", message: `Position opened on ${v}.`, signature: order.signature ?? undefined });
       return { depositedNative, order, venue: v };

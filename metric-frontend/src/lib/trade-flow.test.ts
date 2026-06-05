@@ -4,6 +4,7 @@ import {
   marketVenueCandidates,
   openWithDeposit,
   closeAndWithdraw,
+  isTransientResolveError,
   TradeFlowError,
   type FlowApi,
   type FlowDeps,
@@ -246,6 +247,54 @@ describe("openWithDeposit", () => {
       fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), assertDepositReady })
     );
     expect(assertDepositReady).toHaveBeenCalledWith(10_000_000);
+  });
+
+  it("retries the same venue once on a transient cold-cache resolve miss, then fills", async () => {
+    // Flash V2's market cache warms at runtime — the first create can miss, the retry fills.
+    let attempts = 0;
+    const f = makeApi({
+      startFree: 20_000_000,
+      onOrder: () => {
+        attempts += 1;
+        return attempts === 1
+          ? { success: false, signature: null, orderPda: null, error: 'could not resolve symbol "SOL" for underwriter 4' }
+          : ORDER_OK;
+      },
+    });
+    const res = await openWithDeposit(
+      { ...baseInput, venue: "flash_v2" },
+      fastDeps({ api: f.api, venues: ["flash_v2"], resolveRetryMs: 0 })
+    );
+    expect(res.order.success).toBe(true);
+    expect(res.venue).toBe("flash_v2");
+    expect(f.calls.orders).toBe(2); // missed once (cold cache), retried, filled
+  });
+
+  it("does NOT retry on a hard (non-resolve) rejection — fails immediately", async () => {
+    const f = makeApi({
+      startFree: 20_000_000,
+      onOrder: () => ({ success: false, signature: null, orderPda: null, error: "insufficient margin" }),
+    });
+    await expect(
+      openWithDeposit(
+        { ...baseInput, venue: "flash_v2" },
+        fastDeps({ api: f.api, venues: ["flash_v2"], resolveRetryMs: 0 })
+      )
+    ).rejects.toMatchObject({ name: "TradeFlowError" });
+    expect(f.calls.orders).toBe(1); // no retry on a hard rejection
+  });
+});
+
+describe("isTransientResolveError", () => {
+  it("flags cold-cache symbol-resolution misses", () => {
+    expect(isTransientResolveError('could not resolve symbol "SOL" for underwriter 4')).toBe(true);
+    expect(isTransientResolveError("check that the venue lists this market")).toBe(true);
+  });
+  it("does not flag hard rejections or empty errors", () => {
+    expect(isTransientResolveError("insufficient margin")).toBe(false);
+    expect(isTransientResolveError("max leverage exceeded")).toBe(false);
+    expect(isTransientResolveError(null)).toBe(false);
+    expect(isTransientResolveError(undefined)).toBe(false);
   });
 });
 
