@@ -116,6 +116,18 @@ export class ImperialClient {
   }
 
   /**
+   * Per-profile Flash V2 `UserDepositLedger` balances ("USDC already moved into V2,
+   * tradeable now"). Distinct from the plain-profile USDC in `getBalances` — collateral
+   * the order bot stages for V2 lives here. Read-only; needs the JWT.
+   */
+  getV2Balance(jwt: string): Promise<{
+    wallet: string;
+    profiles: { profileIndex: number; profilePda: string; availableUsdc: number }[];
+  }> {
+    return this.get("/mobile/v2/balance", jwt);
+  }
+
+  /**
    * Build a sponsored, partially-signed deposit/withdraw VersionedTransaction.
    * No JWT required — keyed on the wallet field. Caller hands the returned
    * base64 to SignerProvider.signAndSendTransaction.
