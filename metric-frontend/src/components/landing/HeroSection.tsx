@@ -86,7 +86,7 @@ export function HeroSection() {
         </motion.p>
 
         {/* CTA */}
-        <motion.div variants={fadeUp} className="mt-4">
+        <motion.div variants={fadeUp} className="mt-4 flex flex-col items-center gap-3">
           <Link
             href="/terminal"
             className="group relative inline-flex items-center border border-metric-primary/60 bg-transparent px-10 py-3.5 font-mono text-xs font-medium tracking-[0.2em] text-metric-primary transition-all duration-300 hover:border-metric-primary hover:bg-metric-primary/10 hover:text-metric-primary"
@@ -110,6 +110,12 @@ export function HeroSection() {
             >
               <path d="M2.5 6h7M6.5 2.5L10 6l-3.5 3.5" />
             </svg>
+          </Link>
+          <Link
+            href="/degen"
+            className="inline-flex items-center font-mono text-[10px] font-medium tracking-[0.2em] text-metric-sell/70 transition-colors hover:text-metric-sell"
+          >
+            DEGEN MODE · 400× · 60s ↗
           </Link>
         </motion.div>
 
