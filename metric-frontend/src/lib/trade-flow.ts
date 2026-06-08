@@ -107,6 +107,22 @@ export function isTransientResolveError(error: string | null | undefined): boole
   return /could not resolve symbol|resolve market|venue lists this market|market cache/i.test(error);
 }
 
+/**
+ * True when an order rejection looks retryable rather than terminal. Imperial's
+ * async market-order path (`execute_magic_trade_market`) can fail to *submit* on
+ * a transient backend/RPC hiccup and reply "Failed to place order — please try
+ * again" — common on the high-leverage Flash V2 path (400×/495×). The deposit has
+ * already landed, so re-placing the same order is free; retrying a few times turns
+ * a flaky open into a successful one. Terminal rejections (insufficient margin,
+ * max leverage, invalid market) don't match these patterns and fall through.
+ */
+export function isRetryableOrderError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return /please try again|failed to place order|try again|temporar|timed?\s?out|timeout|unavailable|too many requests|rate.?limit|\b(429|503|502|504)\b/i.test(
+    error
+  );
+}
+
 // ───────────────────────────────────────────────────────────── deps + steps
 
 /** Subset of the Imperial client this module needs (injectable for tests). */
@@ -161,6 +177,10 @@ export interface FlowDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Delay before retrying a venue once on a transient market-cache miss. Default 2500ms. */
   resolveRetryMs?: number;
+  /** Max placement attempts per venue when the order is rejected retryably. Default 3. */
+  orderRetries?: number;
+  /** Delay between retryable placement attempts. Default 1200ms. */
+  orderRetryMs?: number;
 }
 
 /**
@@ -263,24 +283,35 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
   // Attempt the order across the candidate venues until one fills. A rejected
   // order opens no position (no charge), so falling through is cheap; the
   // deposit already landed and is venue-agnostic, so we never re-deposit.
+  //
+  // Per venue we retry on two recoverable rejections before falling through:
+  //   • a transient market-cache miss (Flash V2's runtime-warmed market list not
+  //     yet hydrated on the serving instance) — waits `resolveRetryMs`;
+  //   • a transient placement failure ("Failed to place order — please try
+  //     again", common on the high-leverage path) — waits `orderRetryMs`.
+  // A hard rejection (insufficient margin, max leverage, invalid market) matches
+  // neither and falls through immediately.
+  const maxAttempts = Math.max(1, deps.orderRetries ?? 3);
   let lastError = "unknown";
   for (let i = 0; i < venues.length; i += 1) {
     const v = venues[i];
-    step({
-      step: "order",
-      message:
-        venues.length > 1
-          ? `Opening ${input.side} ${input.symbol} on ${v} (${i + 1}/${venues.length})…`
-          : `Opening ${input.side} ${input.symbol} on ${v}…`,
-    });
-    let order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
-    // Transient market-cache miss (e.g. Flash V2's runtime-warmed market list not yet
-    // hydrated on the serving instance): retry the SAME venue once after a short delay
-    // before falling through. A hard rejection isn't retried (see isTransientResolveError).
-    if (!order.success && isTransientResolveError(order.error)) {
-      step({ step: "order", message: `Warming ${v} market data, retrying…` });
-      await sleep(deps.resolveRetryMs ?? 2500);
-      order = await api.placeOrder(buildOrderRequest({ ...input, venue: v }), deps.jwt);
+    const req = buildOrderRequest({ ...input, venue: v });
+    const where = venues.length > 1 ? ` (${i + 1}/${venues.length})` : "";
+    let order = { success: false } as OrderResponse;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      step({
+        step: "order",
+        message:
+          attempt === 1
+            ? `Opening ${input.side} ${input.symbol} on ${v}${where}…`
+            : `${v} busy — retry ${attempt}/${maxAttempts}…`,
+      });
+      order = await api.placeOrder(req, deps.jwt);
+      if (order.success) break;
+      const resolveMiss = isTransientResolveError(order.error);
+      const retryable = resolveMiss || isRetryableOrderError(order.error);
+      if (!retryable || attempt === maxAttempts) break;
+      await sleep(resolveMiss ? deps.resolveRetryMs ?? 2500 : deps.orderRetryMs ?? 1200);
     }
     if (order.success) {
       step({ step: "done", message: `Position opened on ${v}.`, signature: order.signature ?? undefined });

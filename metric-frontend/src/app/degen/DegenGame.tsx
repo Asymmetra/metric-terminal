@@ -246,6 +246,10 @@ export default function DegenGame() {
         venues: [GAME_VENUE],
         confirm,
         assertDepositReady,
+        // 400× Flash V2 frequently bounces the first placement with a transient
+        // "please try again"; lean harder on retries here than the terminal does.
+        orderRetries: 5,
+        orderRetryMs: 1000,
         onStep: (p) => updateToast(tid, { type: "loading", title: label, detail: p.message }),
       });
     },

@@ -5,6 +5,7 @@ import {
   openWithDeposit,
   closeAndWithdraw,
   isTransientResolveError,
+  isRetryableOrderError,
   TradeFlowError,
   type FlowApi,
   type FlowDeps,
@@ -282,6 +283,57 @@ describe("openWithDeposit", () => {
       )
     ).rejects.toMatchObject({ name: "TradeFlowError" });
     expect(f.calls.orders).toBe(1); // no retry on a hard rejection
+  });
+
+  it("retries a transient 'please try again' placement failure, then fills", async () => {
+    // The high-leverage Flash V2 path often bounces the first create with a
+    // retryable "Failed to place order — please try again"; persistence wins.
+    let attempts = 0;
+    const f = makeApi({
+      startFree: 20_000_000,
+      onOrder: () => {
+        attempts += 1;
+        return attempts < 3
+          ? { success: false, signature: null, orderPda: null, error: "Failed to place order — please try again." }
+          : ORDER_OK;
+      },
+    });
+    const res = await openWithDeposit(
+      { ...baseInput, venue: "flash_v2" },
+      fastDeps({ api: f.api, venues: ["flash_v2"], orderRetries: 5, orderRetryMs: 0 })
+    );
+    expect(res.order.success).toBe(true);
+    expect(f.calls.orders).toBe(3); // bounced twice (retryable), filled on the third
+  });
+
+  it("gives up after orderRetries attempts on a persistent retryable rejection (funds safe)", async () => {
+    const f = makeApi({
+      startFree: 20_000_000,
+      onOrder: () => ({ success: false, signature: null, orderPda: null, error: "please try again" }),
+    });
+    await expect(
+      openWithDeposit(
+        { ...baseInput, venue: "flash_v2" },
+        fastDeps({ api: f.api, venues: ["flash_v2"], orderRetries: 3, orderRetryMs: 0 })
+      )
+    ).rejects.toMatchObject({ name: "TradeFlowError" });
+    expect(f.calls.orders).toBe(3); // exactly orderRetries attempts, then fall through
+  });
+});
+
+describe("isRetryableOrderError", () => {
+  it("flags transient placement failures", () => {
+    expect(isRetryableOrderError("Failed to place order — please try again.")).toBe(true);
+    expect(isRetryableOrderError("request timed out")).toBe(true);
+    expect(isRetryableOrderError("service unavailable (503)")).toBe(true);
+    expect(isRetryableOrderError("too many requests")).toBe(true);
+  });
+  it("does not flag terminal rejections or empty errors", () => {
+    expect(isRetryableOrderError("insufficient margin")).toBe(false);
+    expect(isRetryableOrderError("max leverage exceeded")).toBe(false);
+    expect(isRetryableOrderError("route too large")).toBe(false);
+    expect(isRetryableOrderError(null)).toBe(false);
+    expect(isRetryableOrderError(undefined)).toBe(false);
   });
 });
 
