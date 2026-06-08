@@ -391,7 +391,7 @@ export default function DegenGame() {
   const countdownColor = remainSec > 20 ? "text-metric-buy" : remainSec > 7 ? "text-metric-primary" : "text-metric-sell";
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* top bar */}
       <div className="flex shrink-0 items-center justify-between border-b border-metric-border bg-surface-1 px-4 py-2">
         <div className="flex items-baseline gap-3">
@@ -404,8 +404,9 @@ export default function DegenGame() {
         </div>
       </div>
 
-      {/* chart */}
-      <div className="relative min-h-0 flex-1">
+      {/* chart — overflow-hidden clips liveline's canvas to the flex box so it
+          can't bleed over (and steal clicks from) the control panel below */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <LiveLineChart symbol={GAME_SYMBOL} />
         {/* live countdown overlay */}
         {(phase === "live" || phase === "closing") && deadlineMs != null && (
@@ -423,8 +424,9 @@ export default function DegenGame() {
         )}
       </div>
 
-      {/* control panel */}
-      <div className="shrink-0 border-t border-metric-border bg-surface-1 px-4 py-3">
+      {/* control panel — relative z-10 keeps it above the chart layer so its
+          buttons always receive clicks even if the canvas overdraws its box */}
+      <div className="relative z-10 shrink-0 border-t border-metric-border bg-surface-1 px-4 py-3">
         <ControlPanel
           phase={phase}
           busy={busy}
