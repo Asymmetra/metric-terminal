@@ -238,6 +238,18 @@ export interface RouteResponse {
   candidates: RouteCandidate[];
 }
 
+/**
+ * GET /status — Imperial component health. `orderBot.status` is the one that
+ * gates trading: it's the bot that submits/executes every order across all
+ * venues, so when it's "unhealthy" no order can place (the failure surfaces as
+ * "Failed to place order — please try again" or "Imperial internal error").
+ */
+export interface ImperialStatus {
+  db: string;
+  indexer: { status: string; grpcStream?: string; db?: string; lastProcessedSlot?: number };
+  orderBot: { status: string; rpc?: string };
+}
+
 export interface FundingRateRow {
   symbol: string;
   jupiter: VenueFundingRate | null;

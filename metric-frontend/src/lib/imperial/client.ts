@@ -14,6 +14,7 @@ import type {
   ExchangeRequest,
   ExchangeResponse,
   FundingRateRow,
+  ImperialStatus,
   MarkPriceRow,
   OrderRequest,
   OrderResponse,
@@ -199,6 +200,10 @@ export class ImperialClient {
   }
   getPriorityFee(): Promise<{ priority_fee: number }> {
     return this.get("/priority-fee");
+  }
+  /** Component health. `orderBot.status === "unhealthy"` ⇒ no order can place. */
+  getStatus(): Promise<ImperialStatus> {
+    return this.get("/status");
   }
 
   // ────────────────────────────────────────────── plumbing

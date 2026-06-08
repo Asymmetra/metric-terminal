@@ -49,6 +49,7 @@ import {
 const SLIPPAGE_BPS = 200;
 const FILL_TIMEOUT_MS = 60_000; // how long to wait for the async magic_trade fill before giving up
 const POLL_MS = 2_000;
+const LIQ_CONFIRM_POLLS = 2; // consecutive empty polls (≈POLL_MS each) before declaring a liquidation
 
 type Phase = "idle" | "starting" | "live" | "closing" | "liquidated" | "settled";
 
@@ -93,6 +94,7 @@ export default function DegenGame() {
   const weClosedRef = useRef(false);
   const openAckAtRef = useRef<number | null>(null); // when openWithDeposit acked; for fill timeout
   const livePosRef = useRef<ReturnType<typeof findGamePosition> | null>(null);
+  const liqMissRef = useRef(0); // consecutive empty position polls; guards against a false REKT
   const origStakeRef = useRef(0); // the first stake — every double-down repeats it
   const gameSideRef = useRef<GameSide>("long"); // locked at start; open/close/double-down all use it
   const lastPnlRef = useRef(0);
@@ -210,15 +212,21 @@ export default function DegenGame() {
 
       // phase === "live"
       if (pos) {
+        liqMissRef.current = 0;
         livePosRef.current = pos;
         lastPnlRef.current = num(pos.pnlUsd);
         setLivePnl(num(pos.pnlUsd));
       } else if (!weClosedRef.current) {
-        // position vanished and we didn't close it → liquidated
-        setLivePnl(0);
-        const token = jwt ?? (wallet ? loadJwt(wallet) : null);
-        setResult(token ? await buildResult(token, "Liquidated.") : { pnlUsd: lastPnlRef.current, claimableUsd: 0, v2LedgerUsd: 0, note: "Liquidated." });
-        setPhase("liquidated");
+        // The position is absent. A single empty read can be a transient indexer
+        // blip, so require LIQ_CONFIRM_POLLS consecutive misses before calling it
+        // a liquidation — otherwise a blip would falsely abandon a live 400× bet.
+        liqMissRef.current += 1;
+        if (liqMissRef.current >= LIQ_CONFIRM_POLLS) {
+          setLivePnl(0);
+          const token = jwt ?? (wallet ? loadJwt(wallet) : null);
+          setResult(token ? await buildResult(token, "Liquidated.") : { pnlUsd: lastPnlRef.current, claimableUsd: 0, v2LedgerUsd: 0, note: "Liquidated." });
+          setPhase("liquidated");
+        }
       }
     }, POLL_MS);
     return () => clearInterval(id);
@@ -264,6 +272,7 @@ export default function DegenGame() {
     setPhase("starting");
     weClosedRef.current = false;
     livePosRef.current = null;
+    liqMissRef.current = 0;
     origStakeRef.current = stakeNum;
     gameSideRef.current = side;
     lastPnlRef.current = 0;
@@ -276,10 +285,17 @@ export default function DegenGame() {
       // transition to "live" happens in the position poll when the fill lands
     } catch (e) {
       const safe = e instanceof TradeFlowError;
-      updateToast(tid, { type: safe ? "info" : "error", title: safe ? "Didn't open — stake safe" : "Open failed", detail: errMsg(e) });
+      // depositedNative === 0 ⇒ we bailed before funding (e.g. order bot offline);
+      // nothing was staked, so don't claim "stake safe".
+      const noDeposit = e instanceof TradeFlowError && e.depositedNative === 0;
+      updateToast(tid, {
+        type: safe ? "info" : "error",
+        title: noDeposit ? "Can't open right now" : safe ? "Didn't open — stake safe" : "Open failed",
+        detail: errMsg(e),
+      });
       try {
         const token = await ensureJwt();
-        setResult(await buildResult(token, safe ? "Order didn't open — your stake is safe." : undefined));
+        setResult(await buildResult(token, safe && !noDeposit ? "Order didn't open — your stake is safe." : undefined));
         setPhase((await profileFreeNative(token)) > 0 ? "settled" : "idle");
       } catch { setPhase("idle"); }
       setBusy(false);

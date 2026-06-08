@@ -6,6 +6,7 @@ import {
   closeAndWithdraw,
   isTransientResolveError,
   isRetryableOrderError,
+  isOrderBotDown,
   TradeFlowError,
   type FlowApi,
   type FlowDeps,
@@ -113,9 +114,10 @@ function makeApi(opts: {
   onOrder?: (req: { underwriter: number; action: number }) => OrderResponse; // override order outcome
   onClose?: () => void; // mutate free to simulate proceeds
   sweepStatus?: SyncSweepResponse["status"];
+  orderBotStatus?: string; // when set, exposes getStatus() reporting this orderBot.status
 }) {
   let free = opts.startFree;
-  const calls = { buildDeposit: [] as { amount: number; mode: string }[], orders: 0, sweeps: 0 };
+  const calls = { buildDeposit: [] as { amount: number; mode: string }[], orders: 0, sweeps: 0, status: 0 };
   const api: FlowApi = {
     async getBalances() {
       return balances(free);
@@ -140,6 +142,12 @@ function makeApi(opts: {
       return { status: opts.sweepStatus ?? "clean", message: "ok", balances: null };
     },
   };
+  if (opts.orderBotStatus !== undefined) {
+    api.getStatus = async () => {
+      calls.status += 1;
+      return { db: "healthy", indexer: { status: "healthy" }, orderBot: { status: opts.orderBotStatus! } };
+    };
+  }
   return {
     api,
     calls,
@@ -318,6 +326,45 @@ describe("openWithDeposit", () => {
       )
     ).rejects.toMatchObject({ name: "TradeFlowError" });
     expect(f.calls.orders).toBe(3); // exactly orderRetries attempts, then fall through
+  });
+});
+
+describe("order-bot preflight", () => {
+  it("refuses to open and takes NO deposit when the order bot is unhealthy", async () => {
+    const f = makeApi({ startFree: 0, onDeposit: (amt) => f.setFree(amt), orderBotStatus: "unhealthy" });
+    const signFn = vi.fn();
+    await expect(
+      openWithDeposit(baseInput, fastDeps({ api: f.api, signer: makeSigner(signFn) }))
+    ).rejects.toMatchObject({ name: "TradeFlowError", depositedNative: 0 });
+    expect(f.calls.status).toBe(1);
+    expect(f.calls.buildDeposit).toEqual([]); // never funded a doomed order
+    expect(f.calls.orders).toBe(0); // never even attempted placement
+    expect(signFn).not.toHaveBeenCalled();
+  });
+
+  it("opens normally when the order bot is healthy", async () => {
+    const f = makeApi({ startFree: 20_000_000, orderBotStatus: "healthy" });
+    const res = await openWithDeposit(baseInput, fastDeps({ api: f.api }));
+    expect(f.calls.status).toBe(1);
+    expect(res.order.success).toBe(true);
+  });
+
+  it("fails open (still trades) when the status probe itself errors", async () => {
+    const f = makeApi({ startFree: 20_000_000, orderBotStatus: "healthy" });
+    f.api.getStatus = async () => { throw new Error("status 500"); };
+    const res = await openWithDeposit(baseInput, fastDeps({ api: f.api }));
+    expect(res.order.success).toBe(true); // a flaky health probe must not block trading
+  });
+});
+
+describe("isOrderBotDown", () => {
+  it("is true only for an explicit non-healthy status", () => {
+    expect(isOrderBotDown({ db: "", indexer: { status: "" }, orderBot: { status: "unhealthy" } })).toBe(true);
+    expect(isOrderBotDown({ db: "", indexer: { status: "" }, orderBot: { status: "degraded" } })).toBe(true);
+    expect(isOrderBotDown({ db: "", indexer: { status: "" }, orderBot: { status: "healthy" } })).toBe(false);
+    expect(isOrderBotDown({ db: "", indexer: { status: "" }, orderBot: { status: "HEALTHY" } })).toBe(false);
+    expect(isOrderBotDown(null)).toBe(false); // unknown ⇒ fail open
+    expect(isOrderBotDown(undefined)).toBe(false);
   });
 });
 

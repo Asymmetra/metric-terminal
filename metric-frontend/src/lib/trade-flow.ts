@@ -22,6 +22,7 @@ import { imperial as defaultImperial } from "@/lib/imperial";
 import type {
   BalancesResponse,
   DepositResponse,
+  ImperialStatus,
   OrderResponse,
   RouteResponse,
   SyncSweepResponse,
@@ -136,9 +137,18 @@ export interface FlowApi {
     mode: "deposit" | "withdraw";
   }): Promise<DepositResponse>;
   syncProfileSweep(wallet: string, profileIndex: number): Promise<SyncSweepResponse>;
+  /** Optional: component health preflight. Absent in some test mocks. */
+  getStatus?(): Promise<ImperialStatus>;
+}
+
+/** True when Imperial's order bot is reporting a non-healthy state. */
+export function isOrderBotDown(status: ImperialStatus | null | undefined): boolean {
+  const s = status?.orderBot?.status;
+  return typeof s === "string" && s.toLowerCase() !== "healthy";
 }
 
 export type FlowStepName =
+  | "preflight"
   | "deposit"
   | "deposit-confirm"
   | "order"
@@ -240,6 +250,21 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
   const step = deps.onStep ?? (() => {});
 
   const venues = deps.venues && deps.venues.length ? deps.venues : [input.venue];
+
+  // Preflight: every venue's order is executed by Imperial's order bot, so if it
+  // is offline the order is guaranteed to fail. Bail BEFORE taking any deposit so
+  // the user never funds a doomed order and has to claim it back. Fail-open: if
+  // the health check itself errors, proceed (don't block trading on a flaky probe).
+  if (api.getStatus) {
+    step({ step: "preflight", message: "Checking Imperial status…" });
+    const status = await api.getStatus().catch(() => null);
+    if (isOrderBotDown(status)) {
+      throw new TradeFlowError(
+        "Imperial's order bot is offline right now, so orders can't be placed. No deposit was taken — try again shortly.",
+        0
+      );
+    }
+  }
 
   const requiredNative = toUsdFixed(input.collateralUsd);
 
