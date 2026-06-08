@@ -6,7 +6,6 @@ import {
   WalletProvider,
 } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import "@solana/wallet-adapter-react-ui/styles.css";
 import { SOLANA_RPC_CANDIDATES, selectBestRpc } from "@/lib/solana-rpc";
 
@@ -21,7 +20,10 @@ export function WalletProviderWrapper({
 }: {
   children: React.ReactNode;
 }) {
-  const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
+  // No explicit adapters: Phantom (and other Standard Wallets) auto-register via the
+  // Wallet Standard, so listing PhantomWalletAdapter is redundant and triggers a console
+  // warning. autoConnect + WalletMultiButton still discover and connect them.
+  const wallets = useMemo(() => [], []);
 
   // Pick a browser-working RPC at boot. The configured primary (NEXT_PUBLIC_
   // SOLANA_RPC) can be a Triton bare host that 403s browser HTTP and fails the

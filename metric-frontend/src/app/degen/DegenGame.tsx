@@ -17,7 +17,7 @@ import { Toasts } from "@/components/shared/Toasts";
 import { openWithDeposit, isTransientResolveError, TradeFlowError } from "@/lib/trade-flow";
 import { buildCloseRequest, type OrderFormInput } from "@/lib/order-builder";
 import { formatPriceAuto } from "@/lib/format";
-import { confirmSignatureHttp } from "@/lib/solana-rpc";
+import { confirmSignatureHttp, fetchWalletUsdc } from "@/lib/solana-rpc";
 import {
   GAME_LEVERAGE,
   GAME_PROFILE,
@@ -47,9 +47,12 @@ import {
  */
 
 const SLIPPAGE_BPS = 200;
-const FILL_TIMEOUT_MS = 60_000; // how long to wait for the async magic_trade fill before giving up
-const POLL_MS = 2_000;
-const LIQ_CONFIRM_POLLS = 2; // consecutive empty polls (≈POLL_MS each) before declaring a liquidation
+const FILL_TIMEOUT_MS = 30_000; // how long to wait for the async magic_trade fill before giving up
+const POLL_MS = 2_000; // effective live-phase poll cadence
+const POLL_MS_STARTING = 700; // base interval; poll fast while "starting" to catch the fill quickly
+const LIVE_POLL_EVERY = Math.max(1, Math.round(POLL_MS / POLL_MS_STARTING)); // throttle live polls to ≈POLL_MS
+const LIQ_CONFIRM_POLLS = 2; // consecutive empty live polls before declaring a liquidation
+const CLOSE_SETTLE_MS = 30_000; // how long to wait for close proceeds to land in the profile
 
 type Phase = "idle" | "starting" | "live" | "closing" | "liquidated" | "settled";
 
@@ -86,6 +89,8 @@ export default function DegenGame() {
   const [doubling, setDoubling] = useState(false);
   const [livePnl, setLivePnl] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
+  const [walletUsdc, setWalletUsdc] = useState<number | null>(null); // spendable USDC shown in the header
+  const [gameV2Usd, setGameV2Usd] = useState(0); // game profile's V2-ledger collateral (idle surfacing)
 
   // Refs read inside intervals (avoid stale closures).
   const phaseRef = useRef<Phase>("idle");
@@ -98,6 +103,7 @@ export default function DegenGame() {
   const origStakeRef = useRef(0); // the first stake — every double-down repeats it
   const gameSideRef = useRef<GameSide>("long"); // locked at start; open/close/double-down all use it
   const lastPnlRef = useRef(0);
+  const openFlowTidRef = useRef<string | null>(null); // open-flow toast id, resolved by the poll on live/timeout
   // Always points at the latest doClose so the ticker/double-down call the current closure.
   const doCloseRef = useRef<() => void>(() => {});
   useEffect(() => { phaseRef.current = phase; }, [phase]);
@@ -158,6 +164,24 @@ export default function DegenGame() {
     [profileFreeNative]
   );
 
+  // ── header balance: spendable wallet USDC + the game profile's V2-ledger collateral ──
+  // Refreshes on connect and at every phase boundary so the number deducts on stake and
+  // rises on Claim (matching player expectation). RPC failure shows "—", never throws.
+  useEffect(() => {
+    if (!wallet) { setWalletUsdc(null); setGameV2Usd(0); return; }
+    let cancelled = false;
+    void fetchWalletUsdc(wallet).then((v) => { if (!cancelled) setWalletUsdc(v); });
+    const token = jwt ?? loadJwt(wallet);
+    if (token) {
+      void imperial
+        .getV2Balance(token)
+        .then((r) => r.profiles.find((p) => p.profileIndex === GAME_PROFILE)?.availableUsdc ?? 0)
+        .catch(() => 0)
+        .then((v) => { if (!cancelled) setGameV2Usd(v / 1e6); });
+    }
+    return () => { cancelled = true; };
+  }, [wallet, jwt, phase]);
+
   // ── auto-close ticker (drives countdown + fires the delegated close at deadline) ──
   useEffect(() => {
     const id = setInterval(() => {
@@ -177,10 +201,15 @@ export default function DegenGame() {
   }, []);
 
   // ── position poll: fill detection, liquidation detection, live PnL, chart feed ──
+  // Runs every POLL_MS_STARTING so a fill is caught fast; live-phase work is throttled
+  // to ≈POLL_MS to keep request volume sane over a 60s+ position.
   useEffect(() => {
+    let tick = 0;
     const id = setInterval(async () => {
+      tick += 1;
       const p = phaseRef.current;
       if (p !== "starting" && p !== "live") return;
+      if (p === "live" && tick % LIVE_POLL_EVERY !== 0) return;
       if (!wallet) return;
       let list;
       try {
@@ -192,16 +221,36 @@ export default function DegenGame() {
       const pos = findGamePosition(list);
 
       if (phaseRef.current === "starting") {
-        if (pos) {
+        // Only treat a found position as OUR fill once the order is acked
+        // (openAckAt set after openIncrement returns). Before that the poll must not
+        // act: a stale leftover position in this profile would otherwise be adopted,
+        // and — critically — resolving the toast mid-openIncrement orphans it when
+        // start() then overwrites it. This makes openFlowTidRef coherently owned.
+        if (pos && openAckAtRef.current != null) {
+          liqMissRef.current = 0;
           livePosRef.current = pos;
+          openAckAtRef.current = null; // filled — stop the fill-timeout clock
           const dl = initialDeadline(Date.now());
           deadlineRef.current = dl;
           setDeadlineMs(dl);
+          // Resolve the open-flow toast — the poll owns it via the ref, so it never orphans.
+          if (openFlowTidRef.current) {
+            updateToast(openFlowTidRef.current, {
+              type: "success",
+              title: "Position live",
+              detail: `${gameSideRef.current.toUpperCase()} $${formatPriceAuto(num(pos.sizeUsd))} @ ${GAME_LEVERAGE}×`,
+            });
+            openFlowTidRef.current = null;
+          }
           setPhase("live");
           setBusy(false);
         } else if (openAckAtRef.current && Date.now() - openAckAtRef.current > FILL_TIMEOUT_MS) {
           // acked but never filled — stake is safe in the profile/V2 ledger
           openAckAtRef.current = null;
+          if (openFlowTidRef.current) {
+            updateToast(openFlowTidRef.current, { type: "info", title: "Didn't fill — stake safe", detail: "Order didn't fill in time." });
+            openFlowTidRef.current = null;
+          }
           const token = jwt ?? (wallet ? loadJwt(wallet) : null);
           setResult(token ? await buildResult(token, "Order didn't fill — your stake is safe.") : { pnlUsd: 0, claimableUsd: 0, v2LedgerUsd: 0, note: "Order didn't fill." });
           setPhase("settled");
@@ -228,9 +277,9 @@ export default function DegenGame() {
           setPhase("liquidated");
         }
       }
-    }, POLL_MS);
+    }, POLL_MS_STARTING);
     return () => clearInterval(id);
-  }, [wallet, jwt, setPositions, buildResult]);
+  }, [wallet, jwt, setPositions, buildResult, updateToast]);
 
   // ── actions ──────────────────────────────────────────────────────────────────
   const openIncrement = useCallback(
@@ -256,8 +305,12 @@ export default function DegenGame() {
         assertDepositReady,
         // 400× Flash V2 frequently bounces the first placement with a transient
         // "please try again"; lean harder on retries here than the terminal does.
+        // Tightened delays for a fast game; the deposit-confirm is non-blocking and
+        // the settle gate is V2-ledger-aware, so the deposit clears in seconds.
         orderRetries: 5,
-        orderRetryMs: 1000,
+        orderRetryMs: 600,
+        resolveRetryMs: 1000,
+        settleTimeoutMs: 15_000,
         onStep: (p) => updateToast(tid, { type: "loading", title: label, detail: p.message }),
       });
     },
@@ -273,17 +326,27 @@ export default function DegenGame() {
     weClosedRef.current = false;
     livePosRef.current = null;
     liqMissRef.current = 0;
+    openAckAtRef.current = null; // clear any stale ack from a prior round (else the poll false-times-out)
     origStakeRef.current = stakeNum;
     gameSideRef.current = side;
     lastPnlRef.current = 0;
     const tid = addToast("loading", `Opening ${side} ${GAME_LEVERAGE}× ${GAME_SYMBOL}…`, `$${stakeNum} → $${sizeForStake(stakeNum)} size`);
+    openFlowTidRef.current = tid; // the poll resolves this on fill / fill-timeout
     try {
       const token = await ensureJwt();
       await openIncrement(token, stakeNum, tid, `Opening ${GAME_LEVERAGE}×`);
-      openAckAtRef.current = Date.now();
-      updateToast(tid, { type: "loading", title: "Filling…", detail: "Waiting for Flash V2 fill" });
+      openAckAtRef.current = Date.now(); // arms the poll's fill detection + timeout
+      // Only show "Filling…" if the poll hasn't already claimed the toast (it can't until
+      // now, but stay defensive: the ref is the single source of truth for ownership).
+      if (openFlowTidRef.current === tid) {
+        updateToast(tid, { type: "loading", title: "Filling…", detail: "Waiting for Flash V2 fill" });
+      }
       // transition to "live" happens in the position poll when the fill lands
     } catch (e) {
+      // If the poll already adopted a live position (lost the race to a fast fill), don't
+      // clobber the live game with this late open error.
+      if (phaseRef.current === "live") { setBusy(false); return; }
+      openFlowTidRef.current = null; // we own the resolution here; don't let the poll touch it
       const safe = e instanceof TradeFlowError;
       // depositedNative === 0 ⇒ we bailed before funding (e.g. order bot offline);
       // nothing was staked, so don't claim "stake safe".
@@ -361,8 +424,8 @@ export default function DegenGame() {
       // wait for proceeds to settle into the profile (best-effort)
       const preFree = await profileFreeNative(token);
       const start = Date.now();
-      while (Date.now() - start < 90_000) {
-        await new Promise((r) => setTimeout(r, 2500));
+      while (Date.now() - start < CLOSE_SETTLE_MS) {
+        await new Promise((r) => setTimeout(r, 2000));
         if ((await profileFreeNative(token)) > preFree) break;
       }
       setResult(await buildResult(token));
@@ -389,7 +452,7 @@ export default function DegenGame() {
       if (!(native > 0)) { updateToast(tid, { type: "info", title: "Nothing to claim", detail: "No free balance in the game profile." }); setBusy(false); return; }
       const { transaction } = await imperial.buildDepositTx({ wallet, profileIndex: GAME_PROFILE, amount: native, mode: "withdraw" });
       const { signature } = await signer.signAndSendTransaction({ kind: "solana-versioned", base64: transaction });
-      await confirm(signature).catch(() => {});
+      void confirm(signature).catch(() => {}); // fire-and-forget; the withdraw is already submitted
       updateToast(tid, { type: "success", title: "Claimed to wallet", detail: `$${(native / 1e6).toFixed(2)} → wallet`, txid: signature });
       setPhase("idle");
       setResult(null);
@@ -408,6 +471,7 @@ export default function DegenGame() {
     setLivePnl(0);
     weClosedRef.current = false;
     livePosRef.current = null;
+    openFlowTidRef.current = null;
   }, []);
 
   // ── render ──────────────────────────────────────────────────────────────────
@@ -424,7 +488,11 @@ export default function DegenGame() {
           <span className="font-mono text-[10px] uppercase tracking-wider text-text-secondary/60">{GAME_LEVERAGE}× · {GAME_SYMBOL} · 60s</span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="font-mono text-[13px] text-text-primary">{mark != null ? `$${formatPriceAuto(mark)}` : "—"}</span>
+          {signer.isReady && (
+            <span className="font-mono text-[12px] text-text-secondary" title="Spendable wallet USDC">
+              {walletUsdc != null ? `$${walletUsdc.toFixed(2)} USDC` : "—"}
+            </span>
+          )}
           <WalletMultiButton />
         </div>
       </div>
@@ -457,6 +525,11 @@ export default function DegenGame() {
       {/* control panel — relative z-10 keeps it above the chart layer so its
           buttons always receive clicks even if the canvas overdraws its box */}
       <div className="relative z-10 shrink-0 border-t border-metric-border bg-surface-1 px-4 py-3">
+        {phase === "idle" && gameV2Usd > 0.01 && (
+          <div className="mb-2 font-mono text-[10px] text-text-secondary/70">
+            ${gameV2Usd.toFixed(2)} in Flash V2 ledger — recovered automatically on your next open→close.
+          </div>
+        )}
         <ControlPanel
           phase={phase}
           busy={busy}
@@ -525,6 +598,7 @@ function ControlPanel(props: {
       <div className="flex flex-col items-center gap-2">
         <div className="font-mono text-lg font-bold text-metric-sell">REKT 💀</div>
         <div className="font-mono text-[11px] text-text-secondary">Your 400× position was liquidated.{result?.claimableUsd ? ` $${result.claimableUsd.toFixed(2)} left to claim.` : ""}</div>
+        <V2RecoveryNote usd={result?.v2LedgerUsd ?? 0} />
         <div className="flex gap-2">
           {result && result.claimableUsd > 0 && <ClaimBtn amount={result.claimableUsd} busy={busy} onClick={props.onClaim} />}
           <button onClick={props.onPlayAgain} className="border border-metric-border px-4 py-2 font-mono text-[12px] uppercase tracking-wider text-text-secondary hover:text-text-primary">Play again</button>
@@ -542,8 +616,8 @@ function ControlPanel(props: {
         <div className="font-mono text-[11px] text-text-secondary">
           {result?.pnlUsd ? `PnL ${result.pnlUsd >= 0 ? "+" : ""}$${result.pnlUsd.toFixed(2)} · ` : ""}
           Claimable ${result?.claimableUsd.toFixed(2) ?? "0.00"}
-          {result && result.v2LedgerUsd > 0.01 ? ` · $${result.v2LedgerUsd.toFixed(2)} in V2 ledger` : ""}
         </div>
+        <V2RecoveryNote usd={result?.v2LedgerUsd ?? 0} />
         <div className="flex gap-2">
           {result && result.claimableUsd > 0 && <ClaimBtn amount={result.claimableUsd} busy={busy} onClick={props.onClaim} />}
           <button onClick={props.onPlayAgain} className="border border-metric-border px-4 py-2 font-mono text-[12px] uppercase tracking-wider text-text-secondary hover:text-text-primary">Play again</button>
@@ -621,6 +695,15 @@ function ClaimBtn({ amount, busy, onClick }: { amount: number; busy: boolean; on
     <button onClick={onClick} disabled={busy} className="bg-metric-buy px-4 py-2 font-mono text-[12px] font-bold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50">
       {busy ? "Claiming…" : `Claim $${amount.toFixed(2)}`}
     </button>
+  );
+}
+
+function V2RecoveryNote({ usd }: { usd: number }) {
+  if (!(usd > 0.01)) return null;
+  return (
+    <div className="font-mono text-[10px] text-text-secondary/60">
+      ${usd.toFixed(2)} in Flash V2 ledger — recovered automatically on your next open→close.
+    </div>
   );
 }
 

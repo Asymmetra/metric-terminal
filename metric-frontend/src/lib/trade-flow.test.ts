@@ -115,9 +115,12 @@ function makeApi(opts: {
   onClose?: () => void; // mutate free to simulate proceeds
   sweepStatus?: SyncSweepResponse["status"];
   orderBotStatus?: string; // when set, exposes getStatus() reporting this orderBot.status
+  startV2?: number; // when set, exposes getV2Balance() seeded with this ledger balance (profile 0)
+  stageToV2?: boolean; // when true, a deposit raises the V2 ledger (simulating flash_v2 auto-staging) not free
 }) {
   let free = opts.startFree;
-  const calls = { buildDeposit: [] as { amount: number; mode: string }[], orders: 0, sweeps: 0, status: 0 };
+  let v2 = opts.startV2 ?? 0;
+  const calls = { buildDeposit: [] as { amount: number; mode: string }[], orders: 0, sweeps: 0, status: 0, v2: 0 };
   const api: FlowApi = {
     async getBalances() {
       return balances(free);
@@ -133,7 +136,10 @@ function makeApi(opts: {
     },
     async buildDepositTx(req) {
       calls.buildDeposit.push({ amount: req.amount, mode: req.mode });
-      if (req.mode === "deposit") opts.onDeposit?.(req.amount);
+      if (req.mode === "deposit") {
+        if (opts.stageToV2) v2 += req.amount; // flash_v2: deposit lands in the V2 ledger, not free
+        else opts.onDeposit?.(req.amount);
+      }
       if (req.mode === "withdraw") free -= req.amount;
       return { transaction: "BASE64TX" };
     },
@@ -148,11 +154,21 @@ function makeApi(opts: {
       return { db: "healthy", indexer: { status: "healthy" }, orderBot: { status: opts.orderBotStatus! } };
     };
   }
+  if (opts.startV2 !== undefined || opts.stageToV2) {
+    api.getV2Balance = async () => {
+      calls.v2 += 1;
+      return {
+        wallet: "W",
+        profiles: [0, 1, 2, 3, 4, 5].map((i) => ({ profileIndex: i, profilePda: `pda${i}`, availableUsdc: i === 0 ? v2 : 0 })),
+      };
+    };
+  }
   return {
     api,
     calls,
     setFree: (v: number) => (free = v),
     getFree: () => free,
+    getV2: () => v2,
   };
 }
 
@@ -326,6 +342,68 @@ describe("openWithDeposit", () => {
       )
     ).rejects.toMatchObject({ name: "TradeFlowError" });
     expect(f.calls.orders).toBe(3); // exactly orderRetries attempts, then fall through
+  });
+});
+
+describe("flash_v2 V2-ledger settle gate", () => {
+  it("settles a double-down via the V2 ledger when profile-free never rises", async () => {
+    // Prior collateral already sits in the ledger; profile-free stays 0 and the new
+    // deposit auto-stages into the ledger. The gate must recognise the V2 delta.
+    const f = makeApi({ startFree: 0, startV2: 10_000_000, stageToV2: true });
+    const res = await openWithDeposit(
+      { ...baseInput, venue: "flash_v2" },
+      fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner() })
+    );
+    expect(res.order.success).toBe(true);
+    expect(res.depositedNative).toBe(10_000_000); // deposited the increment
+    expect(f.getV2()).toBe(20_000_000); // ledger rose by the deposit
+    expect(f.calls.v2).toBeGreaterThan(0); // the gate actually consulted the ledger
+  });
+
+  it("settles a first open whose deposit lands in profile-free, even with prior ledger balance", async () => {
+    // Realistic first-open path: the deposit raises profile-FREE (the bot only stages to V2
+    // around fill), and the player already had idle ledger collateral. The free+V2 gate passes.
+    const f = makeApi({ startFree: 0, startV2: 5_000_000, onDeposit: (amt) => f.setFree(amt) });
+    const res = await openWithDeposit(
+      { ...baseInput, venue: "flash_v2" },
+      fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner(() => f.setFree(10_000_000)) })
+    );
+    expect(res.order.success).toBe(true);
+    expect(f.getFree()).toBe(10_000_000); // deposit landed in profile-free, not the ledger
+  });
+
+  it("does NOT pass prematurely on pre-existing ledger balance — times out if the deposit never lands", async () => {
+    // V2 already holds $10 but the new deposit lands nowhere; the delta target
+    // (before + deposit) is never reached, so funds-safe timeout, not a false pass.
+    const f = makeApi({ startFree: 0, startV2: 10_000_000 }); // stageToV2 false → deposit vanishes
+    await expect(
+      openWithDeposit(
+        { ...baseInput, venue: "flash_v2" },
+        fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner(), settleTimeoutMs: 50 })
+      )
+    ).rejects.toMatchObject({ name: "TradeFlowError" });
+  });
+
+  it("does NOT consult the V2 ledger for non-flash_v2 venues (unchanged gate)", async () => {
+    const f = makeApi({ startFree: 0, startV2: 5_000_000, onDeposit: (amt) => f.setFree(amt) });
+    const res = await openWithDeposit(
+      baseInput, // venue: phoenix
+      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)) })
+    );
+    expect(res.order.success).toBe(true);
+    expect(f.calls.v2).toBe(0); // profile-free gate only
+  });
+});
+
+describe("non-blocking deposit confirm", () => {
+  it("completes the open even if the deposit confirm never resolves", async () => {
+    const f = makeApi({ startFree: 0, onDeposit: (amt) => f.setFree(amt) });
+    const neverResolves = () => new Promise<void>(() => {}); // hangs forever
+    const res = await openWithDeposit(
+      baseInput,
+      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)), confirm: neverResolves })
+    );
+    expect(res.order.success).toBe(true); // the balance poll is authoritative; confirm is fire-and-forget
   });
 });
 

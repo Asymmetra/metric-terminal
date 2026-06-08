@@ -7,7 +7,7 @@ import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
 import { ImperialError } from "@/lib/imperial/client";
 import { loadJwt } from "@/lib/imperial/jwt";
-import { SOLANA_RPC_CANDIDATES, confirmSignatureHttp } from "@/lib/solana-rpc";
+import { confirmSignatureHttp, fetchWalletUsdc as fetchWalletUsdcRpc } from "@/lib/solana-rpc";
 import type { VenueTag } from "@/lib/imperial/types";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
@@ -56,9 +56,6 @@ function roundLev(l: number): number {
   if (l >= 10) return Math.round(l);
   return Math.round(l * 2) / 2; // 0.5 granularity at the low end
 }
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
 function Field({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -198,47 +195,14 @@ export function OrderEntry() {
     }
   }, [wallet, jwt, setJwt, refreshBalances]);
 
-  // Read the wallet's USDC balance (display dollars), null if unreadable.
-  // Reads the single USDC associated-token-account via getTokenAccountBalance and
-  // tries the RPC candidate chain (env primary → publicnode) directly, NOT the
-  // wallet-adapter connection: the configured signing RPC can 403/restrict balance
-  // reads in-browser with no fallback, which is why the wallet balance showed "—".
-  // publicnode reliably serves getTokenAccountBalance from the browser.
-  const fetchWalletUsdc = useCallback(async (): Promise<number | null> => {
-    if (!wallet) return null;
-    let ata: string;
-    try {
-      const { PublicKey } = await import("@solana/web3.js");
-      const owner = new PublicKey(wallet);
-      ata = PublicKey.findProgramAddressSync(
-        [owner.toBytes(), new PublicKey(TOKEN_PROGRAM).toBytes(), new PublicKey(USDC_MINT).toBytes()],
-        new PublicKey(ATA_PROGRAM)
-      )[0].toBase58();
-    } catch {
-      return null;
-    }
-    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTokenAccountBalance", params: [ata] });
-    for (const url of SOLANA_RPC_CANDIDATES) {
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body,
-          signal: AbortSignal.timeout(5000),
-        });
-        const j = await r.json();
-        if (j.error) {
-          // No USDC ATA yet → 0. Method/forbidden on this RPC → try the next candidate.
-          if (/could not find|not found|does not exist/i.test(j.error.message ?? "")) return 0;
-          continue;
-        }
-        return j.result?.value?.uiAmount ?? 0;
-      } catch {
-        continue;
-      }
-    }
-    return null;
-  }, [wallet]);
+  // Read the wallet's USDC balance (display dollars), null if unreadable. Shared
+  // helper walks the RPC candidate chain (env primary → publicnode) directly, NOT the
+  // wallet-adapter connection, since the configured signing RPC can 403 balance reads
+  // in-browser with no fallback.
+  const fetchWalletUsdc = useCallback(
+    (): Promise<number | null> => (wallet ? fetchWalletUsdcRpc(wallet) : Promise.resolve(null)),
+    [wallet]
+  );
 
   // Keep the wallet-USDC display fresh on connect + after each trade.
   useEffect(() => {

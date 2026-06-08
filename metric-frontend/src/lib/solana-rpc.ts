@@ -86,6 +86,51 @@ export async function selectBestRpc(timeoutMs = 4000): Promise<string> {
   }
 }
 
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+/**
+ * Read a wallet's spendable USDC (uiAmount) via `getTokenAccountBalance`, walking the
+ * RPC candidate chain so the browser-hostile primary (which 403s browser POSTs) falls
+ * through to the public node. Returns 0 when the USDC ATA doesn't exist yet, and null
+ * when no candidate answered (caller shows "—" rather than treating it as zero).
+ */
+export async function fetchWalletUsdc(wallet: string): Promise<number | null> {
+  let ata: string;
+  try {
+    const { PublicKey } = await import("@solana/web3.js");
+    const owner = new PublicKey(wallet);
+    ata = PublicKey.findProgramAddressSync(
+      [owner.toBytes(), new PublicKey(TOKEN_PROGRAM).toBytes(), new PublicKey(USDC_MINT).toBytes()],
+      new PublicKey(ATA_PROGRAM)
+    )[0].toBase58();
+  } catch {
+    return null;
+  }
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTokenAccountBalance", params: [ata] });
+  for (const url of SOLANA_RPC_CANDIDATES) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(5000),
+      });
+      const j = await r.json();
+      if (j.error) {
+        // No USDC ATA yet → 0. Method/forbidden on this RPC → try the next candidate.
+        if (/could not find|not found|does not exist/i.test(j.error.message ?? "")) return 0;
+        continue;
+      }
+      return j.result?.value?.uiAmount ?? 0;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /**
  * Confirm a signature by polling `getSignatureStatuses` over HTTP instead of
  * web3.js's `confirmTransaction`, which opens a `signatureSubscribe` WebSocket.

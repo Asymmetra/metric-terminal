@@ -139,7 +139,34 @@ export interface FlowApi {
   syncProfileSweep(wallet: string, profileIndex: number): Promise<SyncSweepResponse>;
   /** Optional: component health preflight. Absent in some test mocks. */
   getStatus?(): Promise<ImperialStatus>;
+  /**
+   * Optional: Flash V2 UserDepositLedger balances. flash_v2 collateral auto-stages
+   * here instead of staying in the profile's free USDC, so the settle gate needs it.
+   */
+  getV2Balance?(jwt: string): Promise<{
+    wallet: string;
+    profiles: { profileIndex: number; profilePda: string; availableUsdc: number }[];
+  }>;
 }
+
+/** Native USDC available to a profile: profile-free, plus the flash_v2 ledger when asked. */
+async function availableNative(
+  api: FlowApi,
+  jwt: string,
+  profileIndex: number,
+  includeV2: boolean
+): Promise<number> {
+  const free = profileFree(await api.getBalances(jwt), profileIndex);
+  if (!includeV2 || !api.getV2Balance) return free;
+  const v2 = await api
+    .getV2Balance(jwt)
+    .then((r) => r.profiles.find((p) => p.profileIndex === profileIndex)?.availableUsdc ?? 0)
+    .catch(() => 0);
+  return free + v2;
+}
+
+/** Fraction of a deposit that must show up before the settle gate passes (fees/rounding slack). */
+const SETTLE_DELTA_FRACTION = 0.97;
 
 /** True when Imperial's order bot is reporting a non-healthy state. */
 export function isOrderBotDown(status: ImperialStatus | null | undefined): boolean {
@@ -257,7 +284,12 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
   // the health check itself errors, proceed (don't block trading on a flaky probe).
   if (api.getStatus) {
     step({ step: "preflight", message: "Checking Imperial status…" });
-    const status = await api.getStatus().catch(() => null);
+    // Cap the probe at ~2s so a slow /status can't stall the open (fail-open: a
+    // null result is treated as "not known to be down").
+    const status = await Promise.race([
+      api.getStatus().catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+    ]);
     if (isOrderBotDown(status)) {
       throw new TradeFlowError(
         "Imperial's order bot is offline right now, so orders can't be placed. No deposit was taken — try again shortly.",
@@ -268,12 +300,25 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
 
   const requiredNative = toUsdFixed(input.collateralUsd);
 
+  // flash_v2 collateral can surface in the V2 UserDepositLedger rather than the profile's
+  // free USDC: the deposit lands in profile-free on-chain, but the order bot stages it into
+  // the ledger around fill, and with a position already open (double-down) that staging can
+  // happen before profile-free is ever observed to rise. So the settle gate must count
+  // profile-free + the V2 ledger for this venue — otherwise it never sees the funds and times out.
+  const countV2 = venues.includes("flash_v2") && !!api.getV2Balance;
+
   const balances = await api.getBalances(deps.jwt);
   const free = profileFree(balances, input.profileIndex);
   const depositNative = depositShortfallNative(input.collateralUsd, free);
 
   let depositedNative = 0;
   if (depositNative > 0) {
+    // Snapshot what's already available so the gate waits for the DEPOSIT to land as
+    // a delta, not an absolute — a double-down's prior collateral already sits in V2.
+    const availableBefore = countV2
+      ? await availableNative(api, deps.jwt, input.profileIndex, true)
+      : free;
+
     if (deps.assertDepositReady) await deps.assertDepositReady(depositNative);
     step({ step: "deposit", message: `Depositing $${(depositNative / 1e6).toFixed(2)} to profile ${input.profileIndex}…` });
     const { transaction } = await api.buildDepositTx({
@@ -288,11 +333,16 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
     });
     depositedNative = depositNative;
     step({ step: "deposit-confirm", message: "Confirming deposit…", signature });
-    if (deps.confirm) await deps.confirm(signature).catch(() => {});
-    // Gate the order on the funds actually landing in the profile (Imperial
-    // reads the on-chain ATA — authoritative even if the RPC confirm is slow).
+    // Best-effort RPC confirm — the balance poll below is authoritative, so DON'T
+    // await it (a slow/forbidden confirm would add up to 30s to every open).
+    if (deps.confirm) void deps.confirm(signature).catch(() => {});
+    step({ step: "deposit-confirm", message: "Waiting for deposit to settle…", signature });
+    // Gate the order on the deposited funds landing — profile-free for most venues,
+    // or profile-free + V2 ledger for flash_v2. Delta target avoids a premature pass
+    // when the ledger already holds prior collateral.
+    const target = countV2 ? availableBefore + depositNative * SETTLE_DELTA_FRACTION : requiredNative;
     const landed = await pollUntil(
-      async () => profileFree(await api.getBalances(deps.jwt), input.profileIndex) >= requiredNative,
+      async () => (await availableNative(api, deps.jwt, input.profileIndex, countV2)) >= target,
       settleTimeout,
       interval,
       sleep
