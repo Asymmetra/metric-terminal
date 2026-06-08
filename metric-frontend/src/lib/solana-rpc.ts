@@ -17,6 +17,8 @@
  * safe to commit — shared community infra.
  */
 
+import type { Commitment, Connection } from "@solana/web3.js";
+
 const PUBLIC_FALLBACKS = ["https://solana-rpc.publicnode.com"] as const;
 
 /**
@@ -81,5 +83,39 @@ export async function selectBestRpc(timeoutMs = 4000): Promise<string> {
     return await Promise.any(SOLANA_RPC_CANDIDATES.map(probe));
   } catch {
     return SOLANA_RPC_URL;
+  }
+}
+
+/**
+ * Confirm a signature by polling `getSignatureStatuses` over HTTP instead of
+ * web3.js's `confirmTransaction`, which opens a `signatureSubscribe` WebSocket.
+ *
+ * Triton's bare-host RPC URL (e.g. `…rpcpool.com`) has no working anonymous
+ * websocket, so the wallet-adapter Connection's auto-derived `wss://` endpoint
+ * fails its handshake and reconnects forever — flooding the console with dozens
+ * of "WebSocket connection failed" errors. `getSignatureStatuses` is a plain
+ * HTTP RPC method, so polling it sidesteps the socket entirely.
+ *
+ * Best-effort by design: resolves when the signature reaches `commitment` (or on
+ * an on-chain error, which downstream surfaces via balances / order results) and
+ * otherwise resolves quietly at `timeoutMs`. Callers treat profile balances as
+ * the authoritative settle gate, so a slow/absent confirm never blocks them.
+ */
+export async function confirmSignatureHttp(
+  connection: Connection,
+  signature: string,
+  commitment: Commitment = "confirmed",
+  timeoutMs = 30_000,
+  intervalMs = 1_500
+): Promise<void> {
+  const want = commitment === "finalized" ? ["finalized"] : ["confirmed", "finalized"];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = (await connection.getSignatureStatuses([signature]).catch(() => null))?.value[0];
+    if (status) {
+      if (status.err) return; // surfaced by the balance gate / order result, not here
+      if (status.confirmationStatus && want.includes(status.confirmationStatus)) return;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
 }

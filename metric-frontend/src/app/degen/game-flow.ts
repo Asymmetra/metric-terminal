@@ -7,6 +7,9 @@
 
 import type { PositionLifecycle } from "@/lib/imperial/types";
 
+/** Direction of the bet — chosen at idle, then locked for the whole game. */
+export type GameSide = "long" | "short";
+
 /** Fixed game parameters. */
 export const GAME_LEVERAGE = 400; // preset leverage for every open + double-down increment
 export const GAME_PROFILE = 5; // dedicated isolated profile so the game never touches /terminal positions

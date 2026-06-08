@@ -12,6 +12,7 @@ import { useToastStore } from "@/stores/toastStore";
 import { buildCloseRequest } from "@/lib/order-builder";
 import { closeAndWithdraw, TradeFlowError } from "@/lib/trade-flow";
 import { venueOf, sideOf } from "@/lib/position-mapping";
+import { confirmSignatureHttp } from "@/lib/solana-rpc";
 import { formatPriceAuto, formatUsdPrecise } from "@/lib/format";
 
 type Tab = "positions" | "history";
@@ -64,7 +65,7 @@ export function Positions() {
           const res = await closeAndWithdraw(params, {
             signer,
             jwt: token,
-            confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+            confirm: (sig) => confirmSignatureHttp(connection, sig),
             onStep: (s) => updateToast(tid, { type: "loading", title: `${p.asset} · close & withdraw`, detail: s.message }),
           });
           updateToast(tid, {

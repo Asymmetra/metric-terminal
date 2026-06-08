@@ -17,6 +17,7 @@ import { Toasts } from "@/components/shared/Toasts";
 import { openWithDeposit, isTransientResolveError, TradeFlowError } from "@/lib/trade-flow";
 import { buildCloseRequest, type OrderFormInput } from "@/lib/order-builder";
 import { formatPriceAuto } from "@/lib/format";
+import { confirmSignatureHttp } from "@/lib/solana-rpc";
 import {
   GAME_LEVERAGE,
   GAME_PROFILE,
@@ -24,6 +25,7 @@ import {
   GAME_VENUE,
   MIN_STAKE_USD,
   WINDOW_MS,
+  type GameSide,
   sizeForStake,
   validateStake,
   initialDeadline,
@@ -75,6 +77,7 @@ export default function DegenGame() {
   const updateToast = useToastStore((s) => s.updateToast);
 
   const [phase, setPhase] = useState<Phase>("idle");
+  const [side, setSide] = useState<GameSide>("long");
   const [stake, setStake] = useState("10");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [deadlineMs, setDeadlineMs] = useState<number | null>(null);
@@ -91,6 +94,7 @@ export default function DegenGame() {
   const openAckAtRef = useRef<number | null>(null); // when openWithDeposit acked; for fill timeout
   const livePosRef = useRef<ReturnType<typeof findGamePosition> | null>(null);
   const origStakeRef = useRef(0); // the first stake — every double-down repeats it
+  const gameSideRef = useRef<GameSide>("long"); // locked at start; open/close/double-down all use it
   const lastPnlRef = useRef(0);
   // Always points at the latest doClose so the ticker/double-down call the current closure.
   const doCloseRef = useRef<() => void>(() => {});
@@ -131,7 +135,7 @@ export default function DegenGame() {
   }, [wallet, connection]);
 
   const confirm = useCallback(
-    (sig: string) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+    (sig: string) => confirmSignatureHttp(connection, sig),
     [connection]
   );
 
@@ -229,7 +233,7 @@ export default function DegenGame() {
         profileIndex: GAME_PROFILE,
         symbol: GAME_SYMBOL,
         venue: GAME_VENUE,
-        side: "long",
+        side: gameSideRef.current,
         type: "market",
         sizeUsd: sizeForStake(stakeUsd),
         collateralUsd: stakeUsd,
@@ -257,8 +261,9 @@ export default function DegenGame() {
     weClosedRef.current = false;
     livePosRef.current = null;
     origStakeRef.current = stakeNum;
+    gameSideRef.current = side;
     lastPnlRef.current = 0;
-    const tid = addToast("loading", `Opening ${GAME_LEVERAGE}× ${GAME_SYMBOL}…`, `$${stakeNum} → $${sizeForStake(stakeNum)} size`);
+    const tid = addToast("loading", `Opening ${side} ${GAME_LEVERAGE}× ${GAME_SYMBOL}…`, `$${stakeNum} → $${sizeForStake(stakeNum)} size`);
     try {
       const token = await ensureJwt();
       await openIncrement(token, stakeNum, tid, `Opening ${GAME_LEVERAGE}×`);
@@ -275,7 +280,7 @@ export default function DegenGame() {
       } catch { setPhase("idle"); }
       setBusy(false);
     }
-  }, [busy, phase, signer.isReady, stakeErr, stakeNum, addToast, ensureJwt, openIncrement, updateToast, buildResult, profileFreeNative]);
+  }, [busy, phase, signer.isReady, side, stakeErr, stakeNum, addToast, ensureJwt, openIncrement, updateToast, buildResult, profileFreeNative]);
 
   const doubleDown = useCallback(async () => {
     if (phase !== "live" || doublingRef.current || deadlineRef.current == null) return;
@@ -321,7 +326,7 @@ export default function DegenGame() {
         profileIndex: GAME_PROFILE,
         symbol: GAME_SYMBOL,
         venue: GAME_VENUE,
-        positionSide: "long",
+        positionSide: gameSideRef.current,
         sizeUsd,
         markPrice: px,
         slippageBps: SLIPPAGE_BPS,
@@ -418,7 +423,12 @@ export default function DegenGame() {
                   {livePnl >= 0 ? "+" : ""}${livePnl.toFixed(2)} ·{" "}
                 </span>
               )}
-              {livePosRef.current ? `$${formatPriceAuto(num(livePosRef.current.sizeUsd))} @ ${GAME_LEVERAGE}×` : ""}
+              {livePosRef.current ? (
+                <span className={gameSideRef.current === "long" ? "text-metric-buy" : "text-metric-sell"}>
+                  {gameSideRef.current.toUpperCase()}
+                </span>
+              ) : null}
+              {livePosRef.current ? ` · $${formatPriceAuto(num(livePosRef.current.sizeUsd))} @ ${GAME_LEVERAGE}×` : ""}
             </div>
           </div>
         )}
@@ -431,6 +441,8 @@ export default function DegenGame() {
           phase={phase}
           busy={busy}
           doubling={doubling}
+          side={side}
+          setSide={setSide}
           stake={stake}
           setStake={setStake}
           stakeErr={stakeErr}
@@ -454,6 +466,8 @@ function ControlPanel(props: {
   phase: Phase;
   busy: boolean;
   doubling: boolean;
+  side: GameSide;
+  setSide: (s: GameSide) => void;
   stake: string;
   setStake: (v: string) => void;
   stakeErr: string | null;
@@ -466,7 +480,8 @@ function ControlPanel(props: {
   onClaim: () => void;
   onPlayAgain: () => void;
 }) {
-  const { phase, busy, doubling, stake, setStake, stakeErr, stakeNum, isReady, origStake, result } = props;
+  const { phase, busy, doubling, side, setSide, stake, setStake, stakeErr, stakeNum, isReady, origStake, result } = props;
+  const isLong = side === "long";
 
   if (phase === "starting") {
     return <Center>{busy ? "Opening…" : "Waiting for fill…"} <span className="text-text-secondary/60">($ {origStake} staked)</span></Center>;
@@ -520,6 +535,34 @@ function ControlPanel(props: {
   // idle
   return (
     <div className="flex items-end gap-3">
+      {/* side toggle — picks the bet direction; same 400×/60s mechanics either way */}
+      <div>
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-text-secondary/70">Side</div>
+        <div className="flex">
+          <button
+            onClick={() => setSide("long")}
+            className={clsx(
+              "border px-3 py-2 font-mono text-[12px] font-bold uppercase tracking-wider transition-colors",
+              isLong
+                ? "border-metric-buy bg-metric-buy text-metric-bg"
+                : "border-metric-border text-text-secondary hover:text-text-primary"
+            )}
+          >
+            Long
+          </button>
+          <button
+            onClick={() => setSide("short")}
+            className={clsx(
+              "border border-l-0 px-3 py-2 font-mono text-[12px] font-bold uppercase tracking-wider transition-colors",
+              !isLong
+                ? "border-metric-sell bg-metric-sell text-metric-bg"
+                : "border-metric-border text-text-secondary hover:text-text-primary"
+            )}
+          >
+            Short
+          </button>
+        </div>
+      </div>
       <label className="flex-1">
         <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-text-secondary/70">Stake (USDC) · min ${MIN_STAKE_USD}</div>
         <div className="flex items-center border border-metric-border bg-metric-bg px-2">
@@ -541,9 +584,12 @@ function ControlPanel(props: {
           onClick={props.onStart}
           disabled={busy || !!stakeErr}
           title={stakeErr ?? undefined}
-          className="bg-metric-buy px-6 py-2.5 font-mono text-[14px] font-bold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+          className={clsx(
+            "px-6 py-2.5 font-mono text-[14px] font-bold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50",
+            isLong ? "bg-metric-buy" : "bg-metric-sell"
+          )}
         >
-          {busy ? "…" : `Long ${GAME_LEVERAGE}×`}
+          {busy ? "…" : `${isLong ? "Long" : "Short"} ${GAME_LEVERAGE}×`}
         </button>
       )}
     </div>

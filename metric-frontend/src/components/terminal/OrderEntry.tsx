@@ -7,7 +7,7 @@ import { useSigner } from "@/lib/wallet";
 import { imperial } from "@/lib/imperial";
 import { ImperialError } from "@/lib/imperial/client";
 import { loadJwt } from "@/lib/imperial/jwt";
-import { SOLANA_RPC_CANDIDATES } from "@/lib/solana-rpc";
+import { SOLANA_RPC_CANDIDATES, confirmSignatureHttp } from "@/lib/solana-rpc";
 import type { VenueTag } from "@/lib/imperial/types";
 import { useMarketStore } from "@/stores/marketStore";
 import { useStatsStore } from "@/stores/statsStore";
@@ -329,7 +329,7 @@ export function OrderEntry() {
             signer,
             jwt: token,
             venues,
-            confirm: (sig) => connection.confirmTransaction(sig, "confirmed").then(() => undefined),
+            confirm: (sig) => confirmSignatureHttp(connection, sig),
             assertDepositReady,
             onStep: (p) => updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}`, detail: p.message }),
           });
@@ -373,7 +373,7 @@ export function OrderEntry() {
     try {
       const { transaction } = await imperial.buildDepositTx({ wallet, profileIndex, amount: native, mode: "withdraw" });
       const { signature } = await signer.signAndSendTransaction({ kind: "solana-versioned", base64: transaction });
-      await connection.confirmTransaction(signature, "confirmed").catch(() => {});
+      await confirmSignatureHttp(connection, signature).catch(() => {});
       updateToast(tid, { type: "success", title: "Withdrawn to wallet", detail: `$${(native / 1e6).toFixed(2)} → wallet`, txid: signature });
       bumpRefresh();
       if (jwt) void refreshBalances(jwt);
