@@ -123,9 +123,16 @@ export class ImperialClient {
   }
 
   /**
-   * Per-profile Flash V2 `UserDepositLedger` balances ("USDC already moved into V2,
-   * tradeable now"). Distinct from the plain-profile USDC in `getBalances` — collateral
-   * the order bot stages for V2 lives here. Read-only; needs the JWT.
+   * Per-profile Flash V2 `UserDepositLedger` balances. Read-only; needs the JWT.
+   *
+   * IMPORTANT: `availableUsdc` is NOT reclaimable/spendable collateral — empirically
+   * it behaves like cumulative STAGED volume, not a withdrawable balance. The
+   * "V2 collateral reuse" change that treated it as reclaimable (profile-free deposit
+   * sizing) was REVERTED in 6c3affa; do not re-introduce profile-free sizing from this.
+   *
+   * Its ONLY safe consumer is the flash_v2 settle gate in trade-flow, which uses it
+   * purely as a relative DELTA target (`availableBefore + deposit * 0.97`) — delta-safe
+   * regardless of the field's absolute meaning. Do not treat it as a withdrawable amount.
    */
   getV2Balance(jwt: string): Promise<{
     wallet: string;

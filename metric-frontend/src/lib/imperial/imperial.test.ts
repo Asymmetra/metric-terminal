@@ -373,4 +373,108 @@ describe("ImperialClient stats + history reads", () => {
       `${BASE}/passthrough/users/${encodeURIComponent(FAKE_WALLET)}/orders`
     );
   });
+
+  it("getRoute builds a query with only the REQUIRED params when no optionals are given", async () => {
+    const { calls } = captureFetch({ venue: "phoenix", candidates: [] });
+    const client = new ImperialClient();
+    await client.getRoute({ asset: "SOL", side: "long", notional: 1000, desiredLeverage: 5 });
+    expect(calls[0]).toBe(`${BASE}/route?asset=SOL&side=long&notional=1000&desiredLeverage=5`);
+  });
+
+  it("getRoute appends all optionals, and does NOT drop profileIndex===0 or stickyVenue", async () => {
+    // profileIndex 0 is falsy — the guard is `!== undefined`, so it must still appear.
+    const { calls } = captureFetch({ venue: "flash_v2", candidates: [] });
+    const client = new ImperialClient();
+    await client.getRoute({
+      asset: "SOL",
+      side: "short",
+      notional: 2500,
+      desiredLeverage: 400,
+      wallet: FAKE_WALLET,
+      profileIndex: 0,
+      stickyVenue: "flash_v2",
+    });
+    expect(calls[0]).toBe(
+      `${BASE}/route?asset=SOL&side=short&notional=2500&desiredLeverage=400` +
+        `&wallet=${encodeURIComponent(FAKE_WALLET)}&profileIndex=0&stickyVenue=flash_v2`
+    );
+  });
+
+  it("getPositions URL-encodes the wallet address", async () => {
+    const { calls } = captureFetch([]);
+    const client = new ImperialClient();
+    await client.getPositions(FAKE_WALLET);
+    expect(calls[0]).toBe(`${BASE}/positions?walletAddress=${encodeURIComponent(FAKE_WALLET)}`);
+  });
+
+  it("getTrades appends limit/offset only when supplied", async () => {
+    const { calls } = captureFetch([]);
+    const client = new ImperialClient();
+    await client.getTrades(FAKE_WALLET);
+    await client.getTrades(FAKE_WALLET, { limit: 50, offset: 100 });
+    expect(calls[0]).toBe(`${BASE}/trades?walletAddress=${encodeURIComponent(FAKE_WALLET)}`);
+    expect(calls[1]).toBe(
+      `${BASE}/trades?walletAddress=${encodeURIComponent(FAKE_WALLET)}&limit=50&offset=100`
+    );
+  });
+
+  it("getV2Balance attaches the Bearer JWT and parses the profiles[].availableUsdc shape", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          wallet: FAKE_WALLET,
+          profiles: [
+            { profileIndex: 0, profilePda: "Pda0", availableUsdc: 12_500_000 },
+            { profileIndex: 5, profilePda: "Pda5", availableUsdc: 0 },
+          ],
+        }),
+        { status: 200 }
+      );
+    }) as typeof fetch;
+
+    const client = new ImperialClient();
+    const res = await client.getV2Balance("jwt-v2");
+    expect(calls[0]!.url).toBe(`${BASE}/mobile/v2/balance`);
+    const hdrs = calls[0]!.init?.headers as Record<string, string>;
+    expect(hdrs.authorization).toBe("Bearer jwt-v2");
+    expect(res.profiles[0]!.availableUsdc).toBe(12_500_000);
+    expect(res.profiles[1]!.profileIndex).toBe(5);
+  });
+});
+
+describe("ImperialClient.parse edge cases", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("throws ImperialError with the raw text when a non-2xx body is NOT JSON", async () => {
+    globalThis.fetch = (async () =>
+      new Response("502 Bad Gateway (nginx)", { status: 502 })) as typeof fetch;
+    const client = new ImperialClient();
+    await expect(client.getStatus()).rejects.toMatchObject({
+      name: "ImperialError",
+      status: 502,
+      message: "502 Bad Gateway (nginx)",
+    });
+  });
+
+  it("falls back to 'Imperial <status>' when a non-2xx body is empty", async () => {
+    globalThis.fetch = (async () => new Response("", { status: 500 })) as typeof fetch;
+    const client = new ImperialClient();
+    await expect(client.getStatus()).rejects.toMatchObject({
+      name: "ImperialError",
+      status: 500,
+      message: "Imperial 500",
+    });
+  });
+
+  it("returns undefined for a 2xx EMPTY body (no JSON-parse crash)", async () => {
+    globalThis.fetch = (async () => new Response("", { status: 200 })) as typeof fetch;
+    const client = new ImperialClient();
+    const res = await client.revoke("jwt", FAKE_WALLET);
+    expect(res).toBeUndefined();
+  });
 });

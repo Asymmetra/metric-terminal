@@ -15,7 +15,7 @@ import { useVisibilityInterval } from "@/hooks/useVisibilityInterval";
 import { marketData } from "@/lib/market-data";
 import { LiveLineChart } from "@/components/terminal/LiveLineChart";
 import { Toasts } from "@/components/shared/Toasts";
-import { openWithDeposit, isTransientResolveError, TradeFlowError } from "@/lib/trade-flow";
+import { openWithDeposit, TradeFlowError } from "@/lib/trade-flow";
 import { buildCloseRequest, type OrderFormInput } from "@/lib/order-builder";
 import { formatPriceAuto } from "@/lib/format";
 import { confirmSignatureHttp, fetchWalletUsdc } from "@/lib/solana-rpc";
@@ -35,6 +35,8 @@ import {
   formatCountdown,
   findGamePosition,
   num,
+  placeCloseWithRetry,
+  isRetryableCloseError,
 } from "./game-flow";
 
 /**
@@ -54,6 +56,7 @@ const POLL_MS_STARTING = 700; // base interval; poll fast while "starting" to ca
 const LIVE_POLL_EVERY = Math.max(1, Math.round(POLL_MS / POLL_MS_STARTING)); // throttle live polls to ≈POLL_MS
 const LIQ_CONFIRM_POLLS = 2; // consecutive empty live polls before declaring a liquidation
 const CLOSE_SETTLE_MS = 30_000; // how long to wait for close proceeds to land in the profile
+const MAX_CLOSE_CYCLES = 6; // bounded auto-close re-arms before handing off to a manual "Retry close" (so a persistently-flaky Imperial can't loop forever)
 
 type Phase = "idle" | "starting" | "live" | "closing" | "liquidated" | "settled";
 
@@ -91,6 +94,7 @@ export default function DegenGame() {
   const [result, setResult] = useState<Result | null>(null);
   const [walletUsdc, setWalletUsdc] = useState<number | null>(null); // spendable USDC shown in the header
   const [entries, setEntries] = useState<{ value: number; label: string }[]>([]); // per-tranche entry lines drawn on the chart
+  const [closeStuck, setCloseStuck] = useState(false); // auto-close exhausted its bounded retries → show a manual "Retry close"
 
   // Refs read inside intervals (avoid stale closures).
   const phaseRef = useRef<Phase>("idle");
@@ -107,6 +111,7 @@ export default function DegenGame() {
   // Always points at the latest doClose so the ticker/double-down call the current closure.
   const doCloseRef = useRef<() => void>(() => {});
   const entriesRef = useRef<{ value: number; label: string }[]>([]); // mirrors `entries` for stale-free reads in polls/handlers
+  const closeCyclesRef = useRef(0); // count of auto-close re-arm cycles this position (bounds the retry loop)
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { deadlineRef.current = deadlineMs; }, [deadlineMs]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
@@ -280,6 +285,10 @@ export default function DegenGame() {
         // a liquidation — otherwise a blip would falsely abandon a live 400× bet.
         liqMissRef.current += 1;
         if (liqMissRef.current >= LIQ_CONFIRM_POLLS) {
+          // Claim the transition synchronously (drive phaseRef before the awaited
+          // buildResult) so an overlapping async tick can't declare liquidation twice.
+          weClosedRef.current = true; // we own the terminal transition now
+          phaseRef.current = "liquidated";
           setLivePnl(0);
           setEntries([]); // position gone — clear chart entry lines
           const token = jwt ?? (wallet ? loadJwt(wallet) : null);
@@ -335,6 +344,7 @@ export default function DegenGame() {
     setEntries([]); // clear chart entry lines for the new round
     setPhase("starting");
     weClosedRef.current = false;
+    closeCyclesRef.current = 0; setCloseStuck(false);
     livePosRef.current = null;
     liqMissRef.current = 0;
     openAckAtRef.current = null; // clear any stale ack from a prior round (else the poll false-times-out)
@@ -437,13 +447,24 @@ export default function DegenGame() {
         markPrice: px,
         slippageBps: SLIPPAGE_BPS,
       });
-      let res = await imperial.placeOrder(req, token);
-      if (!res.success && isTransientResolveError(res.error)) {
-        await new Promise((r) => setTimeout(r, 2500));
-        res = await imperial.placeOrder(req, token);
+      // Retry transient placement/resolve bounces (the 400× Flash V2 path often
+      // replies "Failed to place order — please try again") instead of throwing on
+      // the first miss — that was the auto-close "retrying" loop. Surface progress
+      // on the toast so the user sees forward motion, not a frozen "Closing…".
+      const res = await placeCloseWithRetry(() => imperial.placeOrder(req, token), {
+        onRetry: (attempt, total) =>
+          updateToast(tid, { type: "loading", title: "Time! Closing…", detail: `retry ${attempt}/${total - 1}` }),
+      });
+      if (!res.success) {
+        // A retryable error exhausted its attempts is still worth one more pass via
+        // the ticker; a hard rejection (no position / insufficient margin) must NOT
+        // re-arm — that would spin forever. Carry the classification on the throw.
+        const e = new Error(res.error ?? "Close rejected") as Error & { retryable?: boolean };
+        e.retryable = isRetryableCloseError(res.error);
+        throw e;
       }
-      if (!res.success) throw new Error(res.error ?? "Close rejected");
       closed = true;
+      closeCyclesRef.current = 0; setCloseStuck(false); // closed cleanly — clear the retry guard
       setEntries([]); // position closed on-chain — clear chart entry lines
       updateToast(tid, { type: "success", title: "Closed", detail: "Settling…" });
       // wait for proceeds to settle into the profile (best-effort)
@@ -468,11 +489,39 @@ export default function DegenGame() {
         }
         return;
       }
-      // close failed — the position is still open. Re-arm after a short backoff so the
-      // ticker retries (rather than spinning every 200ms while the deadline is past).
-      updateToast(tid, { type: "error", title: "Close failed — retrying", detail: errMsg(e) });
-      setPhase("live");
-      setTimeout(() => { weClosedRef.current = false; }, 3000);
+      // close failed — the position is still open.
+      const retryable = (e as { retryable?: boolean }).retryable !== false;
+      if (retryable && closeCyclesRef.current < MAX_CLOSE_CYCLES) {
+        // Transient (e.g. "please try again" exhausted its inner attempts). Re-arm after a
+        // short backoff so the ticker retries — rather than spinning every 200ms — but only
+        // while live, and only up to MAX_CLOSE_CYCLES so a persistent outage can't loop forever.
+        closeCyclesRef.current += 1;
+        updateToast(tid, { type: "error", title: "Close failed — retrying", detail: `${errMsg(e)} (try ${closeCyclesRef.current}/${MAX_CLOSE_CYCLES})` });
+        setPhase("live");
+        setTimeout(() => {
+          if (phaseRef.current === "live") weClosedRef.current = false;
+        }, 3000);
+      } else if (retryable) {
+        // Bounded auto-retries exhausted. Stop the loop and hand off to a manual "Retry close"
+        // (position stays open; isolated margin caps the downside). weClosedRef stays true so
+        // the ticker does NOT auto-fire — the user drives the next attempt.
+        updateToast(tid, { type: "error", title: "Close keeps failing", detail: "Imperial may be flaky. Your position is still open — tap Retry close." });
+        setCloseStuck(true);
+        setPhase("live");
+      } else {
+        // Hard rejection (no position / insufficient margin). Re-arming would loop
+        // forever, so settle out: the position is likely already gone (a "no position"
+        // close == nothing to close). Surface the result and stop.
+        updateToast(tid, { type: "error", title: "Close failed", detail: errMsg(e) });
+        try {
+          const token = await ensureJwt();
+          setEntries([]);
+          setResult(await buildResult(token, "Couldn't close — check your wallet."));
+          setPhase("settled");
+        } catch {
+          setPhase("idle");
+        }
+      }
     }
   }, [wallet, mark, addToast, ensureJwt, updateToast, profileFreeNative, buildResult]);
 
@@ -508,8 +557,18 @@ export default function DegenGame() {
     setLivePnl(0);
     setEntries([]); // clear chart entry lines
     weClosedRef.current = false;
+    closeCyclesRef.current = 0; setCloseStuck(false);
     livePosRef.current = null;
     openFlowTidRef.current = null;
+  }, []);
+
+  // Manual close retry after the bounded auto-retries were exhausted (closeStuck). Resets the
+  // cycle counter and re-fires doClose; doClose sets phase "closing", so the ticker won't double-fire.
+  const retryClose = useCallback(() => {
+    setCloseStuck(false);
+    closeCyclesRef.current = 0;
+    weClosedRef.current = true;
+    doCloseRef.current();
   }, []);
 
   // ── render ──────────────────────────────────────────────────────────────────
@@ -576,10 +635,12 @@ export default function DegenGame() {
           isReady={signer.isReady}
           origStake={origStakeRef.current}
           result={result}
+          closeStuck={closeStuck}
           onStart={start}
           onDoubleDown={doubleDown}
           onClaim={claim}
           onPlayAgain={playAgain}
+          onRetryClose={retryClose}
         />
       </div>
 
@@ -601,10 +662,12 @@ function ControlPanel(props: {
   isReady: boolean;
   origStake: number;
   result: Result | null;
+  closeStuck: boolean;
   onStart: () => void;
   onDoubleDown: () => void;
   onClaim: () => void;
   onPlayAgain: () => void;
+  onRetryClose: () => void;
 }) {
   const { phase, busy, doubling, side, setSide, stake, setStake, stakeErr, stakeNum, isReady, origStake, result } = props;
   const isLong = side === "long";
@@ -616,6 +679,16 @@ function ControlPanel(props: {
     return <Center>Time! Closing your position…</Center>;
   }
   if (phase === "live") {
+    if (props.closeStuck) {
+      return (
+        <button
+          onClick={props.onRetryClose}
+          className="w-full bg-metric-sell py-3 font-mono text-[15px] font-bold uppercase tracking-wider text-white transition-opacity hover:opacity-90"
+        >
+          Retry close
+        </button>
+      );
+    }
     return (
       <button
         onClick={props.onDoubleDown}

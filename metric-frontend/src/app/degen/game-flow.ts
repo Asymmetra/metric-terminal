@@ -5,7 +5,8 @@
  * on the existing trade-flow primitives.
  */
 
-import type { PositionLifecycle } from "@/lib/imperial/types";
+import type { OrderResponse, PositionLifecycle } from "@/lib/imperial/types";
+import { isRetryableOrderError, isTransientResolveError, placeOrderWithRetry } from "@/lib/trade-flow";
 
 /** Direction of the bet — chosen at idle, then locked for the whole game. */
 export type GameSide = "long" | "short";
@@ -73,4 +74,58 @@ export function findGamePosition(positions: PositionLifecycle[]): PositionLifecy
 /** Numeric helper for stringified position fields. */
 export function num(v: string | null | undefined): number {
   return v == null ? 0 : Number(v) || 0;
+}
+
+/** Max close-order placement attempts (1 initial + retries) before giving up. */
+export const CLOSE_ORDER_RETRIES = 5;
+/** Delay between retryable close attempts. */
+export const CLOSE_ORDER_RETRY_MS = 800;
+
+/**
+ * Whether a failed close-order response is worth re-placing. Mirrors the OPEN
+ * path's retry policy: both a cold-cache market-resolution miss AND a transient
+ * placement bounce ("Failed to place order — please try again", common on the
+ * 400× Flash V2 path) are retryable. A hard rejection (insufficient margin, no
+ * position, max leverage) is NOT — re-placing it just loops forever, which is the
+ * exact "Close failed — retrying" symptom we're fixing.
+ */
+export function isRetryableCloseError(error: string | null | undefined): boolean {
+  return isTransientResolveError(error) || isRetryableOrderError(error);
+}
+
+/**
+ * Place a close (Decrease) order, retrying transient placement/resolve failures
+ * up to `retries` total attempts. Returns the final OrderResponse — success on
+ * the first fill, or the last failed response after exhausting retries (the
+ * caller decides whether to re-arm). A hard (non-retryable) rejection returns
+ * immediately without burning the remaining attempts.
+ *
+ * Thin adapter over the SHARED {@link placeOrderWithRetry} loop in trade-flow, so
+ * the open (Increase) path, the terminal close (`closeAndWithdraw`), and the game
+ * close all run the exact same retry classification — they can't drift apart. The
+ * game close uses one `retryMs` for both transient classes; the resolve/order
+ * back-offs are therefore set equal here.
+ *
+ * Decoupled from React/network specifics: takes the place fn + a sleeper so it's
+ * unit-testable and shared by every close path (auto-close, double-down fallthrough).
+ */
+export async function placeCloseWithRetry(
+  place: () => Promise<OrderResponse>,
+  opts: {
+    retries?: number;
+    retryMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    onRetry?: (attempt: number, total: number) => void;
+  } = {}
+): Promise<OrderResponse> {
+  const total = Math.max(1, opts.retries ?? CLOSE_ORDER_RETRIES);
+  const retryMs = opts.retryMs ?? CLOSE_ORDER_RETRY_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  return placeOrderWithRetry(place, {
+    maxAttempts: total,
+    resolveRetryMs: retryMs,
+    orderRetryMs: retryMs,
+    sleep,
+    onRetry: opts.onRetry,
+  });
 }

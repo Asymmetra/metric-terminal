@@ -168,6 +168,64 @@ async function availableNative(
 /** Fraction of a deposit that must show up before the settle gate passes (fees/rounding slack). */
 const SETTLE_DELTA_FRACTION = 0.97;
 
+/** Options for {@link placeOrderWithRetry}. */
+export interface PlaceOrderRetryOpts {
+  /** Total placement attempts (1 initial + retries). Clamped to >= 1. */
+  maxAttempts: number;
+  /** Back-off before retrying a cold market-cache miss (cache refreshes ~60s). */
+  resolveRetryMs: number;
+  /** Back-off before retrying a transient placement bounce ("please try again"). */
+  orderRetryMs: number;
+  sleep: (ms: number) => Promise<void>;
+  /** Fired at the START of every attempt (1..maxAttempts). */
+  onAttempt?: (attempt: number) => void;
+  /**
+   * Fired AFTER a failed-but-retryable attempt, just before the back-off sleep —
+   * i.e. only when another attempt will follow. `attempt` is the one that just
+   * failed; `total` is `maxAttempts`. Mirrors the game close toast's retry counter.
+   */
+  onRetry?: (attempt: number, total: number) => void;
+}
+
+/**
+ * THE single order-placement retry loop, shared by every order path (open
+ * Increase, terminal close Decrease, and the degen game's close) so their retry
+ * classification can never drift apart. Re-runs the SAME `place` call while the
+ * rejection is recoverable.
+ *
+ * Two transient classes are retried (see `isTransientResolveError` /
+ * `isRetryableOrderError`): a cold market-cache miss (longer `resolveRetryMs`
+ * back-off, since the cache refreshes ~60s) and a transient placement failure
+ * ("Failed to place order — please try again", shorter `orderRetryMs`). A hard
+ * rejection (insufficient margin, max leverage, no position, invalid market)
+ * matches neither and returns immediately so the caller can fall through.
+ *
+ * `place` is a thunk (not `api`/`req`/`jwt`) so the SAME loop drives both the
+ * trade-flow client and the game's `imperial.placeOrder` call. This only retries
+ * Imperial's flaky response; it never changes what order/settlement is requested.
+ * A Decrease that bounces on a backend/RPC hiccup is retried instead of bubbling
+ * up as a hard "Close rejected" — which previously re-armed the degen close loop
+ * forever.
+ */
+export async function placeOrderWithRetry(
+  place: () => Promise<OrderResponse>,
+  opts: PlaceOrderRetryOpts
+): Promise<OrderResponse> {
+  const maxAttempts = Math.max(1, opts.maxAttempts);
+  let order = { success: false } as OrderResponse;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    opts.onAttempt?.(attempt);
+    order = await place();
+    if (order.success) return order;
+    const resolveMiss = isTransientResolveError(order.error);
+    const retryable = resolveMiss || isRetryableOrderError(order.error);
+    if (!retryable || attempt === maxAttempts) return order;
+    opts.onRetry?.(attempt, maxAttempts);
+    await opts.sleep(resolveMiss ? opts.resolveRetryMs : opts.orderRetryMs);
+  }
+  return order;
+}
+
 /** True when Imperial's order bot is reporting a non-healthy state. */
 export function isOrderBotDown(status: ImperialStatus | null | undefined): boolean {
   const s = status?.orderBot?.status;
@@ -372,22 +430,20 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
     const v = venues[i];
     const req = buildOrderRequest({ ...input, venue: v });
     const where = venues.length > 1 ? ` (${i + 1}/${venues.length})` : "";
-    let order = { success: false } as OrderResponse;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      step({
-        step: "order",
-        message:
-          attempt === 1
-            ? `Opening ${input.side} ${input.symbol} on ${v}${where}…`
-            : `${v} busy — retry ${attempt}/${maxAttempts}…`,
-      });
-      order = await api.placeOrder(req, deps.jwt);
-      if (order.success) break;
-      const resolveMiss = isTransientResolveError(order.error);
-      const retryable = resolveMiss || isRetryableOrderError(order.error);
-      if (!retryable || attempt === maxAttempts) break;
-      await sleep(resolveMiss ? deps.resolveRetryMs ?? 2500 : deps.orderRetryMs ?? 1200);
-    }
+    const order = await placeOrderWithRetry(() => api.placeOrder(req, deps.jwt), {
+      maxAttempts,
+      resolveRetryMs: deps.resolveRetryMs ?? 2500,
+      orderRetryMs: deps.orderRetryMs ?? 1200,
+      sleep,
+      onAttempt: (attempt) =>
+        step({
+          step: "order",
+          message:
+            attempt === 1
+              ? `Opening ${input.side} ${input.symbol} on ${v}${where}…`
+              : `${v} busy — retry ${attempt}/${maxAttempts}…`,
+        }),
+    });
     if (order.success) {
       step({ step: "done", message: `Position opened on ${v}.`, signature: order.signature ?? undefined });
       return { depositedNative, order, venue: v };
@@ -438,20 +494,31 @@ export async function closeAndWithdraw(params: CloseParams, deps: FlowDeps): Pro
 
   const preCloseFree = profileFree(await api.getBalances(deps.jwt), params.profileIndex);
 
+  // Decrease orders bounce on transient backend/RPC hiccups exactly like Increase
+  // orders ("Failed to place order — please try again", cold market-cache miss). Use
+  // the SAME retry classifier so a recoverable rejection is retried in-place rather
+  // than thrown as a hard "Close rejected" (which previously re-armed the close loop).
+  const maxAttempts = Math.max(1, deps.orderRetries ?? 3);
+  const closeReq = buildCloseRequest({
+    wallet: params.wallet,
+    profileIndex: params.profileIndex,
+    symbol: params.symbol,
+    venue: params.venue,
+    positionSide: params.positionSide,
+    sizeUsd: params.sizeUsd,
+    markPrice: params.markPrice,
+    slippageBps: params.slippageBps,
+  });
   step({ step: "close", message: `Closing ${params.symbol} — no signature needed…` });
-  const close = await api.placeOrder(
-    buildCloseRequest({
-      wallet: params.wallet,
-      profileIndex: params.profileIndex,
-      symbol: params.symbol,
-      venue: params.venue,
-      positionSide: params.positionSide,
-      sizeUsd: params.sizeUsd,
-      markPrice: params.markPrice,
-      slippageBps: params.slippageBps,
-    }),
-    deps.jwt
-  );
+  const close = await placeOrderWithRetry(() => api.placeOrder(closeReq, deps.jwt), {
+    maxAttempts,
+    resolveRetryMs: deps.resolveRetryMs ?? 2500,
+    orderRetryMs: deps.orderRetryMs ?? 1200,
+    sleep,
+    onAttempt: (attempt) =>
+      attempt > 1 &&
+      step({ step: "close", message: `Close busy — retry ${attempt}/${maxAttempts}…` }),
+  });
   if (!close.success) throw new TradeFlowError(`Close rejected: ${close.error ?? "unknown"}.`);
 
   // Wait for collateral + realized PnL − fees to settle into the profile's free

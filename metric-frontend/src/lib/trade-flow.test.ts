@@ -7,7 +7,7 @@ import {
   isTransientResolveError,
   isRetryableOrderError,
   isOrderBotDown,
-  TradeFlowError,
+  placeOrderWithRetry,
   type FlowApi,
   type FlowDeps,
 } from "./trade-flow";
@@ -475,6 +475,103 @@ describe("isTransientResolveError", () => {
   });
 });
 
+// ───────────────────────────── shared retry loop (open + both close paths use this)
+
+describe("placeOrderWithRetry (the single shared loop)", () => {
+  const OK: OrderResponse = { success: true, signature: "sig", orderPda: null, error: null };
+  const fail = (error: string): OrderResponse => ({ success: false, signature: null, orderPda: null, error });
+  const noSleep = async () => {};
+  const baseOpts = { maxAttempts: 5, resolveRetryMs: 10, orderRetryMs: 20, sleep: noSleep };
+
+  it("returns immediately on a first-attempt success (one placement)", async () => {
+    const place = vi.fn(async () => OK);
+    const res = await placeOrderWithRetry(place, baseOpts);
+    expect(res.success).toBe(true);
+    expect(place).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transient 'please try again' placement bounce, then fills", async () => {
+    let n = 0;
+    const place = vi.fn(async () => (++n < 3 ? fail("Failed to place order — please try again.") : OK));
+    const res = await placeOrderWithRetry(place, baseOpts);
+    expect(res.success).toBe(true);
+    expect(place).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a cold-cache resolve miss, then fills", async () => {
+    let n = 0;
+    const place = vi.fn(async () => (++n < 2 ? fail('could not resolve symbol "SOL" for underwriter 4') : OK));
+    const res = await placeOrderWithRetry(place, baseOpts);
+    expect(res.success).toBe(true);
+    expect(place).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops IMMEDIATELY on a hard rejection — never burns retries or loops", async () => {
+    const place = vi.fn(async () => fail("insufficient margin"));
+    const onRetry = vi.fn();
+    const res = await placeOrderWithRetry(place, { ...baseOpts, onRetry });
+    expect(res.success).toBe(false);
+    expect(res.error).toBe("insufficient margin");
+    expect(place).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("gives up after exactly maxAttempts on a persistent transient failure", async () => {
+    const place = vi.fn(async () => fail("please try again"));
+    const res = await placeOrderWithRetry(place, { ...baseOpts, maxAttempts: 4 });
+    expect(res.success).toBe(false);
+    expect(place).toHaveBeenCalledTimes(4);
+  });
+
+  it("clamps maxAttempts below 1 to a single attempt", async () => {
+    const place = vi.fn(async () => fail("please try again"));
+    await placeOrderWithRetry(place, { ...baseOpts, maxAttempts: 0 });
+    expect(place).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires onAttempt at the start of every attempt (1..maxAttempts)", async () => {
+    const place = vi.fn(async () => fail("please try again"));
+    const onAttempt = vi.fn();
+    await placeOrderWithRetry(place, { ...baseOpts, maxAttempts: 3, onAttempt });
+    expect(onAttempt.mock.calls.map((c) => c[0])).toEqual([1, 2, 3]);
+  });
+
+  it("fires onRetry(attempt,total) only before a follow-up attempt, not after the last", async () => {
+    const place = vi.fn(async () => fail("please try again"));
+    const onRetry = vi.fn();
+    await placeOrderWithRetry(place, { ...baseOpts, maxAttempts: 3, onRetry });
+    // 3 attempts → 2 retries announced; never after the terminal attempt.
+    expect(onRetry.mock.calls).toEqual([
+      [1, 3],
+      [2, 3],
+    ]);
+  });
+
+  it("uses resolveRetryMs for a resolve miss and orderRetryMs for a placement bounce", async () => {
+    const slept: number[] = [];
+    const sleep = async (ms: number) => {
+      slept.push(ms);
+    };
+    // attempt 1: resolve miss (→ resolveRetryMs), attempt 2: placement bounce (→ orderRetryMs), attempt 3: fill
+    let n = 0;
+    const place = vi.fn(async () => {
+      n += 1;
+      if (n === 1) return fail('could not resolve symbol "SOL" for underwriter 4');
+      if (n === 2) return fail("Failed to place order — please try again.");
+      return OK;
+    });
+    await placeOrderWithRetry(place, { maxAttempts: 5, resolveRetryMs: 10, orderRetryMs: 20, sleep });
+    expect(slept).toEqual([10, 20]); // class-specific back-off
+  });
+
+  it("does NOT sleep after the final failed attempt (no trailing delay)", async () => {
+    const place = vi.fn(async () => fail("please try again"));
+    const sleep = vi.fn(async () => {});
+    await placeOrderWithRetry(place, { maxAttempts: 3, resolveRetryMs: 10, orderRetryMs: 10, sleep });
+    expect(sleep).toHaveBeenCalledTimes(2); // 3 attempts → 2 inter-attempt sleeps
+  });
+});
+
 // ───────────────────────────── close
 
 describe("closeAndWithdraw", () => {
@@ -509,8 +606,160 @@ describe("closeAndWithdraw", () => {
 
   it("skips withdraw when nothing is free after close", async () => {
     const f = makeApi({ startFree: 0 }); // close lands nothing (already settled elsewhere)
-    const res = await closeAndWithdraw(closeParams, fastDeps({ api: f.api }));
+    // Short timeout so the settle poll (which never rises above 0) doesn't busy-loop for
+    // the full default — same behavior, deterministic and fast.
+    const res = await closeAndWithdraw(closeParams, fastDeps({ api: f.api, settleTimeoutMs: 5, pollIntervalMs: 1 }));
     expect(res.withdrawnNative).toBe(0);
     expect(f.calls.buildDeposit).toEqual([]);
+  });
+
+  // ── close-order retry (the same "Failed to place order — please try again" loop,
+  //    but on the terminal /Positions close & withdraw path).
+  it("retries a transient 'please try again' close bounce, then settles & withdraws", async () => {
+    // Reproduces the active bug on the close path: a Decrease order that bounces with a
+    // retryable error must be RE-PLACED, not thrown as a hard "Close rejected".
+    let attempts = 0;
+    const f = makeApi({ startFree: 0 });
+    f.api.placeOrder = async (req) => {
+      if (req.action !== 1) return ORDER_OK; // not a close
+      attempts += 1;
+      if (attempts < 3) return { success: false, signature: null, orderPda: null, error: "Failed to place order — please try again." };
+      f.setFree(12_000_000); // the fill finally lands; proceeds settle
+      return ORDER_OK;
+    };
+    const res = await closeAndWithdraw(
+      closeParams,
+      fastDeps({ api: f.api, orderRetries: 5, orderRetryMs: 0, resolveRetryMs: 0 })
+    );
+    expect(res.close.success).toBe(true);
+    expect(attempts).toBe(3); // bounced twice (retryable), filled on the third
+    expect(res.withdrawnNative).toBe(12_000_000);
+  });
+
+  it("retries a cold-cache resolve miss on close too", async () => {
+    let attempts = 0;
+    const f = makeApi({ startFree: 0, onClose: () => f.setFree(12_000_000) });
+    f.api.placeOrder = async (req) => {
+      if (req.action !== 1) return ORDER_OK;
+      attempts += 1;
+      if (attempts < 2) return { success: false, signature: null, orderPda: null, error: 'could not resolve symbol "SOL" for underwriter 4' };
+      f.setFree(12_000_000);
+      return ORDER_OK;
+    };
+    const res = await closeAndWithdraw(
+      closeParams,
+      fastDeps({ api: f.api, orderRetries: 3, orderRetryMs: 0, resolveRetryMs: 0 })
+    );
+    expect(res.close.success).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  it("does NOT retry a hard close rejection — throws immediately on the first attempt", async () => {
+    // A terminal rejection (no position / insufficient margin) must NOT be retried;
+    // retrying it is exactly what loops forever. One attempt, then a funds-safe throw.
+    let attempts = 0;
+    const f = makeApi({ startFree: 0 });
+    f.api.placeOrder = async (req) => {
+      if (req.action !== 1) return ORDER_OK;
+      attempts += 1;
+      return { success: false, signature: null, orderPda: null, error: "no position to close" };
+    };
+    await expect(
+      closeAndWithdraw(closeParams, fastDeps({ api: f.api, orderRetries: 5, orderRetryMs: 0 }))
+    ).rejects.toMatchObject({ name: "TradeFlowError" });
+    expect(attempts).toBe(1); // hard rejection → no retry
+    expect(f.calls.buildDeposit).toEqual([]); // never reached the withdraw
+  });
+
+  it("gives up after orderRetries on a persistent retryable close failure (funds safe)", async () => {
+    let attempts = 0;
+    const f = makeApi({ startFree: 0 });
+    f.api.placeOrder = async (req) => {
+      if (req.action !== 1) return ORDER_OK;
+      attempts += 1;
+      return { success: false, signature: null, orderPda: null, error: "please try again" };
+    };
+    await expect(
+      closeAndWithdraw(closeParams, fastDeps({ api: f.api, orderRetries: 3, orderRetryMs: 0 }))
+    ).rejects.toMatchObject({ name: "TradeFlowError" });
+    expect(attempts).toBe(3); // exactly orderRetries placements, then surfaces the failure
+  });
+
+  it("surfaces TradeFlowError(closed=true) when the close succeeds but the withdraw popup is rejected", async () => {
+    // Funds-safe path: position IS closed, only the wallet signature for the withdraw
+    // failed. The error must carry `closed` so the UI shows a calm note, not a hard fail.
+    const f = makeApi({ startFree: 0, onClose: () => f.setFree(8_000_000) });
+    const rejectingSigner = {
+      ...makeSigner(),
+      async signAndSendTransaction() {
+        throw new Error("user rejected the request");
+      },
+    };
+    await expect(
+      closeAndWithdraw(closeParams, fastDeps({ api: f.api, signer: rejectingSigner }))
+    ).rejects.toMatchObject({ name: "TradeFlowError", closed: true, depositedNative: 0 });
+  });
+
+  // ── sweep / settle-timeout coverage (the swept branch + funds-safe timeout) ──
+
+  it("runs a SECOND settle poll after a 'swept' sweep, then withdraws post-sweep proceeds", async () => {
+    // Token-collateral venue: the close lands NOTHING into free USDC; the residue
+    // (WSOL/WBTC) only converts to USDC when the sweep returns 'swept'. The swept
+    // branch (trade-flow.ts:540-547) must run a SECOND settle poll so funds that
+    // land only AFTER the sweep are still withdrawn — not skipped.
+    let balancePolls = 0;
+    const f = makeApi({ startFree: 0, sweepStatus: "swept" }); // close: no onClose → free stays 0
+    f.api.getBalances = async () => {
+      balancePolls += 1;
+      return balances(f.getFree());
+    };
+    // The sweep is what converts residue → free USDC. Bump free when it runs so the
+    // post-sweep poll observes the rise and the withdraw drains it.
+    f.api.syncProfileSweep = async () => {
+      f.setFree(9_000_000);
+      return { status: "swept", message: "swept WSOL", balances: null };
+    };
+    // Short timeout: the FIRST settle poll never sees free rise (residue not yet swept),
+    // so it must time out quickly; the sweep then lands proceeds and the post-sweep poll
+    // passes on its first check. Keeps the test fast + deterministic (no real waits).
+    const res = await closeAndWithdraw(closeParams, fastDeps({ api: f.api, settleTimeoutMs: 5, pollIntervalMs: 1 }));
+    expect(res.sweep?.status).toBe("swept");
+    expect(res.withdrawnNative).toBe(9_000_000); // post-sweep proceeds withdrawn
+    expect(f.getFree()).toBe(0); // drained back to wallet
+    expect(f.calls.buildDeposit).toEqual([{ amount: 9_000_000, mode: "withdraw" }]);
+    // pre-close snapshot + first settle poll + post-sweep poll + final read ⇒ several polls,
+    // and the post-sweep poll PASSED (free rose) rather than burning the full timeout.
+    expect(balancePolls).toBeGreaterThanOrEqual(4);
+  });
+
+  it("withdraws whatever is free at timeout when the settle poll never rises (funds-safe)", async () => {
+    // The settle poll TIMES OUT: proceeds never appear above preCloseFree after the
+    // close (onClose is a no-op). pollUntil's timeout path must NOT abort the flow —
+    // it proceeds and withdraws whatever free balance already exists. Here the profile
+    // started with $5 free, the close added nothing, so $5 is still withdrawn.
+    const f = makeApi({ startFree: 5_000_000 }); // close: no onClose → free never rises
+    const res = await closeAndWithdraw(
+      closeParams,
+      fastDeps({ api: f.api, settleTimeoutMs: 30, pollIntervalMs: 5 })
+    );
+    expect(res.close.success).toBe(true);
+    expect(res.withdrawnNative).toBe(5_000_000); // pre-existing free, withdrawn despite no settle
+    expect(f.calls.buildDeposit).toEqual([{ amount: 5_000_000, mode: "withdraw" }]);
+    expect(f.getFree()).toBe(0);
+  });
+
+  it("swallows a throwing syncProfileSweep (best-effort) and still withdraws", async () => {
+    // The sweep is best-effort: if syncProfileSweep rejects, the try/catch at
+    // trade-flow.ts:548-550 must swallow it — the close already settled proceeds into
+    // free, so the withdraw proceeds normally and sweep is reported as null.
+    const f = makeApi({ startFree: 0, onClose: () => f.setFree(7_000_000) });
+    f.api.syncProfileSweep = async () => {
+      throw new Error("sweep endpoint 500");
+    };
+    const res = await closeAndWithdraw(closeParams, fastDeps({ api: f.api }));
+    expect(res.close.success).toBe(true);
+    expect(res.sweep).toBeNull(); // throw swallowed → no sweep result, no hard failure
+    expect(res.withdrawnNative).toBe(7_000_000); // settled proceeds still withdrawn
+    expect(f.calls.buildDeposit).toEqual([{ amount: 7_000_000, mode: "withdraw" }]);
   });
 });

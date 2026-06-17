@@ -78,7 +78,12 @@ export function LiveLineChart({
     };
   }, []);
 
-  // Derive the windowed view from the session buffer each render.
+  // Derive the windowed view from the session buffer each render. Reading wall-clock
+  // time per render is INTENTIONAL: the 500ms `bump` interval above forces these
+  // re-renders, and each one must recompute the trailing edge against the current
+  // "now" so the chart keeps scrolling toward the live moment between buffer writes.
+  // This is display-only; an unstable value across renders is the desired behavior.
+  // eslint-disable-next-line react-hooks/purity -- per-render time window is intentional (see above)
   const now = Date.now() / 1000;
   const buffered = priceHistory.getSince(symbol, now - windowSecs);
   let points: LivelinePoint[] = buffered.map((p) => ({ time: p.t, value: p.v }));
