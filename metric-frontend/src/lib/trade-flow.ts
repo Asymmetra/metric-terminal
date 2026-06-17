@@ -124,19 +124,6 @@ export function isRetryableOrderError(error: string | null | undefined): boolean
   );
 }
 
-/**
- * True when an order rejection looks like the profile couldn't cover the position —
- * not enough collateral/margin to open. Used by the open's SAFETY FALLBACK: when the
- * deposit was skipped (because available collateral, incl. the V2 ledger, looked
- * sufficient) but the order bot still bounced for collateral, we deposit the real
- * shortfall against profile-free and retry once, rather than letting a wrong ledger
- * assumption brick the open.
- */
-export function isInsufficientCollateralError(error: string | null | undefined): boolean {
-  if (!error) return false;
-  return /insufficient|not enough|margin|collateral/i.test(error);
-}
-
 // ───────────────────────────────────────────────────────────── deps + steps
 
 /** Subset of the Imperial client this module needs (injectable for tests). */
@@ -322,40 +309,29 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
 
   const balances = await api.getBalances(deps.jwt);
   const free = profileFree(balances, input.profileIndex);
-
-  // Size the deposit against ALL available collateral, not just profile-free. For
-  // flash_v2 that includes the V2 ledger, so a double-down whose prior collateral is
-  // already staged there draws from the ledger and deposits nothing (no wallet
-  // signature) — and stranded ledger funds get reused instead of re-deposited.
-  const availableForSizing = countV2
-    ? await availableNative(api, deps.jwt, input.profileIndex, true)
-    : free;
-  const depositNative = depositShortfallNative(input.collateralUsd, availableForSizing);
+  const depositNative = depositShortfallNative(input.collateralUsd, free);
 
   let depositedNative = 0;
+  if (depositNative > 0) {
+    // Snapshot what's already available so the gate waits for the DEPOSIT to land as
+    // a delta, not an absolute — a double-down's prior collateral already sits in V2.
+    const availableBefore = countV2
+      ? await availableNative(api, deps.jwt, input.profileIndex, true)
+      : free;
 
-  // Perform a deposit + settle gate for `amount`, using `availableBefore` as the
-  // pre-deposit snapshot the gate waits past (delta target avoids a premature pass
-  // when the V2 ledger already holds prior collateral). Returns nothing; throws a
-  // funds-safe TradeFlowError if the deposit doesn't settle in time.
-  async function depositAndGate(
-    amount: number,
-    availableBefore: number,
-    countLedger = countV2,
-  ): Promise<void> {
-    if (deps.assertDepositReady) await deps.assertDepositReady(amount);
-    step({ step: "deposit", message: `Depositing $${(amount / 1e6).toFixed(2)} to profile ${input.profileIndex}…` });
+    if (deps.assertDepositReady) await deps.assertDepositReady(depositNative);
+    step({ step: "deposit", message: `Depositing $${(depositNative / 1e6).toFixed(2)} to profile ${input.profileIndex}…` });
     const { transaction } = await api.buildDepositTx({
       wallet: input.wallet,
       profileIndex: input.profileIndex,
-      amount,
+      amount: depositNative,
       mode: "deposit",
     });
     const { signature } = await deps.signer.signAndSendTransaction({
       kind: "solana-versioned",
       base64: transaction,
     });
-    depositedNative = amount;
+    depositedNative = depositNative;
     step({ step: "deposit-confirm", message: "Confirming deposit…", signature });
     // Best-effort RPC confirm — the balance poll below is authoritative, so DON'T
     // await it (a slow/forbidden confirm would add up to 30s to every open).
@@ -364,27 +340,19 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
     // Gate the order on the deposited funds landing — profile-free for most venues,
     // or profile-free + V2 ledger for flash_v2. Delta target avoids a premature pass
     // when the ledger already holds prior collateral.
-    const target = countLedger ? availableBefore + amount * SETTLE_DELTA_FRACTION : requiredNative;
+    const target = countV2 ? availableBefore + depositNative * SETTLE_DELTA_FRACTION : requiredNative;
     const landed = await pollUntil(
-      async () => (await availableNative(api, deps.jwt, input.profileIndex, countLedger)) >= target,
+      async () => (await availableNative(api, deps.jwt, input.profileIndex, countV2)) >= target,
       settleTimeout,
       interval,
       sleep
     );
     if (!landed) {
       throw new TradeFlowError(
-        `Deposit of $${(amount / 1e6).toFixed(2)} didn't settle in time — funds are in profile ${input.profileIndex}. Retry shortly.`,
+        `Deposit of $${(depositNative / 1e6).toFixed(2)} didn't settle in time — funds are in profile ${input.profileIndex}. Retry shortly.`,
         depositedNative
       );
     }
-  }
-
-  if (depositNative > 0) {
-    // `availableForSizing` was captured before this deposit, so reuse it as the gate's
-    // pre-deposit snapshot. When depositNative === 0 (collateral already available,
-    // incl. the V2 ledger) this whole block is skipped — no signature — and the order
-    // draws from the ledger.
-    await depositAndGate(depositNative, availableForSizing);
   }
 
   // Attempt the order across the candidate venues until one fills. A rejected
@@ -399,74 +367,38 @@ export async function openWithDeposit(input: OrderFormInput, deps: FlowDeps): Pr
   // A hard rejection (insufficient margin, max leverage, invalid market) matches
   // neither and falls through immediately.
   const maxAttempts = Math.max(1, deps.orderRetries ?? 3);
-
-  async function runVenueLoop(): Promise<{
-    success: boolean;
-    order?: OrderResponse;
-    venue?: VenueTag;
-    lastError: string;
-  }> {
-    let lastError = "unknown";
-    for (let i = 0; i < venues.length; i += 1) {
-      const v = venues[i];
-      const req = buildOrderRequest({ ...input, venue: v });
-      const where = venues.length > 1 ? ` (${i + 1}/${venues.length})` : "";
-      let order = { success: false } as OrderResponse;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        step({
-          step: "order",
-          message:
-            attempt === 1
-              ? `Opening ${input.side} ${input.symbol} on ${v}${where}…`
-              : `${v} busy — retry ${attempt}/${maxAttempts}…`,
-        });
-        order = await api.placeOrder(req, deps.jwt);
-        if (order.success) break;
-        const resolveMiss = isTransientResolveError(order.error);
-        const retryable = resolveMiss || isRetryableOrderError(order.error);
-        if (!retryable || attempt === maxAttempts) break;
-        await sleep(resolveMiss ? deps.resolveRetryMs ?? 2500 : deps.orderRetryMs ?? 1200);
-      }
-      if (order.success) return { success: true, order, venue: v, lastError };
-      lastError = order.error ?? "unknown";
+  let lastError = "unknown";
+  for (let i = 0; i < venues.length; i += 1) {
+    const v = venues[i];
+    const req = buildOrderRequest({ ...input, venue: v });
+    const where = venues.length > 1 ? ` (${i + 1}/${venues.length})` : "";
+    let order = { success: false } as OrderResponse;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      step({
+        step: "order",
+        message:
+          attempt === 1
+            ? `Opening ${input.side} ${input.symbol} on ${v}${where}…`
+            : `${v} busy — retry ${attempt}/${maxAttempts}…`,
+      });
+      order = await api.placeOrder(req, deps.jwt);
+      if (order.success) break;
+      const resolveMiss = isTransientResolveError(order.error);
+      const retryable = resolveMiss || isRetryableOrderError(order.error);
+      if (!retryable || attempt === maxAttempts) break;
+      await sleep(resolveMiss ? deps.resolveRetryMs ?? 2500 : deps.orderRetryMs ?? 1200);
     }
-    return { success: false, lastError };
-  }
-
-  let result = await runVenueLoop();
-  if (result.success && result.order && result.venue) {
-    step({ step: "done", message: `Position opened on ${result.venue}.`, signature: result.order.signature ?? undefined });
-    return { depositedNative, order: result.order, venue: result.venue };
-  }
-
-  // SAFETY FALLBACK: we may have skipped the deposit on the assumption that the order
-  // bot would collateralize from the V2 ledger. If that assumption was wrong, the open
-  // bounces for collateral with nothing deposited — which must not be able to brick the
-  // open. Deposit the REAL shortfall (against profile-free only, the on-chain truth) and
-  // retry the loop once. Other rejections (max leverage, invalid market) fall through.
-  if (depositedNative === 0 && isInsufficientCollateralError(result.lastError)) {
-    const freshDeposit = depositShortfallNative(input.collateralUsd, free);
-    if (freshDeposit > 0) {
-      // Gate against profile-free ONLY (countLedger=false): the bot just proved it
-      // won't draw from the V2 ledger, so counting that pre-existing ledger balance
-      // would let the gate pass before the fresh deposit actually lands.
-      await depositAndGate(freshDeposit, free, false);
-      result = await runVenueLoop();
-      if (result.success && result.order && result.venue) {
-        step({
-          step: "done",
-          message: `Position opened on ${result.venue}.`,
-          signature: result.order.signature ?? undefined,
-        });
-        return { depositedNative, order: result.order, venue: result.venue };
-      }
+    if (order.success) {
+      step({ step: "done", message: `Position opened on ${v}.`, signature: order.signature ?? undefined });
+      return { depositedNative, order, venue: v };
     }
+    lastError = order.error ?? "unknown";
   }
 
   throw new TradeFlowError(
     depositedNative > 0
-      ? `Deposited $${(depositedNative / 1e6).toFixed(2)} to profile ${input.profileIndex}, but the order was rejected on ${venues.join(", ")}: ${result.lastError}. Funds are safe — retry or withdraw.`
-      : `Order rejected on ${venues.join(", ")}: ${result.lastError}.`,
+      ? `Deposited $${(depositedNative / 1e6).toFixed(2)} to profile ${input.profileIndex}, but the order was rejected on ${venues.join(", ")}: ${lastError}. Funds are safe — retry or withdraw.`
+      : `Order rejected on ${venues.join(", ")}: ${lastError}.`,
     depositedNative
   );
 }

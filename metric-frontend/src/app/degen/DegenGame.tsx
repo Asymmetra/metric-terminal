@@ -60,7 +60,6 @@ type Phase = "idle" | "starting" | "live" | "closing" | "liquidated" | "settled"
 interface Result {
   pnlUsd: number;
   claimableUsd: number;
-  v2LedgerUsd: number;
   note?: string;
 }
 
@@ -91,7 +90,6 @@ export default function DegenGame() {
   const [livePnl, setLivePnl] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
   const [walletUsdc, setWalletUsdc] = useState<number | null>(null); // spendable USDC shown in the header
-  const [gameV2Usd, setGameV2Usd] = useState(0); // game profile's V2-ledger collateral (idle surfacing)
   const [entries, setEntries] = useState<{ value: number; label: string }[]>([]); // per-tranche entry lines drawn on the chart
 
   // Refs read inside intervals (avoid stale closures).
@@ -159,31 +157,19 @@ export default function DegenGame() {
   const buildResult = useCallback(
     async (token: string, note?: string): Promise<Result> => {
       const free = await profileFreeNative(token);
-      const v2 = await imperial
-        .getV2Balance(token)
-        .then((r) => r.profiles.find((p) => p.profileIndex === GAME_PROFILE)?.availableUsdc ?? 0)
-        .catch(() => 0);
-      return { pnlUsd: lastPnlRef.current, claimableUsd: free / 1e6, v2LedgerUsd: v2 / 1e6, note };
+      return { pnlUsd: lastPnlRef.current, claimableUsd: free / 1e6, note };
     },
     [profileFreeNative]
   );
 
-  // ── header balance: spendable wallet USDC + the game profile's V2-ledger collateral ──
-  // Refreshes on connect, at every phase boundary, and on a 10s visibility-gated poll so
-  // the number deducts on stake, draws down as V2 collateral is reused, and rises on Claim
-  // (matching player expectation). RPC failure shows "—", never throws.
+  // ── header balance: spendable wallet USDC ──
+  // Refreshes on connect, at every phase boundary, and on a 5s visibility-gated poll so the
+  // number deducts on stake and rises on Claim (matching player expectation). RPC failure
+  // shows "—", never throws.
   const refreshHeaderBalances = useCallback((isCancelled?: () => boolean) => {
-    if (!wallet) { setWalletUsdc(null); setGameV2Usd(0); return; }
+    if (!wallet) { setWalletUsdc(null); return; }
     void fetchWalletUsdc(wallet).then((v) => { if (!isCancelled?.()) setWalletUsdc(v); });
-    const token = jwt ?? loadJwt(wallet);
-    if (token) {
-      void imperial
-        .getV2Balance(token)
-        .then((r) => r.profiles.find((p) => p.profileIndex === GAME_PROFILE)?.availableUsdc ?? 0)
-        .catch(() => 0)
-        .then((v) => { if (!isCancelled?.()) setGameV2Usd(v / 1e6); });
-    }
-  }, [wallet, jwt]);
+  }, [wallet]);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,8 +177,8 @@ export default function DegenGame() {
     return () => { cancelled = true; };
   }, [refreshHeaderBalances, phase]);
 
-  // Keep the header live as V2 collateral draws down: poll every 10s while a wallet is
-  // connected, paused when the tab is hidden.
+  // Keep the header wallet balance live: poll every 5s while a wallet is connected,
+  // paused when the tab is hidden (and refreshed immediately on tab refocus).
   useVisibilityInterval(() => refreshHeaderBalances(), 5_000, !!wallet);
 
   // ── auto-close ticker (drives countdown + fires the delegated close at deadline) ──
@@ -270,7 +256,7 @@ export default function DegenGame() {
             openFlowTidRef.current = null;
           }
           const token = jwt ?? (wallet ? loadJwt(wallet) : null);
-          setResult(token ? await buildResult(token, "Order didn't fill — your stake is safe.") : { pnlUsd: 0, claimableUsd: 0, v2LedgerUsd: 0, note: "Order didn't fill." });
+          setResult(token ? await buildResult(token, "Order didn't fill — your stake is safe.") : { pnlUsd: 0, claimableUsd: 0, note: "Order didn't fill." });
           setPhase("settled");
           setBusy(false);
         }
@@ -297,7 +283,7 @@ export default function DegenGame() {
           setLivePnl(0);
           setEntries([]); // position gone — clear chart entry lines
           const token = jwt ?? (wallet ? loadJwt(wallet) : null);
-          setResult(token ? await buildResult(token, "Liquidated.") : { pnlUsd: lastPnlRef.current, claimableUsd: 0, v2LedgerUsd: 0, note: "Liquidated." });
+          setResult(token ? await buildResult(token, "Liquidated.") : { pnlUsd: lastPnlRef.current, claimableUsd: 0, note: "Liquidated." });
           setPhase("liquidated");
         }
       }
@@ -577,11 +563,6 @@ export default function DegenGame() {
       {/* control panel — relative z-10 keeps it above the chart layer so its
           buttons always receive clicks even if the canvas overdraws its box */}
       <div className="relative z-10 shrink-0 border-t border-metric-border bg-surface-1 px-4 py-3">
-        {phase === "idle" && gameV2Usd > 0.01 && (
-          <div className="mb-2 font-mono text-[10px] text-text-secondary/70">
-            ${gameV2Usd.toFixed(2)} in Flash V2 collateral — applied to your next trade.
-          </div>
-        )}
         <ControlPanel
           phase={phase}
           busy={busy}
@@ -650,7 +631,6 @@ function ControlPanel(props: {
       <div className="flex flex-col items-center gap-2">
         <div className="font-mono text-lg font-bold text-metric-sell">REKT 💀</div>
         <div className="font-mono text-[11px] text-text-secondary">Your 400× position was liquidated.{result?.claimableUsd ? ` $${result.claimableUsd.toFixed(2)} left to claim.` : ""}</div>
-        <V2RecoveryNote usd={result?.v2LedgerUsd ?? 0} />
         <div className="flex gap-2">
           {result && result.claimableUsd > 0 && <ClaimBtn amount={result.claimableUsd} busy={busy} onClick={props.onClaim} />}
           <button onClick={props.onPlayAgain} className="border border-metric-border px-4 py-2 font-mono text-[12px] uppercase tracking-wider text-text-secondary hover:text-text-primary">Play again</button>
@@ -669,7 +649,6 @@ function ControlPanel(props: {
           {result?.pnlUsd ? `PnL ${result.pnlUsd >= 0 ? "+" : ""}$${result.pnlUsd.toFixed(2)} · ` : ""}
           Claimable ${result?.claimableUsd.toFixed(2) ?? "0.00"}
         </div>
-        <V2RecoveryNote usd={result?.v2LedgerUsd ?? 0} />
         <div className="flex gap-2">
           {result && result.claimableUsd > 0 && <ClaimBtn amount={result.claimableUsd} busy={busy} onClick={props.onClaim} />}
           <button onClick={props.onPlayAgain} className="border border-metric-border px-4 py-2 font-mono text-[12px] uppercase tracking-wider text-text-secondary hover:text-text-primary">Play again</button>
@@ -747,15 +726,6 @@ function ClaimBtn({ amount, busy, onClick }: { amount: number; busy: boolean; on
     <button onClick={onClick} disabled={busy} className="bg-metric-buy px-4 py-2 font-mono text-[12px] font-bold uppercase tracking-wider text-metric-bg transition-opacity hover:opacity-90 disabled:opacity-50">
       {busy ? "Claiming…" : `Claim $${amount.toFixed(2)}`}
     </button>
-  );
-}
-
-function V2RecoveryNote({ usd }: { usd: number }) {
-  if (!(usd > 0.01)) return null;
-  return (
-    <div className="font-mono text-[10px] text-text-secondary/60">
-      ${usd.toFixed(2)} in Flash V2 collateral — applied to your next trade.
-    </div>
   );
 }
 

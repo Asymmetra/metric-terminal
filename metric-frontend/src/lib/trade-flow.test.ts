@@ -346,17 +346,17 @@ describe("openWithDeposit", () => {
 });
 
 describe("flash_v2 V2-ledger settle gate", () => {
-  it("settles a double-down via the V2 ledger when a fresh deposit is still needed", async () => {
-    // Prior collateral ($4) sits in the ledger but doesn't cover the $10 collateral; the
-    // $6 remainder deposit auto-stages into the ledger. The gate must recognise the V2 delta.
-    const f = makeApi({ startFree: 0, startV2: 4_000_000, stageToV2: true });
+  it("settles a double-down via the V2 ledger when profile-free never rises", async () => {
+    // Prior collateral already sits in the ledger; profile-free stays 0 and the new
+    // deposit auto-stages into the ledger. The gate must recognise the V2 delta.
+    const f = makeApi({ startFree: 0, startV2: 10_000_000, stageToV2: true });
     const res = await openWithDeposit(
       { ...baseInput, venue: "flash_v2" },
       fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner() })
     );
     expect(res.order.success).toBe(true);
-    expect(res.depositedNative).toBe(6_000_000); // deposited only the increment
-    expect(f.getV2()).toBe(10_000_000); // ledger rose by the deposit
+    expect(res.depositedNative).toBe(10_000_000); // deposited the increment
+    expect(f.getV2()).toBe(20_000_000); // ledger rose by the deposit
     expect(f.calls.v2).toBeGreaterThan(0); // the gate actually consulted the ledger
   });
 
@@ -373,10 +373,9 @@ describe("flash_v2 V2-ledger settle gate", () => {
   });
 
   it("does NOT pass prematurely on pre-existing ledger balance — times out if the deposit never lands", async () => {
-    // V2 already holds $4 (partial), so a $6 remainder deposit is forced — but it lands
-    // nowhere; the delta target (before + deposit) is never reached, so funds-safe timeout,
-    // not a false pass off the pre-existing ledger balance.
-    const f = makeApi({ startFree: 0, startV2: 4_000_000 }); // stageToV2 false → deposit vanishes
+    // V2 already holds $10 but the new deposit lands nowhere; the delta target
+    // (before + deposit) is never reached, so funds-safe timeout, not a false pass.
+    const f = makeApi({ startFree: 0, startV2: 10_000_000 }); // stageToV2 false → deposit vanishes
     await expect(
       openWithDeposit(
         { ...baseInput, venue: "flash_v2" },
@@ -393,105 +392,6 @@ describe("flash_v2 V2-ledger settle gate", () => {
     );
     expect(res.order.success).toBe(true);
     expect(f.calls.v2).toBe(0); // profile-free gate only
-  });
-});
-
-describe("flash_v2 consumes existing collateral before depositing", () => {
-  it("deposits $0 (no signature) and still opens when the V2 ledger already covers the collateral", async () => {
-    // The whole collateral sits in the V2 ledger from a prior position; profile-free is 0.
-    // The order must draw from the ledger — no deposit, no wallet signature.
-    const f = makeApi({ startFree: 0, startV2: 10_000_000 });
-    const signFn = vi.fn();
-    const res = await openWithDeposit(
-      { ...baseInput, venue: "flash_v2" },
-      fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner(signFn) })
-    );
-    expect(res.order.success).toBe(true);
-    expect(res.depositedNative).toBe(0); // drew entirely from the ledger
-    expect(f.calls.buildDeposit).toEqual([]); // no deposit tx built
-    expect(signFn).not.toHaveBeenCalled(); // no wallet signature
-  });
-
-  it("deposits only the remainder when the V2 ledger is partial (< required)", async () => {
-    // Ledger holds $4 of a $10 collateral; only the $6 remainder is deposited.
-    const f = makeApi({ startFree: 0, startV2: 4_000_000, stageToV2: true });
-    const res = await openWithDeposit(
-      { ...baseInput, venue: "flash_v2" },
-      fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner() })
-    );
-    expect(res.order.success).toBe(true);
-    expect(f.calls.buildDeposit).toEqual([{ amount: 6_000_000, mode: "deposit" }]); // only the shortfall
-    expect(res.depositedNative).toBe(6_000_000);
-    expect(f.getV2()).toBe(10_000_000); // ledger rose by the partial deposit
-  });
-
-  it("FALLBACK: deposits the real shortfall and retries once when an apparently-funded open bounces for collateral", async () => {
-    // V2 looks sufficient ($10), so the first attempt deposits $0. But the order bot bounces
-    // once for collateral — the ledger assumption was wrong. The fallback deposits the real
-    // shortfall (against profile-free) and retries. Exactly one deposit; the order then fills.
-    let attempts = 0;
-    const f = makeApi({
-      startFree: 0,
-      startV2: 10_000_000,
-      onDeposit: (amt) => f.setFree(amt), // fallback deposit lands in profile-free
-      onOrder: () => {
-        attempts += 1;
-        return attempts === 1
-          ? { success: false, signature: null, orderPda: null, error: "insufficient collateral" }
-          : ORDER_OK;
-      },
-    });
-    const signFn = vi.fn();
-    const res = await openWithDeposit(
-      { ...baseInput, venue: "flash_v2" },
-      fastDeps({
-        api: f.api,
-        venues: ["flash_v2"],
-        // No resolve/retryable match for "insufficient collateral", so the venue loop
-        // returns immediately the first time and the fallback fires.
-        signer: makeSigner(() => {
-          signFn();
-          f.setFree(10_000_000);
-        }),
-      })
-    );
-    expect(res.order.success).toBe(true);
-    expect(f.calls.buildDeposit).toEqual([{ amount: 10_000_000, mode: "deposit" }]); // exactly one deposit
-    expect(res.depositedNative).toBe(10_000_000);
-    expect(signFn).toHaveBeenCalledTimes(1); // exactly one wallet signature
-    expect(f.calls.orders).toBe(2); // bounced once, then filled after the fresh deposit
-  });
-
-  it("sizes a non-flash_v2 deposit against profile-free only, ignoring any V2 ledger (unchanged)", async () => {
-    // A non-flash_v2 venue must NOT consume the V2 ledger for sizing: even though $10 sits
-    // in the ledger, the phoenix open deposits the full $10 collateral against profile-free.
-    const f = makeApi({ startFree: 0, startV2: 10_000_000, onDeposit: (amt) => f.setFree(amt) });
-    const res = await openWithDeposit(
-      baseInput, // venue: phoenix
-      fastDeps({ api: f.api, signer: makeSigner(() => f.setFree(10_000_000)) })
-    );
-    expect(res.order.success).toBe(true);
-    expect(f.calls.buildDeposit).toEqual([{ amount: 10_000_000, mode: "deposit" }]); // full collateral, ledger ignored
-    expect(res.depositedNative).toBe(10_000_000);
-    expect(f.calls.v2).toBe(0); // ledger never consulted for a non-flash_v2 open
-  });
-
-  it("does NOT fall back when the deposit already happened (no double deposit)", async () => {
-    // Partial ledger → a real first deposit. If the order still bounces for collateral, the
-    // fallback must NOT fire (depositedNative > 0); funds are safe and it throws instead.
-    const f = makeApi({
-      startFree: 0,
-      startV2: 4_000_000,
-      stageToV2: true,
-      onOrder: () => ({ success: false, signature: null, orderPda: null, error: "insufficient collateral" }),
-    });
-    await expect(
-      openWithDeposit(
-        { ...baseInput, venue: "flash_v2" },
-        fastDeps({ api: f.api, venues: ["flash_v2"], signer: makeSigner() })
-      )
-    ).rejects.toMatchObject({ name: "TradeFlowError", depositedNative: 6_000_000 });
-    expect(f.calls.buildDeposit).toEqual([{ amount: 6_000_000, mode: "deposit" }]); // only the one deposit
   });
 });
 
