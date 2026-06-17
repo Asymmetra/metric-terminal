@@ -11,6 +11,7 @@ import { loadJwt } from "@/lib/imperial/jwt";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { useToastStore } from "@/stores/toastStore";
+import { useVisibilityInterval } from "@/hooks/useVisibilityInterval";
 import { marketData } from "@/lib/market-data";
 import { LiveLineChart } from "@/components/terminal/LiveLineChart";
 import { Toasts } from "@/components/shared/Toasts";
@@ -91,6 +92,7 @@ export default function DegenGame() {
   const [result, setResult] = useState<Result | null>(null);
   const [walletUsdc, setWalletUsdc] = useState<number | null>(null); // spendable USDC shown in the header
   const [gameV2Usd, setGameV2Usd] = useState(0); // game profile's V2-ledger collateral (idle surfacing)
+  const [entries, setEntries] = useState<{ value: number; label: string }[]>([]); // per-tranche entry lines drawn on the chart
 
   // Refs read inside intervals (avoid stale closures).
   const phaseRef = useRef<Phase>("idle");
@@ -106,8 +108,10 @@ export default function DegenGame() {
   const openFlowTidRef = useRef<string | null>(null); // open-flow toast id, resolved by the poll on live/timeout
   // Always points at the latest doClose so the ticker/double-down call the current closure.
   const doCloseRef = useRef<() => void>(() => {});
+  const entriesRef = useRef<{ value: number; label: string }[]>([]); // mirrors `entries` for stale-free reads in polls/handlers
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { deadlineRef.current = deadlineMs; }, [deadlineMs]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
 
   const stakeNum = Number(stake) || 0;
   const stakeErr = validateStake(stakeNum);
@@ -165,22 +169,31 @@ export default function DegenGame() {
   );
 
   // ── header balance: spendable wallet USDC + the game profile's V2-ledger collateral ──
-  // Refreshes on connect and at every phase boundary so the number deducts on stake and
-  // rises on Claim (matching player expectation). RPC failure shows "—", never throws.
-  useEffect(() => {
+  // Refreshes on connect, at every phase boundary, and on a 10s visibility-gated poll so
+  // the number deducts on stake, draws down as V2 collateral is reused, and rises on Claim
+  // (matching player expectation). RPC failure shows "—", never throws.
+  const refreshHeaderBalances = useCallback((isCancelled?: () => boolean) => {
     if (!wallet) { setWalletUsdc(null); setGameV2Usd(0); return; }
-    let cancelled = false;
-    void fetchWalletUsdc(wallet).then((v) => { if (!cancelled) setWalletUsdc(v); });
+    void fetchWalletUsdc(wallet).then((v) => { if (!isCancelled?.()) setWalletUsdc(v); });
     const token = jwt ?? loadJwt(wallet);
     if (token) {
       void imperial
         .getV2Balance(token)
         .then((r) => r.profiles.find((p) => p.profileIndex === GAME_PROFILE)?.availableUsdc ?? 0)
         .catch(() => 0)
-        .then((v) => { if (!cancelled) setGameV2Usd(v / 1e6); });
+        .then((v) => { if (!isCancelled?.()) setGameV2Usd(v / 1e6); });
     }
+  }, [wallet, jwt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    refreshHeaderBalances(() => cancelled);
     return () => { cancelled = true; };
-  }, [wallet, jwt, phase]);
+  }, [refreshHeaderBalances, phase]);
+
+  // Keep the header live as V2 collateral draws down: poll every 10s while a wallet is
+  // connected, paused when the tab is hidden.
+  useVisibilityInterval(() => refreshHeaderBalances(), 5_000, !!wallet);
 
   // ── auto-close ticker (drives countdown + fires the delegated close at deadline) ──
   useEffect(() => {
@@ -229,6 +242,11 @@ export default function DegenGame() {
         if (pos && openAckAtRef.current != null) {
           liqMissRef.current = 0;
           livePosRef.current = pos;
+          // Seed the chart's first entry line from the fill price (once).
+          const entryPx = Number(pos.entryPrice);
+          if (entryPx > 0 && entriesRef.current.length === 0) {
+            setEntries([{ value: entryPx, label: "Entry" }]);
+          }
           openAckAtRef.current = null; // filled — stop the fill-timeout clock
           const dl = initialDeadline(Date.now());
           deadlineRef.current = dl;
@@ -263,6 +281,11 @@ export default function DegenGame() {
       if (pos) {
         liqMissRef.current = 0;
         livePosRef.current = pos;
+        // Fallback seed: if we reached live without an entry line (fast fill), seed it once.
+        const entryPx = Number(pos.entryPrice);
+        if (entryPx > 0 && entriesRef.current.length === 0) {
+          setEntries([{ value: entryPx, label: "Entry" }]);
+        }
         lastPnlRef.current = num(pos.pnlUsd);
         setLivePnl(num(pos.pnlUsd));
       } else if (!weClosedRef.current) {
@@ -272,6 +295,7 @@ export default function DegenGame() {
         liqMissRef.current += 1;
         if (liqMissRef.current >= LIQ_CONFIRM_POLLS) {
           setLivePnl(0);
+          setEntries([]); // position gone — clear chart entry lines
           const token = jwt ?? (wallet ? loadJwt(wallet) : null);
           setResult(token ? await buildResult(token, "Liquidated.") : { pnlUsd: lastPnlRef.current, claimableUsd: 0, v2LedgerUsd: 0, note: "Liquidated." });
           setPhase("liquidated");
@@ -322,6 +346,7 @@ export default function DegenGame() {
     if (stakeErr) { addToast("error", "Can't start", stakeErr); return; }
     setBusy(true);
     setResult(null);
+    setEntries([]); // clear chart entry lines for the new round
     setPhase("starting");
     weClosedRef.current = false;
     livePosRef.current = null;
@@ -374,6 +399,14 @@ export default function DegenGame() {
     deadlineRef.current = extended;
     setDeadlineMs(extended);
     const amt = origStakeRef.current;
+    // Capture this tranche's entry line at the moment of the tap. Relabel the existing
+    // first line to "Entry 1" so the set reads Entry 1 / Entry 2 / … (ref avoids stale state).
+    const px = useStatsStore.getState().marks[GAME_SYMBOL] ?? mark ?? 0;
+    if (px > 0) {
+      const prev = entriesRef.current;
+      const relabeled = prev.map((e, i) => (i === 0 ? { ...e, label: "Entry 1" } : e));
+      setEntries([...relabeled, { value: px, label: `Entry ${prev.length + 1}` }]);
+    }
     const tid = addToast("loading", "Doubling down…", `+$${amt} · +60s`);
     try {
       const token = await ensureJwt();
@@ -394,7 +427,7 @@ export default function DegenGame() {
         doCloseRef.current();
       }
     }
-  }, [phase, addToast, ensureJwt, openIncrement, updateToast]);
+  }, [phase, mark, addToast, ensureJwt, openIncrement, updateToast]);
 
   const doClose = useCallback(async () => {
     setPhase("closing");
@@ -425,6 +458,7 @@ export default function DegenGame() {
       }
       if (!res.success) throw new Error(res.error ?? "Close rejected");
       closed = true;
+      setEntries([]); // position closed on-chain — clear chart entry lines
       updateToast(tid, { type: "success", title: "Closed", detail: "Settling…" });
       // wait for proceeds to settle into the profile (best-effort)
       const preFree = await profileFreeNative(token);
@@ -486,6 +520,7 @@ export default function DegenGame() {
     setResult(null);
     setDeadlineMs(null);
     setLivePnl(0);
+    setEntries([]); // clear chart entry lines
     weClosedRef.current = false;
     livePosRef.current = null;
     openFlowTidRef.current = null;
@@ -517,7 +552,7 @@ export default function DegenGame() {
       {/* chart — overflow-hidden clips liveline's canvas to the flex box so it
           can't bleed over (and steal clicks from) the control panel below */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <LiveLineChart symbol={GAME_SYMBOL} />
+        <LiveLineChart symbol={GAME_SYMBOL} entryLines={entries} />
         {/* live countdown overlay */}
         {(phase === "live" || phase === "closing") && deadlineMs != null && (
           <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 text-center">
@@ -544,7 +579,7 @@ export default function DegenGame() {
       <div className="relative z-10 shrink-0 border-t border-metric-border bg-surface-1 px-4 py-3">
         {phase === "idle" && gameV2Usd > 0.01 && (
           <div className="mb-2 font-mono text-[10px] text-text-secondary/70">
-            ${gameV2Usd.toFixed(2)} in Flash V2 ledger — recovered automatically on your next open→close.
+            ${gameV2Usd.toFixed(2)} in Flash V2 collateral — applied to your next trade.
           </div>
         )}
         <ControlPanel
@@ -719,7 +754,7 @@ function V2RecoveryNote({ usd }: { usd: number }) {
   if (!(usd > 0.01)) return null;
   return (
     <div className="font-mono text-[10px] text-text-secondary/60">
-      ${usd.toFixed(2)} in Flash V2 ledger — recovered automatically on your next open→close.
+      ${usd.toFixed(2)} in Flash V2 collateral — applied to your next trade.
     </div>
   );
 }

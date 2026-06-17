@@ -23,6 +23,7 @@ import {
 } from "@/lib/order-builder";
 import { openWithDeposit, marketVenueCandidates, TradeFlowError } from "@/lib/trade-flow";
 import { formatPriceAuto } from "@/lib/format";
+import { useVisibilityInterval } from "@/hooks/useVisibilityInterval";
 
 // "auto" lets Imperial's /route pick the cheapest venue that supports the order
 // (e.g. SOL market orders route to GMTrade; Phoenix is CLOB/limit-only via this
@@ -216,6 +217,21 @@ export function OrderEntry() {
       cancelled = true;
     };
   }, [wallet, lastRefresh, fetchWalletUsdc]);
+
+  // Background poll (visible-tab only) so wallet + profile balances drift back to
+  // truth even without an explicit event — e.g. funds moved in another tab, or a
+  // deposit/withdraw that didn't flow through this component. Cheap and paused when
+  // backgrounded; the event-driven refreshes above remain the fast path.
+  useVisibilityInterval(
+    () => {
+      if (!wallet) return;
+      void fetchWalletUsdc().then((v) => setWalletUsdc(v));
+      const token = jwt ?? loadJwt(wallet);
+      if (token) void refreshBalances(token);
+    },
+    8_000,
+    !!wallet,
+  );
 
   // Gas / wallet-USDC preflight before signing a deposit. The operator sponsors
   // rent + ATA creation, but the wallet still pays the base tx fee, so it needs

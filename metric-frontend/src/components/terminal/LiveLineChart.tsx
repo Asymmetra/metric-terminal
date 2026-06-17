@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Liveline, type LivelinePoint } from "liveline";
+import { Liveline, type LivelinePoint, type LivelineSeries } from "liveline";
 import { useStatsStore } from "@/stores/statsStore";
 import { useTraderStore } from "@/stores/traderStore";
 import { priceHistory } from "@/lib/price-history";
@@ -34,6 +34,9 @@ const WINDOWS = [
 
 const fmt = (v: number) => `$${formatPriceAuto(v)}`;
 
+/** Muted amber for non-primary entry lines — distinct from the #0EA5E9 mark line. */
+const ENTRY_LINE_COLOR = "rgba(245, 158, 11, 0.55)";
+
 /** Flat baseline (~1pt/sec, capped) at `price` across [now-windowSecs, now]. */
 function flatSeed(price: number, windowSecs: number, now: number): LivelinePoint[] {
   const step = Math.max(1, Math.round(windowSecs / 90));
@@ -42,7 +45,20 @@ function flatSeed(price: number, windowSecs: number, now: number): LivelinePoint
   return out;
 }
 
-export function LiveLineChart({ symbol }: { symbol: string }) {
+export function LiveLineChart({
+  symbol,
+  entryLines,
+}: {
+  symbol: string;
+  /**
+   * Optional explicit entry lines (the game passes one per active bet). When
+   * provided and non-empty, these REPLACE the position-derived entry line: the
+   * last entry becomes the in-scale `referenceLine` and every other entry is
+   * drawn as a flat liveline series. When omitted (terminal usage), the chart
+   * keeps deriving a single entry line from the open position.
+   */
+  entryLines?: { value: number; label?: string }[];
+}) {
   const mark = useStatsStore((s) => s.marks[symbol]);
   const positions = useTraderStore((s) => s.positions);
 
@@ -75,14 +91,50 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
 
   const value = mark ?? points[points.length - 1]?.value ?? 0;
 
-  // Entry line for an open position (liveline keeps the reference value in scale,
-  // so this stays near price; liquidation is shown on the candle chart instead).
-  const pos = positions.find(
-    (p) => p.asset === symbol && (p.status?.toLowerCase() === "open" || Number(p.sizeUsd) > 0)
-  );
-  const entry = pos?.entryPrice ? Number(pos.entryPrice) : null;
-  const referenceLine =
-    entry && entry > 0 ? { value: entry, label: `Entry $${formatPriceAuto(entry)}` } : undefined;
+  // Entry lines. Two modes:
+  //   1. entryLines provided (game): the last entry is the in-scale referenceLine;
+  //      every other entry is a flat liveline series (clean stroke, no fill — the
+  //      multi-series path in liveline draws each series with fill=false and a
+  //      per-series palette, and folds each flat value into the y-range via
+  //      computeRange, so a constant series renders as a crisp horizontal line
+  //      that stays in scale without momentum/fill artifacts). The primary mark
+  //      line is included as the FIRST series since multi-series mode does not
+  //      auto-include the `data`/`value` line.
+  //   2. entryLines omitted (terminal): keep the prior behavior — derive a single
+  //      referenceLine from the open position. No series → single-line render path
+  //      with full momentum/fill/pulse, exactly as before.
+  let referenceLine: { value: number; label?: string } | undefined;
+  let series: LivelineSeries[] | undefined;
+
+  if (entryLines && entryLines.length > 0) {
+    const last = entryLines[entryLines.length - 1];
+    referenceLine = { value: last.value, label: last.label };
+
+    series = [
+      {
+        id: "price",
+        data: points,
+        value,
+        color: "#0EA5E9",
+      },
+      ...entryLines.slice(0, -1).map((e, i) => ({
+        id: `entry-${i}`,
+        data: points.map((p) => ({ time: p.time, value: e.value })),
+        value: e.value,
+        color: ENTRY_LINE_COLOR,
+        label: e.label,
+      })),
+    ];
+  } else {
+    // Entry line for an open position (liveline keeps the reference value in scale,
+    // so this stays near price; liquidation is shown on the candle chart instead).
+    const pos = positions.find(
+      (p) => p.asset === symbol && (p.status?.toLowerCase() === "open" || Number(p.sizeUsd) > 0)
+    );
+    const entry = pos?.entryPrice ? Number(pos.entryPrice) : null;
+    referenceLine =
+      entry && entry > 0 ? { value: entry, label: `Entry $${formatPriceAuto(entry)}` } : undefined;
+  }
 
   return (
     <div className="absolute inset-0">
@@ -104,6 +156,7 @@ export function LiveLineChart({ symbol }: { symbol: string }) {
         showValue
         grid
         lineWidth={2}
+        series={series}
         referenceLine={referenceLine}
         loading={points.length === 0 && typeof mark !== "number"}
         emptyText={`Waiting for ${symbol} feed…`}
