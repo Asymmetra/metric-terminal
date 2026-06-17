@@ -7,6 +7,18 @@
  *   2. https://solana-rpc.publicnode.com — publicnode.com fallback (returns
  *      200 to browser-origin requests).
  *
+ * RECOMMENDED: for the fastest deposit/withdraw confirmation, point
+ * NEXT_PUBLIC_SOLANA_RPC at a fast, CORS-friendly RPC. The Helius STANDARD
+ * RPC works well from the browser:
+ *   https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+ * Use the STANDARD endpoint above — NOT the Sender `/fast` low-latency
+ * submit endpoint: Imperial is the fee-payer and pre-signs the tx, so the
+ * client never broadcasts a trade and Sender's send-path optimizations don't
+ * apply (the only on-chain action we broadcast is deposit/withdraw + its
+ * getSignatureStatuses confirm, which just need a quick CORS-friendly node).
+ * Never hardcode the key — keep it in the env var. The public node above
+ * remains the fallback when the env primary is unset or browser-hostile.
+ *
  * NOTE: the official public endpoint per solana.com/docs/references/clusters
  * is https://api.mainnet.solana.com, but it returns HTTP 403 to
  * browser-origin POSTs (Solana Labs blocks anonymous web traffic), so it is
@@ -151,7 +163,7 @@ export async function confirmSignatureHttp(
   signature: string,
   commitment: Commitment = "confirmed",
   timeoutMs = 30_000,
-  intervalMs = 1_500
+  intervalMs = 900
 ): Promise<void> {
   const want = commitment === "finalized" ? ["finalized"] : ["confirmed", "finalized"];
   const deadline = Date.now() + timeoutMs;

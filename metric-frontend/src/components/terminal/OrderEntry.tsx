@@ -244,6 +244,11 @@ export function OrderEntry() {
       // Lock immediately (before any await) so a second click during the /route
       // fetch can't fire a second concurrent order. The finally always unlocks.
       setBusy(true);
+      // Surface a loading toast the instant the user taps — before any network —
+      // so the routing wait is never silent. The single tid is resolved on every
+      // path below (early-return errors updateToast it to "error"; never a 2nd toast).
+      const verb = type === "limit" ? "Limit" : "Market";
+      const tid = addToast("loading", `Routing ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
       try {
         // Honor Imperial /route's pick (incl. Phoenix — its market orders fill once
         // marketPrice is sent at the right venue scale); list the other candidates
@@ -264,7 +269,7 @@ export function OrderEntry() {
         }
         const venues = marketVenueCandidates({ type, selectedVenue: venue, route });
         if (type === "market" && venues.length === 0) {
-          addToast("error", "Market order unavailable", `No venue is currently available to market-trade ${symbol}.`);
+          updateToast(tid, { type: "error", title: "Market order unavailable", detail: `No venue is currently available to market-trade ${symbol}.` });
           return;
         }
         const input: OrderFormInput = {
@@ -282,11 +287,10 @@ export function OrderEntry() {
         };
         const err = validateOrder(input);
         if (err) {
-          addToast("error", "Can't place order", err);
+          updateToast(tid, { type: "error", title: "Can't place order", detail: err });
           return;
         }
-        const verb = type === "limit" ? "Limit" : "Market";
-        const tid = addToast("loading", `${verb} ${side} ${symbol}…`, `$${sizeNum} @ ${lev.toFixed(1)}x`);
+        updateToast(tid, { type: "loading", title: `${verb} ${side} ${symbol}…`, detail: `$${sizeNum} @ ${lev.toFixed(1)}x` });
         try {
           const token = await ensureJwt();
           const { depositedNative, order, venue: filledVenue } = await openWithDeposit(input, {

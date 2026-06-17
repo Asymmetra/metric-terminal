@@ -185,3 +185,192 @@ describe("ImperialClient", () => {
     expect(loadJwt(FAKE_WALLET)).toBe("fresh-jwt");
   });
 });
+
+describe("ImperialClient stats + history reads", () => {
+  const originalFetch = globalThis.fetch;
+  const BASE = "https://api.imperial.space/api/v1";
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** Capture the requested URL and return `body` as a 200 JSON response. */
+  function captureFetch(body: unknown): { calls: string[] } {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    return { calls };
+  }
+
+  it("getPnlHistory builds the exact query and parses the typed shape", async () => {
+    const point = {
+      timestamp: 1_700_000_000,
+      cumulativePnl: 12.5,
+      cumulativeTakerFee: 0.4,
+      cumulativeFundingPayment: -0.1,
+      unrealizedPnl: null,
+    };
+    const { calls } = captureFetch([point]);
+
+    const client = new ImperialClient();
+    const rows = await client.getPnlHistory(FAKE_WALLET, "1h", {
+      since: 100,
+      until: 200,
+      underwriter: "phoenix",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(
+      `${BASE}/pnl-history?walletAddress=${encodeURIComponent(FAKE_WALLET)}` +
+        `&resolution=1h&since=100&until=200&underwriter=phoenix`
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.cumulativePnl).toBe(12.5);
+    expect(rows[0]!.unrealizedPnl).toBeNull();
+  });
+
+  it("getPnlHistory omits optional params when undefined", async () => {
+    const { calls } = captureFetch([]);
+    const client = new ImperialClient();
+    await client.getPnlHistory(FAKE_WALLET, "1d");
+    expect(calls[0]).toBe(
+      `${BASE}/pnl-history?walletAddress=${encodeURIComponent(FAKE_WALLET)}&resolution=1d`
+    );
+  });
+
+  it("getStatsSummary hits /stats/summary and parses headline + venues", async () => {
+    const summary = {
+      asOf: "2026-06-16T00:00:00Z",
+      volume24hUsd: "1234567.89",
+      volume7dUsd: "8000000",
+      volumeAllUsd: "99000000",
+      openInterestUsd: "456789.01",
+      activeTraders24h: 42,
+      feeRevenue24hUsd: "1234.56",
+      venues: [
+        { venue: "phoenix", volumeUsd: "1000", openInterestUsd: "500", traderCount: 7 },
+      ],
+    };
+    const { calls } = captureFetch(summary);
+
+    const client = new ImperialClient();
+    const res = await client.getStatsSummary();
+
+    expect(calls[0]).toBe(`${BASE}/stats/summary`);
+    expect(res.volume24hUsd).toBe("1234567.89");
+    expect(res.activeTraders24h).toBe(42);
+    expect(res.venues[0]!.venue).toBe("phoenix");
+    expect(res.venues[0]!.traderCount).toBe(7);
+  });
+
+  it("getStatsMarkets appends period only when supplied", async () => {
+    const { calls } = captureFetch({ period: "24h", rows: [] });
+    const client = new ImperialClient();
+    await client.getStatsMarkets();
+    await client.getStatsMarkets("7d");
+    expect(calls[0]).toBe(`${BASE}/stats/markets`);
+    expect(calls[1]).toBe(`${BASE}/stats/markets?period=7d`);
+  });
+
+  it("getStatsVolume appends only the supplied opts in order and parses rows", async () => {
+    const { calls } = captureFetch({
+      period: "7d",
+      grouping: "day",
+      rows: [
+        {
+          timestamp: "2026-06-16",
+          totalUsd: "1000",
+          jupiterUsd: "100",
+          flashUsd: "200",
+          phoenixUsd: "300",
+          gmtradeUsd: "400",
+          tradeCount: 5,
+        },
+      ],
+    });
+    const client = new ImperialClient();
+    await client.getStatsVolume();
+    const res = await client.getStatsVolume({ period: "7d", grouping: "day", venue: "phoenix" });
+    expect(calls[0]).toBe(`${BASE}/stats/volume`);
+    expect(calls[1]).toBe(`${BASE}/stats/volume?period=7d&grouping=day&venue=phoenix`);
+    expect(res.rows[0]!.tradeCount).toBe(5);
+    expect(res.rows[0]!.totalUsd).toBe("1000");
+  });
+
+  it("getStatsOpenInterest appends grouping only when supplied and parses rows", async () => {
+    const { calls } = captureFetch({
+      asOf: "2026-06-16T00:00:00Z",
+      grouping: "venue",
+      rows: [
+        {
+          label: "phoenix",
+          longUsd: "600",
+          shortUsd: "400",
+          totalUsd: "1000",
+          positionCount: 3,
+          traderCount: 2,
+        },
+      ],
+    });
+    const client = new ImperialClient();
+    await client.getStatsOpenInterest();
+    const res = await client.getStatsOpenInterest("venue");
+    expect(calls[0]).toBe(`${BASE}/stats/open-interest`);
+    expect(calls[1]).toBe(`${BASE}/stats/open-interest?grouping=venue`);
+    expect(res.rows[0]!.label).toBe("phoenix");
+    expect(res.rows[0]!.totalUsd).toBe("1000");
+  });
+
+  it("getOpenOrders uses profile_index (snake_case) and parses orders", async () => {
+    const order = {
+      wallet: FAKE_WALLET,
+      profileIndex: 0,
+      profilePda: "Profile111",
+      orderPda: "Order111",
+      parentOrderPda: null,
+      underwriter: "phoenix",
+      marketMint: "Mint111",
+      side: "long",
+      action: "increase",
+      orderType: "limit",
+      status: "open",
+      sizeUsd: "1000000",
+      collateralAmount: "100000",
+      slippageBps: 50,
+      triggerCondition: null,
+      triggerPrice: null,
+      createdAt: 1_700_000_000,
+      creationSlot: 123,
+      creationSignature: "Sig111",
+      executedAt: null,
+      executionSignature: null,
+      cancelledAt: null,
+    };
+    const { calls } = captureFetch({ count: 1, orders: [order] });
+
+    const client = new ImperialClient();
+    const res = await client.getOpenOrders(FAKE_WALLET, {
+      status: "open",
+      limit: 25,
+      profileIndex: 0,
+    });
+
+    expect(calls[0]).toBe(
+      `${BASE}/passthrough/users/${encodeURIComponent(FAKE_WALLET)}/orders` +
+        `?status=open&limit=25&profile_index=0`
+    );
+    expect(res.count).toBe(1);
+    expect(res.orders[0]!.orderPda).toBe("Order111");
+    expect(res.orders[0]!.parentOrderPda).toBeNull();
+  });
+
+  it("getOpenOrders omits the query string when no opts are passed", async () => {
+    const { calls } = captureFetch({ count: 0, orders: [] });
+    const client = new ImperialClient();
+    await client.getOpenOrders(FAKE_WALLET);
+    expect(calls[0]).toBe(
+      `${BASE}/passthrough/users/${encodeURIComponent(FAKE_WALLET)}/orders`
+    );
+  });
+});

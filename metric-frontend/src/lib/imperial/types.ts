@@ -336,3 +336,128 @@ export interface PositionList {
   lifetimeFeesUsd: string;
   lifetimeCollateralUsd: string;
 }
+
+// ──────────────────────────────────────────────────────────── pnl history
+
+/**
+ * One point on the cumulative-PnL curve from GET /pnl-history. `resolution`
+ * (1m/1h/1d/…) controls bucket width; numeric USD fields are in plain dollars.
+ */
+export interface PnlHistoryPoint {
+  timestamp: number;
+  cumulativePnl: number;
+  cumulativeTakerFee: number;
+  cumulativeFundingPayment: number;
+  unrealizedPnl: number | null;
+}
+
+// ──────────────────────────────────────────────────────────── stats
+
+/** Per-venue volume + OI slice inside GET /stats/summary. */
+export interface VenueStats {
+  venue: string;
+  volumeUsd: string;
+  openInterestUsd: string;
+  traderCount: number;
+}
+/** GET /stats/summary — protocol-wide headline figures (Usd fields are decimal strings). */
+export interface StatsSummaryResponse {
+  asOf: string;
+  volume24hUsd: string;
+  volume7dUsd: string;
+  volumeAllUsd: string;
+  openInterestUsd: string;
+  activeTraders24h: number;
+  feeRevenue24hUsd: string;
+  venues: VenueStats[];
+}
+
+/** Per-venue volume split for a market row in GET /stats/markets. */
+export interface MarketVenueVolume {
+  jupiterUsd: string;
+  flashUsd: string;
+  phoenixUsd: string;
+  gmtradeUsd: string;
+}
+export interface MarketRow {
+  symbol: string;
+  volumeUsd: string;
+  openInterestUsd: string;
+  longOiUsd: string;
+  shortOiUsd: string;
+  positionCount: number;
+  traderCount: number;
+  byVenue: MarketVenueVolume;
+}
+/** GET /stats/markets — per-market volume + OI breakdown. */
+export interface MarketsResponse {
+  period: string;
+  rows: MarketRow[];
+}
+
+/** One time bucket of volume from GET /stats/volume. */
+export interface VolumeBucket {
+  timestamp: string;
+  totalUsd: string;
+  jupiterUsd: string;
+  flashUsd: string;
+  phoenixUsd: string;
+  gmtradeUsd: string;
+  tradeCount: number;
+}
+/** GET /stats/volume — time-bucketed volume series. */
+export interface VolumeResponse {
+  period: string;
+  grouping: string;
+  rows: VolumeBucket[];
+}
+
+/** One grouped open-interest row from GET /stats/open-interest. */
+export interface OpenInterestRow {
+  label: string;
+  longUsd: string;
+  shortUsd: string;
+  totalUsd: string;
+  positionCount: number;
+  traderCount: number;
+}
+/** GET /stats/open-interest — open interest grouped by venue/market/etc. */
+export interface OpenInterestResponse {
+  asOf: string;
+  grouping: string;
+  rows: OpenInterestRow[];
+}
+
+// ──────────────────────────────────────────────────────────── passthrough orders
+
+/** A single order row from GET /passthrough/users/{wallet}/orders. */
+export interface PassthroughOrder {
+  wallet: string;
+  profileIndex: number;
+  profilePda: string;
+  orderPda: string;
+  parentOrderPda: string | null;
+  underwriter: string;
+  marketMint: string;
+  side: string;
+  action: string;
+  orderType: string;
+  status: string;
+  sizeUsd: string;
+  collateralAmount: string;
+  slippageBps: number;
+  triggerCondition: string | null;
+  triggerPrice: string | null;
+  createdAt: number;
+  creationSlot: number;
+  creationSignature: string;
+  executedAt: number | null;
+  executionSignature: string | null;
+  cancelledAt: number | null;
+  orderData?: unknown;
+  venueOrderState?: unknown;
+}
+export interface PassthroughOrdersResponse {
+  count: number;
+  orders: PassthroughOrder[];
+}

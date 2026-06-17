@@ -15,15 +15,21 @@ import type {
   ExchangeResponse,
   FundingRateRow,
   ImperialStatus,
+  MarketsResponse,
   MarkPriceRow,
+  OpenInterestResponse,
   OrderRequest,
   OrderResponse,
+  PassthroughOrdersResponse,
+  PnlHistoryPoint,
   PositionList,
   RegisterPhoenixResponse,
   RouteResponse,
+  StatsSummaryResponse,
   SyncSweepResponse,
   UpdateRequest,
   VenueTag,
+  VolumeResponse,
 } from "./types";
 import { clearJwt, loadJwt, saveJwt } from "./jwt";
 import type { SignerProvider } from "../wallet/types";
@@ -204,6 +210,71 @@ export class ImperialClient {
   /** Component health. `orderBot.status === "unhealthy"` ⇒ no order can place. */
   getStatus(): Promise<ImperialStatus> {
     return this.get("/status");
+  }
+
+  /**
+   * Cumulative realized-PnL curve for a wallet, bucketed at `resolution`
+   * (e.g. "1m" / "1h" / "1d"). `since`/`until` are unix-second bounds;
+   * `underwriter` filters to one venue. No auth.
+   */
+  getPnlHistory(
+    walletAddress: string,
+    resolution: string,
+    opts: { since?: number; until?: number; underwriter?: string } = {}
+  ): Promise<PnlHistoryPoint[]> {
+    const qs = new URLSearchParams({ walletAddress, resolution });
+    if (opts.since !== undefined) qs.set("since", String(opts.since));
+    if (opts.until !== undefined) qs.set("until", String(opts.until));
+    if (opts.underwriter) qs.set("underwriter", opts.underwriter);
+    return this.get(`/pnl-history?${qs.toString()}`);
+  }
+
+  /** Protocol-wide headline stats (24h/7d/all volume, OI, active traders). No auth. */
+  getStatsSummary(): Promise<StatsSummaryResponse> {
+    return this.get("/stats/summary");
+  }
+  /** Per-market volume + OI breakdown, optionally scoped to `period`. No auth. */
+  getStatsMarkets(period?: string): Promise<MarketsResponse> {
+    const qs = new URLSearchParams();
+    if (period) qs.set("period", period);
+    const q = qs.toString();
+    return this.get(`/stats/markets${q ? `?${q}` : ""}`);
+  }
+  /** Time-bucketed volume series. No auth. */
+  getStatsVolume(
+    opts: { period?: string; grouping?: string; venue?: string } = {}
+  ): Promise<VolumeResponse> {
+    const qs = new URLSearchParams();
+    if (opts.period) qs.set("period", opts.period);
+    if (opts.grouping) qs.set("grouping", opts.grouping);
+    if (opts.venue) qs.set("venue", opts.venue);
+    const q = qs.toString();
+    return this.get(`/stats/volume${q ? `?${q}` : ""}`);
+  }
+  /** Open interest grouped by venue/market/etc. No auth. */
+  getStatsOpenInterest(grouping?: string): Promise<OpenInterestResponse> {
+    const qs = new URLSearchParams();
+    if (grouping) qs.set("grouping", grouping);
+    const q = qs.toString();
+    return this.get(`/stats/open-interest${q ? `?${q}` : ""}`);
+  }
+
+  /**
+   * Resting/queued orders for a wallet from the passthrough indexer. Query
+   * param is `profile_index` (snake_case) on this endpoint. No auth.
+   */
+  getOpenOrders(
+    wallet: string,
+    opts: { status?: string; limit?: number; profileIndex?: number } = {}
+  ): Promise<PassthroughOrdersResponse> {
+    const qs = new URLSearchParams();
+    if (opts.status) qs.set("status", opts.status);
+    if (opts.limit !== undefined) qs.set("limit", String(opts.limit));
+    if (opts.profileIndex !== undefined) qs.set("profile_index", String(opts.profileIndex));
+    const q = qs.toString();
+    return this.get(
+      `/passthrough/users/${encodeURIComponent(wallet)}/orders${q ? `?${q}` : ""}`
+    );
   }
 
   // ────────────────────────────────────────────── plumbing

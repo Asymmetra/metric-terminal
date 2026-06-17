@@ -399,6 +399,10 @@ export default function DegenGame() {
   const doClose = useCallback(async () => {
     setPhase("closing");
     const tid = addToast("loading", "Time! Closing…", "no signature needed");
+    // Once the close order is accepted the position is gone on-chain; from that point
+    // a failure in the (best-effort) settle/result bookkeeping must NOT clobber the
+    // success toast or re-open the now-closed position.
+    let closed = false;
     try {
       const token = await ensureJwt();
       const pos = livePosRef.current;
@@ -420,6 +424,7 @@ export default function DegenGame() {
         res = await imperial.placeOrder(req, token);
       }
       if (!res.success) throw new Error(res.error ?? "Close rejected");
+      closed = true;
       updateToast(tid, { type: "success", title: "Closed", detail: "Settling…" });
       // wait for proceeds to settle into the profile (best-effort)
       const preFree = await profileFreeNative(token);
@@ -431,6 +436,18 @@ export default function DegenGame() {
       setResult(await buildResult(token));
       setPhase("settled");
     } catch (e) {
+      if (closed) {
+        // Close already succeeded on-chain — only post-close bookkeeping failed.
+        // Keep the success toast; land in settled (best-effort result), never re-arm live.
+        try {
+          const token = await ensureJwt();
+          setResult(await buildResult(token));
+          setPhase("settled");
+        } catch {
+          setPhase("idle");
+        }
+        return;
+      }
       // close failed — the position is still open. Re-arm after a short backoff so the
       // ticker retries (rather than spinning every 200ms while the deadline is past).
       updateToast(tid, { type: "error", title: "Close failed — retrying", detail: errMsg(e) });

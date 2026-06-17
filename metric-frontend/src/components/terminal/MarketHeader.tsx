@@ -8,6 +8,7 @@ import { useStatsStore } from "@/stores/statsStore";
 import { fetch24hStats, type DayStats } from "@/lib/phoenix-candles";
 import { formatPriceAuto, abbreviateNumber } from "@/lib/format";
 import { HealthIndicator } from "@/components/terminal/HealthIndicator";
+import { StatsSummaryStrip } from "@/components/terminal/StatsSummaryStrip";
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -140,6 +141,10 @@ export function MarketHeader() {
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
+        {/* Protocol-wide stats; hidden on narrow screens to keep the header uncluttered. */}
+        <div className="hidden lg:flex">
+          <StatsSummaryStrip />
+        </div>
         <HealthIndicator />
         <WalletMenu />
       </div>

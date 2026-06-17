@@ -48,7 +48,7 @@ body {
 }
 
 .toast-slide-in {
-  animation: toast-slide-in 200ms ease-out;
+  animation: toast-slide-in 150ms ease-out;
 }
 
 /* ── Orderbook Row Flash ── */
