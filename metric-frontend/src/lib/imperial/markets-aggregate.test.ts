@@ -468,6 +468,9 @@ describe("aggregateMarkets — 5-venue join", () => {
 
     expect(result.asOf).toBe("2026-07-01T12:00:00.000Z");
     expect(result.period).toBe("24h");
+    // No venue filter applied -> filter is null, count matches markets.
+    expect(result.filter).toBeNull();
+    expect(result.count).toBe(result.markets.length);
     // venues[] present, in canonical VENUE_ORDER.
     expect(result.venues).toEqual(["flash_v2", "flash", "phoenix", "gmtrade", "jupiter"]);
     // Canonical order sanity.
@@ -665,6 +668,10 @@ describe("aggregateMarkets — venue filter", () => {
   it('venue="flash_v2" -> ONLY flash_v2, drops markets that lack it', () => {
     const result = aggregateMarkets(fullInputs(), { venue: "flash_v2" });
     expect(result.venues).toEqual(["flash_v2"]);
+    // Filter is echoed (normalized) + count matches, so a consumer can tell a
+    // filtered response apart from "that's all the data there is".
+    expect(result.filter).toBe("flash_v2");
+    expect(result.count).toBe(result.markets.length);
     // Every emitted market has ONLY a flash_v2 venue view.
     for (const m of result.markets) {
       expect(Object.keys(m.venues)).toEqual(["flash_v2"]);

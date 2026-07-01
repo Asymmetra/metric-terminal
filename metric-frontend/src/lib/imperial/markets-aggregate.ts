@@ -313,6 +313,10 @@ export interface AggregatedMarkets {
   asOf: string;
   source: string;
   period: string;
+  /** The venue filter that was applied (normalized), or null when ALL venues are returned. */
+  filter: string | null;
+  /** Number of markets in `markets` (after any venue filter). */
+  count: number;
   venues: string[];
   totals: AggregatedTotals;
   markets: AggregatedMarket[];
@@ -795,10 +799,22 @@ export function aggregateMarkets(
     (v) => presentVenues.has(v) && venueAllowed(v),
   );
 
+  // Echo the applied venue filter so a consumer can tell "flash_v2 only because I
+  // filtered" apart from "flash_v2 is all there is". null = no filter (all venues);
+  // an unknown venue echoes the raw request (and yields no markets).
+  const filter =
+    venueFilter === null
+      ? null
+      : venueFilter === undefined
+        ? (opts?.venue ? String(opts.venue) : null)
+        : venueFilter;
+
   return {
     asOf,
     source: sourceLabel(safe),
     period,
+    filter,
+    count: markets.length,
     venues: venueList,
     totals,
     markets,
