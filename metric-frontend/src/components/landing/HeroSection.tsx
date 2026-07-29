@@ -111,12 +111,20 @@ export function HeroSection() {
               <path d="M2.5 6h7M6.5 2.5L10 6l-3.5 3.5" />
             </svg>
           </Link>
-          <Link
-            href="/degen"
-            className="inline-flex items-center font-mono text-[10px] font-medium tracking-[0.2em] text-metric-sell/70 transition-colors hover:text-metric-sell"
-          >
-            DEGEN MODE · 400× · 60s ↗
-          </Link>
+          <div className="flex items-center gap-5">
+            <Link
+              href="/degen"
+              className="inline-flex items-center font-mono text-[10px] font-medium tracking-[0.2em] text-metric-sell/70 transition-colors hover:text-metric-sell"
+            >
+              DEGEN MODE · 400× · 60s ↗
+            </Link>
+            <Link
+              href="/touch"
+              className="inline-flex items-center font-mono text-[10px] font-medium tracking-[0.2em] text-metric-buy/70 transition-colors hover:text-metric-buy"
+            >
+              IMPERIAL TOUCH · BARRIER OPTIONS ↗
+            </Link>
+          </div>
         </motion.div>
 
         {/* Subtle version tag */}

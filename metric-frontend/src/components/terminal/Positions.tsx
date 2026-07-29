@@ -14,11 +14,36 @@ import { closeAndWithdraw, TradeFlowError } from "@/lib/trade-flow";
 import { venueOf, sideOf } from "@/lib/position-mapping";
 import { confirmSignatureHttp } from "@/lib/solana-rpc";
 import { formatPriceAuto, formatUsdPrecise } from "@/lib/format";
+import type { FundingEventRow, OrderHistoryRow } from "@/lib/imperial/types";
 
-type Tab = "positions" | "history";
+type Tab = "positions" | "history" | "orders" | "funding";
+
+/** Rows to fetch/show for the read-only order & funding history tabs. */
+const HISTORY_LIMIT = 25;
 
 function num(v: string | null): number {
   return v == null ? 0 : Number(v) || 0;
+}
+
+/** µUSD string → display dollars. */
+function usdFromMicros(v: string | null): number {
+  return num(v) / 1e6;
+}
+
+/** unix-second timestamp → compact local "MMM D, HH:MM". */
+function fmtTime(unixSecs: number | null): string {
+  if (!unixSecs) return "—";
+  return new Date(unixSecs * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Base58 mint → short label ("So11..1112") for a compact market column. */
+function shortMint(m: string): string {
+  return m.length > 10 ? `${m.slice(0, 4)}..${m.slice(-4)}` : m;
 }
 
 export function Positions() {
@@ -106,6 +131,8 @@ export function Positions() {
             [
               ["positions", `Positions (${open.length})`],
               ["history", "Trade History"],
+              ["orders", "Orders"],
+              ["funding", "Funding"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -131,8 +158,12 @@ export function Positions() {
           ) : (
             <PositionsTable positions={open} closing={closing} onClose={runClose} />
           )
-        ) : (
+        ) : tab === "history" ? (
           <TradeHistory wallet={wallet} />
+        ) : tab === "orders" ? (
+          <OrderHistory wallet={wallet} />
+        ) : (
+          <FundingHistory wallet={wallet} />
         )}
       </div>
 
@@ -272,6 +303,138 @@ function TradeHistory({ wallet }: { wallet: string | null }) {
               <td className="text-text-secondary">{p.status}</td>
               <td className={pnl >= 0 ? "text-metric-buy" : "text-metric-sell"}>{formatUsdPrecise(pnl)}</td>
               <td className="text-text-secondary/70">{p.openedAt ? new Date(p.openedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Read-only closed/settled order history (GET /order-history, no auth). Compact
+ * rows: time · market · action/side · size · status. Paginated to ~25; fails
+ * gracefully to an empty state.
+ */
+function OrderHistory({ wallet }: { wallet: string | null }) {
+  const lastRefresh = useTraderStore((s) => s.lastRefresh);
+  const [rows, setRows] = useState<OrderHistoryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!wallet) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    imperial
+      .getOrderHistory(wallet, { limit: HISTORY_LIMIT })
+      .then((res) => !cancelled && setRows(res.orders ?? []))
+      .catch(() => {})
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet, lastRefresh]);
+
+  if (!wallet) return <Empty>Connect a wallet to see orders</Empty>;
+  if (loading && rows.length === 0) return <Empty>Loading…</Empty>;
+  if (rows.length === 0) return <Empty>No orders yet</Empty>;
+
+  return (
+    <table className="w-full font-mono text-[11px]">
+      <thead className="sticky top-0 bg-surface-1 text-left text-text-secondary/60">
+        <tr className="[&>th]:px-3 [&>th]:py-1.5 [&>th]:font-normal">
+          <th>Time</th>
+          <th>Market</th>
+          <th>Action</th>
+          <th>Type</th>
+          <th>Size</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((o) => {
+          const side = o.side?.toLowerCase();
+          const isLong = side === "long" || side === "buy" || side === "0";
+          return (
+            <tr key={o.orderPda} className="border-t border-metric-border/40 [&>td]:px-3 [&>td]:py-1.5">
+              <td className="text-text-secondary/70">{fmtTime(o.executedAt ?? o.createdAt)}</td>
+              <td className="text-text-primary">{shortMint(o.marketMint)}</td>
+              <td className={isLong ? "text-metric-buy" : "text-metric-sell"}>
+                {o.action} {o.side}
+              </td>
+              <td className="text-text-secondary">{o.orderType}</td>
+              <td className="text-text-secondary">${formatPriceAuto(usdFromMicros(o.sizeUsd))}</td>
+              <td className="text-text-secondary/80">{o.displayStatus || o.status}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Read-only funding/borrow settlement history (GET /funding-history, no auth).
+ * Compact rows: time · symbol · type · amount (positive = paid, red; received
+ * = green). Paginated to ~25; fails gracefully to an empty state.
+ */
+function FundingHistory({ wallet }: { wallet: string | null }) {
+  const lastRefresh = useTraderStore((s) => s.lastRefresh);
+  const [rows, setRows] = useState<FundingEventRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!wallet) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    imperial
+      .getFundingHistory(wallet, { limit: HISTORY_LIMIT })
+      .then((res) => !cancelled && setRows(res.events ?? []))
+      .catch(() => {})
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet, lastRefresh]);
+
+  if (!wallet) return <Empty>Connect a wallet to see funding</Empty>;
+  if (loading && rows.length === 0) return <Empty>Loading…</Empty>;
+  if (rows.length === 0) return <Empty>No funding events yet</Empty>;
+
+  return (
+    <table className="w-full font-mono text-[11px]">
+      <thead className="sticky top-0 bg-surface-1 text-left text-text-secondary/60">
+        <tr className="[&>th]:px-3 [&>th]:py-1.5 [&>th]:font-normal">
+          <th>Time</th>
+          <th>Market</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((f) => {
+          // amount is signed µUSD; positive = trader PAID (cost, red).
+          const amt = usdFromMicros(f.amount);
+          const side = f.side?.toLowerCase();
+          return (
+            <tr key={f.id} className="border-t border-metric-border/40 [&>td]:px-3 [&>td]:py-1.5">
+              <td className="text-text-secondary/70">{fmtTime(f.eventAt)}</td>
+              <td className="text-text-primary">{f.symbol || shortMint(f.marketMint)}</td>
+              <td className={side === "long" ? "text-metric-buy" : side === "short" ? "text-metric-sell" : "text-text-secondary"}>
+                {f.side || "—"}
+              </td>
+              <td className="text-text-secondary/80">{f.eventType.replace("_settled", "")}</td>
+              <td className={amt > 0 ? "text-metric-sell" : "text-metric-buy"}>
+                {amt > 0 ? "-" : amt < 0 ? "+" : ""}
+                {formatUsdPrecise(Math.abs(amt))}
+              </td>
             </tr>
           );
         })}

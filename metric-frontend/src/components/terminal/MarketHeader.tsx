@@ -9,6 +9,8 @@ import { fetch24hStats, type DayStats } from "@/lib/phoenix-candles";
 import { formatPriceAuto, abbreviateNumber } from "@/lib/format";
 import { HealthIndicator } from "@/components/terminal/HealthIndicator";
 import { StatsSummaryStrip } from "@/components/terminal/StatsSummaryStrip";
+import { PointsChip } from "@/components/terminal/PointsChip";
+import { useSigner } from "@/lib/wallet";
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -80,6 +82,7 @@ export function MarketHeader() {
   const symbol = useMarketStore((s) => s.selectedSymbol);
   const mark = useStatsStore((s) => s.marks[symbol]);
   const funding = useStatsStore((s) => s.funding[symbol]);
+  const signer = useSigner();
   const [day, setDay] = useState<DayStats | null>(null);
 
   // 24h stats from Phoenix candles; refresh on symbol change + every 60s.
@@ -145,6 +148,7 @@ export function MarketHeader() {
         <div className="hidden lg:flex">
           <StatsSummaryStrip />
         </div>
+        <PointsChip wallet={signer.publicKey} />
         <HealthIndicator />
         <WalletMenu />
       </div>

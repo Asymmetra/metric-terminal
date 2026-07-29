@@ -21,6 +21,11 @@ export const Underwriter = {
   // into the V2 UserDepositLedger at fill, so no manual /mobile/v2/deposit is required to trade.
   // passthrough_client `from_u8` maps 4→FlashTradeV2 and rejects ≥5; the OpenAPI "4 = Pacifica"
   // note is stale.
+  Touch: 6, // "Imperial Touch" — barrier/no-touch binary options. NOT a perp venue: it reuses the
+  // perp order RECORD (OrderRequest) with heavy FIELD OVERLOADING (see buildTouchOpenRequest /
+  // buildTouchCloseRequest in touch-order.ts for the exact mapping). Touch accepts orderType 0/1/2
+  // ONLY (Market/Limit/StopLimit); DCA/ratchet/landmine/tpsl are rejected. Do NOT add it to
+  // VenueTag / VENUE_CONFIG — those are perp-only.
 } as const;
 export type Underwriter = (typeof Underwriter)[keyof typeof Underwriter];
 
@@ -460,4 +465,226 @@ export interface PassthroughOrder {
 export interface PassthroughOrdersResponse {
   count: number;
   orders: PassthroughOrder[];
+}
+
+// ──────────────────────────────────────────────────────── imperial touch
+//
+// Barrier/no-touch binary options ("Imperial Touch", underwriter 6). Each TENOR
+// is its own market (verified live): SOL 24h/1h/5m = marketId 6/7/8, BTC =
+// 9/10/11, distinguished by `config.cohortWindowSecs` (86400 / 3600 / 300).
+// All numeric-scale fields keep Imperial's on-wire scale (see per-field notes);
+// prices are 1e9 oracle scale, USD payouts/premiums are µUSD (6-decimal).
+
+/** `config` block of a {@link TouchMarketRow} — the pricing/risk knobs for a tenor. */
+export interface TouchConfigView {
+  cohortQuantumSecs: number;   // grid step cohorts snap to
+  cohortWindowSecs: number;    // TENOR: 86400=24h, 3600=1h, 300=5m
+  minPayoutUsd: number;        // µUSD floor on sizeUsd (payout)
+  maxPayoutUsd: number;        // µUSD ceiling on sizeUsd (payout)
+  floorBps: number;            // min ask
+  ceilBps: number;             // max ask
+  alphaBps: number;
+  beta1e6: number;
+  gamma1e6: number;
+  eScaleUsd: number;
+  kImplied1e3: number;
+  minImpliedDtSecs: number;
+  sigmaMaxAgeSecs: number;
+  perBarrierCapBps: number;
+  portfolioCapBps: number;
+  wTauSecs: number[];
+  w1e6: number[];
+  fD1e6: number[];
+  fP1e6: number[];
+}
+
+/** `vol` block of a {@link TouchMarketRow} — live volatility snapshot (1e9-scaled). */
+export interface TouchVolView {
+  sigmaShort1e9: number;
+  sigmaLong1e9: number;
+  sigmaTouchFloor1e9: number;
+  anchorSpot1e9: number;
+  postTs: number;              // unix seconds of the snapshot
+  widenMult1e3: number;
+  navSnapshotUsd: number;      // µUSD
+}
+
+/** `book` block of a {@link TouchMarketRow} — underwriter reserve/liability snapshot (µUSD). Null on empty tenors. */
+export interface TouchBookView {
+  rawReserveUsd: number;
+  fairMarkLiabilityUsd: number;
+  stressUsageUsd: number;
+  eCrashUsd: number;
+  eMeltupUsd: number;
+}
+
+/**
+ * One tenor of one touch underlying from GET /touch/markets (no auth).
+ * `symbol` is the family (e.g. "SOLTOUCH"; the underlying is the prefix before
+ * "TOUCH"). `halted: true` ⇒ render read-only. `marketId` is the tenor id, but
+ * addressing a specific tenor requires the market PDA (not exposed) — see
+ * buildTouchOpenRequest's marketMint note.
+ */
+export interface TouchMarketRow {
+  symbol: string;
+  marketId: number;
+  halted: boolean;
+  spotPrice1e9: number;        // current underlying spot, 1e9 oracle scale
+  config: TouchConfigView;
+  vol: TouchVolView;
+  book: TouchBookView | null;
+}
+
+/**
+ * One ranked barrier quote from GET /touch/deals (no auth, cached ~60s so
+ * `askBps` is INDICATIVE). Ranked ±1/2/3/5/8% both sides, top 12.
+ *   premium = payout * askBps / 10000
+ * `barrier1e9` is sent as `triggerPrice` on a Touch buy.
+ */
+export interface TouchDealRow {
+  marketId: number;
+  symbol: string;
+  isTouch: boolean;            // true = Touch (pays if barrier reached), false = No-Touch
+  barrier1e9: number;          // barrier price, 1e9 oracle scale
+  askBps: number;              // indicative ask, bps of payout
+}
+
+/**
+ * One position from GET /touch/positions?walletAddress= (no auth). NOT on
+ * /positions or /ws — POLL (~3s). Open first, then finished newest-first, cap 200.
+ * Use `openTs`/`expiryTs` from the row (cohort clock); do NOT derive expiry as
+ * now+tenor.
+ */
+export interface ApiTouchPosition {
+  positionId: number;          // from 0
+  marketId: number;
+  symbol: string;
+  isTouch: boolean;
+  barrier1e9: number;          // 1e9 oracle scale
+  payoutUsd: number;           // µUSD — echo BYTE-FOR-BYTE into a close's sizeUsd
+  premiumUsd: number;          // µUSD actually paid
+  askBps: number;
+  openTs: number;              // unix seconds
+  expiryTs: number;            // unix seconds (cohort clock)
+  status: "open" | "settled" | "bought_back";
+  won: boolean | null;
+  payoutPaidUsd: number | null; // µUSD paid at settlement, null until finished
+  openTxSig: string;
+  settleTxSig: string | null;
+  settledAt: number | null;    // unix seconds
+}
+
+// ──────────────────────────────────────────────────────────── points
+
+/**
+ * GET /mobile/points?walletAddress= — Imperial season points. REQUIRES the JWT
+ * (401 "Missing Authorization header" without it). `seasonName` is null when no
+ * season is live (both point figures then 0).
+ */
+export interface PointsResponse {
+  wallet: string;
+  seasonName: string | null;
+  seasonPoints: number;        // whole points (micros / 1e6, floored)
+  seasonPointsMicros: number;  // micro-points (6 decimals)
+}
+
+// ──────────────────────────────────────────────────────── order history
+
+/** Optional aggregate for a DCA parent row in {@link OrderHistoryRow}. */
+export interface DcaSummary {
+  legsExecuted: number;
+  numLegs: number;
+  fillCount: number;
+  avgFillPrice: string | null;
+}
+/** Additive, user-safe error metadata attached to a rejected order/fill/event. */
+export interface UserErrorDetails {
+  code: string;
+  message: string;
+  action: string | null;
+  outcome: string | null;
+  referenceId: string | null;
+}
+
+/**
+ * One row from GET /order-history?walletAddress= (no auth). USD fields are
+ * decimal STRINGS in native units (sizeUsd/collateralAmount are 6-dec µUSD
+ * strings; prices are 1e9-scale strings). Timestamps are unix seconds.
+ */
+export interface OrderHistoryRow {
+  orderPda: string;
+  parentOrderPda: string | null;
+  marketMint: string;
+  side: string;
+  orderType: string;
+  action: string;
+  underwriter: string;
+  profileIndex: number;
+  sizeUsd: string;
+  collateralAmount: string;
+  slippageBps: number;
+  triggerCondition: string | null;
+  triggerPrice: string | null;
+  displayStatus: string;       // derived user-facing status
+  status: string;              // raw DB status
+  statusReason: string | null;
+  statusReasonCode: string | null;
+  creationSignature: string;
+  createdAt: number;
+  cancelledAt: number | null;
+  executedAt: number | null;
+  executionSignature: string | null;
+  executionTriggerPrice: string | null;
+  avgFillPrice: string | null;
+  bestPriceSeen: string | null;
+  filledSizeUsd: string | null;
+  fillCount: number;
+  childCount: number;
+  botState: string | null;
+  venueOrderId: string | null;
+  dca?: DcaSummary | null;
+  ratchet?: unknown;
+  indicator?: unknown;
+}
+export interface OrderHistoryResponse {
+  orders: OrderHistoryRow[];
+  totalCount: number;
+}
+
+// ──────────────────────────────────────────────────────── funding history
+
+/**
+ * One funding/borrow settlement from GET /funding-history?walletAddress=
+ * (no auth). `amount` is signed µUSD as a STRING (positive = trader paid).
+ * `rate` is the effective per-second rate ×10^`rateScale` (string).
+ */
+export interface FundingEventRow {
+  id: string;
+  lifecycleId: string;
+  actionId: string | null;
+  underwriter: string;
+  marketMint: string;
+  symbol: string;
+  side: string;
+  eventType: string;           // "funding_settled" | "borrow_settled"
+  amount: string;              // signed µUSD
+  positionSizeUsd: string | null;
+  positionSizeAfterUsd: string | null;
+  rate: string | null;
+  rateScale: number;
+  spanStart: number | null;    // unix seconds
+  spanEnd: number | null;      // unix seconds
+  signature: string | null;
+  eventAt: number;             // unix seconds
+  payload?: unknown;
+}
+export interface FundingAggregates {
+  totalPaid: string;           // µUSD magnitude
+  totalReceived: string;       // µUSD magnitude
+  net: string;                 // signed µUSD (paid − received)
+}
+export interface FundingHistoryResponse {
+  events: FundingEventRow[];
+  totalCount: number;
+  aggregates: FundingAggregates;
 }

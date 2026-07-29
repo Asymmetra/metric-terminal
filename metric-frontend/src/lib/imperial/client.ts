@@ -13,20 +13,26 @@ import type {
   DepositResponse,
   ExchangeRequest,
   ExchangeResponse,
+  FundingHistoryResponse,
   FundingRateRow,
   ImperialStatus,
   MarketsResponse,
   MarkPriceRow,
   OpenInterestResponse,
+  OrderHistoryResponse,
   OrderRequest,
   OrderResponse,
   PassthroughOrdersResponse,
   PnlHistoryPoint,
+  PointsResponse,
   PositionList,
   RegisterPhoenixResponse,
   RouteResponse,
   StatsSummaryResponse,
   SyncSweepResponse,
+  ApiTouchPosition,
+  TouchDealRow,
+  TouchMarketRow,
   UpdateRequest,
   VenueTag,
   VolumeResponse,
@@ -281,6 +287,106 @@ export class ImperialClient {
     const q = qs.toString();
     return this.get(
       `/passthrough/users/${encodeURIComponent(wallet)}/orders${q ? `?${q}` : ""}`
+    );
+  }
+
+  /**
+   * Closed/settled order history for a wallet (`displayStatus` is the derived
+   * user-facing status; `status` the raw DB one). USD fields are µUSD strings,
+   * prices 1e9-scale strings. No auth.
+   */
+  getOrderHistory(
+    walletAddress: string,
+    opts: {
+      limit?: number;
+      offset?: number;
+      market?: string;
+      underwriter?: string;
+      side?: string;
+      status?: string;
+      category?: string;
+      from?: number;
+      to?: number;
+    } = {}
+  ): Promise<OrderHistoryResponse> {
+    const qs = new URLSearchParams({ walletAddress });
+    if (opts.limit !== undefined) qs.set("limit", String(opts.limit));
+    if (opts.offset !== undefined) qs.set("offset", String(opts.offset));
+    if (opts.market) qs.set("market", opts.market);
+    if (opts.underwriter) qs.set("underwriter", opts.underwriter);
+    if (opts.side) qs.set("side", opts.side);
+    if (opts.status) qs.set("status", opts.status);
+    if (opts.category) qs.set("category", opts.category);
+    if (opts.from !== undefined) qs.set("from", String(opts.from));
+    if (opts.to !== undefined) qs.set("to", String(opts.to));
+    return this.get(`/order-history?${qs.toString()}`);
+  }
+
+  /**
+   * Funding/borrow settlement history for a wallet. `amount`/aggregates are
+   * signed µUSD strings (positive = trader paid). No auth.
+   */
+  getFundingHistory(
+    walletAddress: string,
+    opts: {
+      limit?: number;
+      offset?: number;
+      market?: string;
+      underwriter?: string;
+      side?: string;
+      direction?: string;
+      from?: number;
+      to?: number;
+    } = {}
+  ): Promise<FundingHistoryResponse> {
+    const qs = new URLSearchParams({ walletAddress });
+    if (opts.limit !== undefined) qs.set("limit", String(opts.limit));
+    if (opts.offset !== undefined) qs.set("offset", String(opts.offset));
+    if (opts.market) qs.set("market", opts.market);
+    if (opts.underwriter) qs.set("underwriter", opts.underwriter);
+    if (opts.side) qs.set("side", opts.side);
+    if (opts.direction) qs.set("direction", opts.direction);
+    if (opts.from !== undefined) qs.set("from", String(opts.from));
+    if (opts.to !== undefined) qs.set("to", String(opts.to));
+    return this.get(`/funding-history?${qs.toString()}`);
+  }
+
+  // ────────────────────────────────────────────── imperial touch (no auth)
+
+  /**
+   * All touch markets — one row per underlying × tenor (distinguish by
+   * `config.cohortWindowSecs`: 86400=24h, 3600=1h, 300=5m). `halted: true` ⇒
+   * render read-only. No auth.
+   */
+  getTouchMarkets(): Promise<TouchMarketRow[]> {
+    return this.get("/touch/markets");
+  }
+  /**
+   * Ranked barrier quotes (±1/2/3/5/8% both sides, top 12, cached ~60s so
+   * `askBps` is indicative). Optionally scoped to one `marketId`. No auth.
+   */
+  getTouchDeals(marketId?: number): Promise<TouchDealRow[]> {
+    const q = marketId !== undefined ? `?marketId=${marketId}` : "";
+    return this.get(`/touch/deals${q}`);
+  }
+  /**
+   * A wallet's touch positions (open first, then finished newest-first, cap 200).
+   * NOT on /positions or /ws — POLL (~3s). No auth.
+   */
+  getTouchPositions(walletAddress: string): Promise<ApiTouchPosition[]> {
+    return this.get(`/touch/positions?walletAddress=${encodeURIComponent(walletAddress)}`);
+  }
+
+  // ────────────────────────────────────────────── points (auth)
+
+  /**
+   * Imperial season points for a wallet. REQUIRES the JWT (401 without it).
+   * `seasonName` is null when no season is live (points then 0).
+   */
+  getPoints(walletAddress: string, jwt: string): Promise<PointsResponse> {
+    return this.get(
+      `/mobile/points?walletAddress=${encodeURIComponent(walletAddress)}`,
+      jwt
     );
   }
 

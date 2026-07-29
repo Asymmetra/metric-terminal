@@ -295,9 +295,15 @@ export class TradeFlowError extends Error {
   }
 }
 
-const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+export const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-async function pollUntil(
+/**
+ * Poll `pred` until it resolves true or `timeoutMs` elapses (checking once more
+ * before the first sleep, and once after each `intervalMs` back-off). Returns
+ * whether the predicate ever passed. Exported so the touch flow shares the exact
+ * same settle-gate loop.
+ */
+export async function pollUntil(
   pred: () => Promise<boolean>,
   timeoutMs: number,
   intervalMs: number,
