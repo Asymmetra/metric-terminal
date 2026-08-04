@@ -48,6 +48,7 @@ function flatSeed(price: number, windowSecs: number, now: number): LivelinePoint
 export function LiveLineChart({
   symbol,
   entryLines,
+  seedPrice,
 }: {
   symbol: string;
   /**
@@ -58,9 +59,25 @@ export function LiveLineChart({
    * keeps deriving a single entry line from the open position.
    */
   entryLines?: { value: number; label?: string }[];
+  /**
+   * Optional live spot (in DOLLARS) the page already knows before the shared
+   * market-data feed warms up. Used only as a fallback when `marks[symbol]` is
+   * still undefined: the chart draws a flat baseline at this price immediately
+   * instead of sitting blank, then upgrades to real ticks once the feed
+   * populates. Absent → prior terminal/degen cold-start behavior is unchanged.
+   */
+  seedPrice?: number;
 }) {
   const mark = useStatsStore((s) => s.marks[symbol]);
   const positions = useTraderStore((s) => s.positions);
+
+  // Effective mark: the live feed mark when known, else the page-supplied seed.
+  const seed =
+    typeof mark === "number" && mark > 0
+      ? mark
+      : typeof seedPrice === "number" && seedPrice > 0
+        ? seedPrice
+        : undefined;
 
   const [windowSecs, setWindowSecs] = useState(60);
   // Tick state forces a re-derive of `points` on each buffer change + 500ms beat.
@@ -88,13 +105,14 @@ export function LiveLineChart({
   const buffered = priceHistory.getSince(symbol, now - windowSecs);
   let points: LivelinePoint[] = buffered.map((p) => ({ time: p.t, value: p.v }));
 
-  // Cold start: nothing buffered yet → flat baseline at the live mark so the
-  // chart is full-width immediately rather than blank.
-  if (points.length < 2 && typeof mark === "number" && mark > 0) {
-    points = flatSeed(mark, windowSecs, now);
+  // Cold start: nothing buffered yet → flat baseline at the effective mark
+  // (live feed, else page seed) so the chart is full-width immediately rather
+  // than blank while the shared feed warms up.
+  if (points.length < 2 && seed !== undefined) {
+    points = flatSeed(seed, windowSecs, now);
   }
 
-  const value = mark ?? points[points.length - 1]?.value ?? 0;
+  const value = seed ?? points[points.length - 1]?.value ?? 0;
 
   // Entry lines. Two modes:
   //   1. entryLines provided (game): the last entry is the in-scale referenceLine;

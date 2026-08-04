@@ -567,7 +567,11 @@ export default function TouchUI() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* chart with the selected barrier reference line */}
         <div className="relative min-h-0 flex-1 overflow-hidden border-r border-metric-border">
-          <LiveLineChart symbol={underlying} entryLines={entryLines} />
+          <LiveLineChart
+            symbol={underlying}
+            entryLines={entryLines}
+            seedPrice={market ? priceFromOracle(market.spotPrice1e9) : undefined}
+          />
         </div>
 
         {/* control column */}

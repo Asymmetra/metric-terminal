@@ -22,6 +22,7 @@ import type {
   OrderHistoryResponse,
   OrderRequest,
   OrderResponse,
+  PairsMarketRow,
   PassthroughOrdersResponse,
   PnlHistoryPoint,
   PointsResponse,
@@ -197,6 +198,14 @@ export class ImperialClient {
   }
   getMarkPrices(): Promise<{ rows: MarkPriceRow[] }> {
     return this.get("/mark-prices");
+  }
+  /**
+   * Imperial "Pairs" (underwriter 5) markets. Two rows per symbol (long+short).
+   * READ-ONLY: there is no pairs order path — the underwriter-5 order contract
+   * is undocumented and out of scope. No auth.
+   */
+  getPairsMarkets(): Promise<PairsMarketRow[]> {
+    return this.get("/pairs/markets");
   }
   getRoute(query: {
     asset: string;

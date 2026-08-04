@@ -283,6 +283,32 @@ export interface VenueMarkPrice {
   fetchedAtUnixMs: number;
 }
 
+/**
+ * One entry of GET /pairs/markets — Imperial "Pairs" (underwriter 5) markets.
+ * Live shape verified 2026-08-03. Imperial returns TWO entries per symbol (one
+ * `long`, one `short`) with identical leverage/fee/liquidity fields; `kind`
+ * distinguishes a two-leg geometric pair from a single-feed market.
+ *
+ * READ-ONLY: the underwriter-5 order contract is undocumented, so this DTO backs
+ * the read-only /api/pairs surface only — there is no pairs order path.
+ */
+export interface PairsMarketRow {
+  symbol: string;
+  kind: "pair_geometric" | "single_feed";
+  marketId: number;
+  side: "long" | "short";
+  underwriter: "pairs";
+  marketAddress: string;
+  targetMint: string;
+  maxLeverage: number;
+  maxOpenableLeverage: number;
+  openPositionFeeRate: number;
+  closePositionFeeRate: number;
+  impactFeeRate: number;
+  availableLiquidityUsd: number;
+  allowOpenPosition: boolean;
+}
+
 /** Position lifecycle row from /positions or /trades. Subset only. */
 export interface PositionLifecycle {
   id: string;
