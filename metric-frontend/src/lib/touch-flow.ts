@@ -4,7 +4,7 @@
  * Orchestrated one-action Imperial Touch flows (underwriter 6) — the MONEY PATH.
  *
  * Mirrors trade-flow's `openWithDeposit` and reuses its exported helpers
- * (`depositShortfallNative`, `pollUntil`, `placeOrderWithRetry`, `TradeFlowError`)
+ * (`depositShortfallNative`, `pollUntil`, `TradeFlowError`)
  * so the deposit + settle-gate + retry-classification logic can never drift.
  *
  * Touch is NOT a perp venue — it reuses the perp `OrderRequest` record with heavy
@@ -44,7 +44,6 @@ import {
 import {
   depositShortfallNative,
   pollUntil,
-  placeOrderWithRetry,
   realSleep,
   TradeFlowError,
 } from "@/lib/trade-flow";
@@ -267,8 +266,9 @@ export async function openTouchWithDeposit(
   }
 
   // SINGLE placement with the user's EXACT barrier + budget — never substituted or
-  // escalated. maxAttempts:1 so placeOrderWithRetry's generic transient retry never
-  // fires (touch has no transient-resolve class); a rejection is surfaced verbatim.
+  // escalated. A direct one-shot call: touch has no transient-resolve retry class,
+  // so a rejection is surfaced verbatim (TouchQuoteMoved is handled below). Structurally
+  // impossible to accidentally retry/re-price the buy.
   const req = buildTouchOpenRequest({
     wallet: input.wallet,
     profileIndex: input.profileIndex,
@@ -283,12 +283,7 @@ export async function openTouchWithDeposit(
     step: "order",
     message: `Placing ${input.isTouch ? "Touch" : "No-Touch"} ${input.symbol}…`,
   });
-  const order = await placeOrderWithRetry(() => api.placeOrder(req, deps.jwt), {
-    maxAttempts: 1,
-    resolveRetryMs: 0,
-    orderRetryMs: 0,
-    sleep,
-  });
+  const order = await api.placeOrder(req, deps.jwt);
   if (order.success) {
     step({ step: "done", message: `Position opened.`, signature: order.signature ?? undefined });
     return {
