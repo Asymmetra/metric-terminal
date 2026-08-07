@@ -4,6 +4,19 @@ A high-performance perpetuals trading terminal targeting [Imperial](https://api.
 
 > This is a fork of Ember Terminal (originally a Phoenix-Rise SDK PoC). Every Phoenix-Rise-shaped code path has been ripped out and replaced with calls against Imperial's HTTP/WS API. Imperial integrates Phoenix as one of its four underwriters; you'll see Phoenix referenced where Imperial's own surface exposes it (e.g. `/phoenix/depth`, `/phoenix/register`, `underwriter: 2`), and nowhere else.
 
+## Live demo
+
+The latest `main` is deployed to **<https://metric.asymmetra.xyz>** — anyone can open
+it in a browser, connect a Solana wallet, and trade against Imperial live, no install
+required:
+
+- **[/terminal](https://metric.asymmetra.xyz/terminal)** — full trading view (connect → deposit → open → close → withdraw)
+- **[/degen](https://metric.asymmetra.xyz/degen)** — 60-second high-leverage game
+- **[/touch](https://metric.asymmetra.xyz/touch)** — Imperial Touch one-touch binary options
+- **[/status](https://metric.asymmetra.xyz/status)** — live health of the backend + Imperial + WS feeds
+
+Clone and run locally (below) only if you want to hack on it.
+
 ## What's included
 
 **Trading UIs** (`metric-frontend/src/app/`, all live against Imperial — no fake data):
