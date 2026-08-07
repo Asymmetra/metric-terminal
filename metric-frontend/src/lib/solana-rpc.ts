@@ -35,7 +35,7 @@ const PUBLIC_FALLBACKS = ["https://solana-rpc.publicnode.com"] as const;
 
 /**
  * Normalize a Solana RPC URL — accept bare hosts (Triton's dashboard
- * shows them as `asymmetr-solanam-0245.mainnet.rpcpool.com`) and auto-
+ * shows them as `<name>.mainnet.rpcpool.com`) and auto-
  * prefix `https://`. Reject empty / non-string. @solana/web3.js's
  * Connection constructor throws TypeError on anything without
  * `http:` or `https:`; we'd rather fail-soft to a public fallback than

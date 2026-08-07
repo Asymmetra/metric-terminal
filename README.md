@@ -4,6 +4,41 @@ A high-performance perpetuals trading terminal targeting [Imperial](https://api.
 
 > This is a fork of Ember Terminal (originally a Phoenix-Rise SDK PoC). Every Phoenix-Rise-shaped code path has been ripped out and replaced with calls against Imperial's HTTP/WS API. Imperial integrates Phoenix as one of its four underwriters; you'll see Phoenix referenced where Imperial's own surface exposes it (e.g. `/phoenix/depth`, `/phoenix/register`, `underwriter: 2`), and nowhere else.
 
+## What's included
+
+**Trading UIs** (`metric-frontend/src/app/`, all live against Imperial — no fake data):
+
+| Route | What it is |
+|---|---|
+| `/terminal` | The full trading view — connect, authenticate, live marks + order book, deposit → open → close → withdraw. |
+| `/degen` | A 60-second high-leverage "degen" game — one-tap open, auto-close, live-line chart. |
+| `/touch` | Imperial Touch — one-touch binary options (barrier grid, live payout/premium, buy + sell-back). |
+| `/status`, `/debug` | Health + diagnostics for the backend, Imperial, and the WS feeds. |
+| `/` | Landing page. |
+
+**Public JSON endpoints** (Next.js API routes — no auth, CORS-open, cached):
+
+| Route | What it returns |
+|---|---|
+| `/api/markets[?venue=…]` | Aggregated market data across all Imperial venues (optional venue filter). |
+| `/api/pairs` | Imperial Pairs markets (SOLBTC geometric + single-feed) with funding/borrow rates. |
+
+**Reusable Imperial integration** lives in `metric-frontend/src/lib/` — the JWT
+client, the per-venue order-request builder, the one-signature trade-flow
+orchestration, the Touch flow, and the pluggable signer. See the
+[reference table](#reference-implementations-in-this-repo) below.
+
+## What's NOT included
+
+- **Production auth.** Signing is Phantom via `wallet-adapter`; Privy + paymaster is
+  stubbed behind `SignerProvider` (`src/lib/wallet/privy-stub.ts`) but not wired.
+- **A custodial backend / server-side signing** — by design; the backend never signs.
+- **A database.** Imperial + on-chain is the state of record; UI state is Zustand +
+  `localStorage` (JWT cache, session price buffer). No Supabase/Postgres.
+- **Full venue hardening.** Touch trades the 24h tenor only (shorter tenors exist in
+  the API but aren't quoted yet); Imperial Pairs is exposed read-only (`/api/pairs`)
+  and trading is gated pending a live order-contract confirmation.
+
 ## Stack
 
 | Layer | Tech |
@@ -67,7 +102,7 @@ const signature = bs58.encode(ed25519.sign(new TextEncoder().encode(message), se
 await fetch(`${IMPERIAL}/api/v1/mobile/connect`, { method:"POST", body: JSON.stringify({ wallet, message, signature }) });
 ```
 
-Source: `mobile.rs:186-190` (API: accepts any string) vs `http.rs:564-588` (order bot: requires u64-parseable, ±5min). Surfaced via Hunter @ Imperial — not documented anywhere user-facing.
+Source: `mobile.rs:186-190` (API: accepts any string) vs `http.rs:564-588` (order bot: requires u64-parseable, ±5min). Surfaced with the Imperial team — not documented anywhere user-facing.
 
 **Signature must be raw ed25519 over UTF-8 bytes** — *not* wrapped in Solana's off-chain-message envelope. Some wallet adapters wrap by default. `wallet.signMessage(new TextEncoder().encode(message))` works with Phantom; verify with a noble-curves probe if using anything else:
 
@@ -134,7 +169,7 @@ The returned VersionedTransaction is *partially signed* — Imperial sponsors th
 
 ### Error semantics
 
-- **`/api/v1/status`** is the canonical health probe. Watch `db`, `indexer.status`, `orderBot.status`. `orderBot.unhealthy` with `rpc: connected` is operationally fine for core trading (per Hunter @ Imperial).
+- **`/api/v1/status`** is the canonical health probe. Watch `db`, `indexer.status`, `orderBot.status`. `orderBot.unhealthy` with `rpc: connected` is operationally fine for core trading (per the Imperial team).
 - **Rate limit**: 600 req/min sustained, burst 120. Keyed per-wallet when JWT present, else per-IP. 429 returns `{ error: "rate_limited", retry_after_seconds: N }` plus a `Retry-After` header. `/health`, `/ws`, Telegram webhook are exempt.
 - **TLS routing on Railway can flap.** If Imperial's app is unhealthy or restarting, Railway's edge serves its default `*.up.railway.app` cert in place of the issued `api.imperial.space` cert. Strict TLS clients (Node `fetch`, rustls) fail before the HTTP layer. `openssl s_client -servername api.imperial.space -connect api.imperial.space:443` will print `CN=*.up.railway.app` when this happens — that's the smoking gun to point at Imperial / Railway, not your code.
 - **The 401 path is overloaded.** As of this writing, any of `{bad nonce format, stale/replayed nonce, bad signature, session-store failure}` can surface as the same `401 "Failed to generate mobile session"`. To narrow down: send a deliberately malformed message — if you get 400 `"Invalid message format"`, your message construction is fine and the failure is server-internal.
@@ -381,7 +416,7 @@ After this:
 
 - **Helius**: `https://mainnet.helius-rpc.com/?api-key=<KEY>`
 - **QuickNode**: `https://your-endpoint.solana-mainnet.quiknode.pro/<TOKEN>/`
-- **Triton RPCPool**: `https://<endpoint-name>.mainnet.rpcpool.com/<TOKEN>` — the host (e.g. `asymmetr-solanam-0245.mainnet.rpcpool.com`) and the token (e.g. `asymmetr-solanam-6204`) are listed separately in the Triton dashboard; concatenate them with `/` for the URL.
+- **Triton RPCPool**: `https://<endpoint-name>.mainnet.rpcpool.com/<TOKEN>` — the host and the token are listed separately in the Triton dashboard; concatenate them with `/` for the URL.
 
 The frontend has a built-in fallback chain (`src/lib/solana-rpc.ts`):
 

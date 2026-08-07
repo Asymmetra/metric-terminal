@@ -82,8 +82,8 @@ describe("normalize / candidate ordering (env-driven, re-imported per case)", ()
   }
 
   it("prefixes a bare host with https:// and lists it ahead of the public fallback", async () => {
-    const c = await candidatesFor("asymmetr-solanam-0245.mainnet.rpcpool.com");
-    expect(c[0]).toBe("https://asymmetr-solanam-0245.mainnet.rpcpool.com");
+    const c = await candidatesFor("my-endpoint.mainnet.rpcpool.com");
+    expect(c[0]).toBe("https://my-endpoint.mainnet.rpcpool.com");
     expect(c[1]).toBe("https://solana-rpc.publicnode.com");
   });
 

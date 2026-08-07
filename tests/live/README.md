@@ -1,9 +1,11 @@
 # Live Imperial test suite
 
-Real-network, **real-money** integration tests for native Imperial trading with
-the funded test wallet (`.keys/test-wallet.json`, pubkey `HP29…`). These exercise
-the exact flows the terminal UI uses — deposit, order-bot open/close, sweep,
-withdraw — against mainnet Imperial + Solana.
+Real-network, **real-money** integration tests for native Imperial trading. Supply
+**your own** funded Solana wallet keypair at `.keys/test-wallet.json` (a standard
+`Keypair.toBytes()` JSON array; this path is gitignored — never commit it). The
+suite exercises the exact flows the terminal UI uses — deposit, order-bot
+open/close, sweep, withdraw — against mainnet Imperial + Solana, so the wallet
+needs a little SOL for gas and ≥ $10 USDC for the Imperial minimum collateral.
 
 Every scenario is **repeatable**: funds opened/deposited are closed/withdrawn back
 to the wallet at the end, so the wallet returns to ~its starting balance (minus a

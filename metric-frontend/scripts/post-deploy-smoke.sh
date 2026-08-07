@@ -2,13 +2,13 @@
 # Post-deploy smoke test for Vercel frontend.
 # Verifies the deployed frontend can reach the backend API and WS feeds.
 #
-# Usage: ./scripts/post-deploy-smoke.sh [URL]
-# Default URL: https://ember-terminal-gamma.vercel.app
+# Usage: ./scripts/post-deploy-smoke.sh [FRONTEND_URL] [BACKEND_URL]
+# Or set FRONTEND_URL / BACKEND_URL env vars. Defaults to localhost.
 
 set -euo pipefail
 
-BASE_URL="${1:-https://ember-terminal-gamma.vercel.app}"
-BACKEND_URL="https://ember-backend-q4nf.onrender.com"
+BASE_URL="${1:-${FRONTEND_URL:-http://localhost:3000}}"
+BACKEND_URL="${2:-${BACKEND_URL:-http://localhost:3001}}"
 FAILED=0
 TOTAL=0
 
@@ -32,12 +32,12 @@ fi
 # 2. Frontend HTML contains production API URL (not localhost)
 echo "[2] API URL baked into frontend bundle"
 PAGE_HTML=$(curl -s "$BASE_URL/terminal" --max-time 15)
-if echo "$PAGE_HTML" | grep -q "localhost:3001"; then
-  fail "Frontend HTML contains 'localhost:3001' — env vars not set correctly"
-elif echo "$PAGE_HTML" | grep -q "ember-backend"; then
-  pass "Frontend references production backend"
+if echo "$BASE_URL" | grep -q "localhost"; then
+  pass "Local run — skipping production API-URL bundle check"
+elif echo "$PAGE_HTML" | grep -q "localhost:3001"; then
+  fail "Frontend HTML contains 'localhost:3001' — production env vars not set correctly"
 else
-  # The URL may be in JS chunks, not the HTML shell — check a JS bundle
+  # The URL may be in JS chunks, not the HTML shell — treat absence of localhost as OK
   pass "Frontend HTML does not contain localhost (JS chunks not checked in this test)"
 fi
 
