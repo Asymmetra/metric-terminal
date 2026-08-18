@@ -46,7 +46,7 @@ the one-signature deposit→open / close→withdraw flow, and several trading UI
 | WS adapters (`/ws`, `/ws/market`) | `metric-frontend/src/lib/imperial/ws.ts` |
 | Order-request builder + **per-venue price scales** | `metric-frontend/src/lib/order-builder.ts` |
 | One-signature deposit→open / close→withdraw | `metric-frontend/src/lib/trade-flow.ts` |
-| 60-second "degen" game flow | `metric-frontend/src/lib/game-flow.ts` |
+| 60-second "degen" game flow | `metric-frontend/src/app/degen/game-flow.ts` |
 | Imperial Touch (one-touch binaries) flow | `metric-frontend/src/lib/touch-flow.ts`, `touch-order.ts` |
 | Shared market-data feed → Zustand stores | `metric-frontend/src/lib/market-data.ts` |
 | Pluggable signer (Phantom ↔ Privy) | `metric-frontend/src/lib/wallet/` |
